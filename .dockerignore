@@ -1,0 +1,16 @@
+.DS_Store
+.git
+.github
+.ruff_cache
+**/.DS_Store
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.ruff_cache
+
+frontend/.next
+frontend/node_modules
+frontend/tsconfig.tsbuildinfo
+
+backend/.venv
+backend/*.egg-info

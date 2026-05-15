@@ -5,7 +5,9 @@
 - `frontend/`：Next.js App Router UI 壳。
 - `backend/`：FastAPI API、服务边界、SQLAlchemy 模型、Temporal workflow/worker 占位。
 - `infra/postgres/`：PostgreSQL + pgvector 初始化 schema 和 seed。
-- `docker-compose.yml`：Postgres、Redis、Temporal、Temporal UI、MinIO。
+- `docker-compose.yml`：Frontend、Backend、Postgres、Redis、Temporal、Temporal UI、MinIO。
+- `scripts/deploy.sh`：一键构建并启动全套服务。
+- `scripts/update.sh`：拉取 GitHub 最新代码并重建服务。
 
 ## 后端请求链路
 
@@ -45,4 +47,22 @@ make check-backend
 
 ```bash
 make infra-up
+```
+
+## 一键部署与更新
+
+```bash
+make deploy
+make update
+```
+
+快捷别名：
+
+```bash
+make d
+make u
+make logs
+make status
+make restart
+make down
 ```
