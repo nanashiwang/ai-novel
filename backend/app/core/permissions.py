@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import HTTPException, status
+
 from .security import CurrentUser
 
 PLATFORM_ADMIN_ROLES = {"admin", "super_admin"}

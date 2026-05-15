@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from fastapi import HTTPException, status
+
 from app.core.tenancy import TenantContext
-from app.repositories.memory_store import list_rows, update_row, insert_row
+from app.repositories.memory_store import insert_row, list_rows, update_row
 
 
 class QuotaService:
@@ -19,14 +20,25 @@ class QuotaService:
         balances = self.list_balances(tenant)
         balance = next((item for item in balances if item["quota_key"] == quota_key), None)
         if not balance:
-            raise HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED, detail="quota_not_configured")
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="quota_not_configured",
+            )
         available = balance["limit_value"] - balance["used_value"] - balance["reserved_value"]
         if available < amount:
-            raise HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED, detail="quota_insufficient")
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="quota_insufficient",
+            )
         new_reserved = balance["reserved_value"] + amount
         for raw in list_rows("quota_balances", tenant.organization_id):
             if raw["quota_key"] == quota_key:
-                update_row("quota_balances", raw.get("id", ""), {"reserved_value": new_reserved})
+                update_row(
+                    "quota_balances",
+                    raw["id"],
+                    {"reserved_value": new_reserved},
+                    tenant.organization_id,
+                )
         return insert_row(
             "quota_reservations",
             {

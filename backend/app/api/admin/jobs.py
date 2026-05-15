@@ -1,4 +1,5 @@
 from fastapi import APIRouter
+
 from app.api.deps import CurrentUserDep
 from app.core.permissions import require_platform_admin
 from app.services.generation.service import generation_service

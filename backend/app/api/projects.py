@@ -1,9 +1,15 @@
 from fastapi import APIRouter, HTTPException, status
+
 from app.api.deps import CurrentUserDep, TenantDep
 from app.core.permissions import require_permission
 from app.repositories.memory_store import get_row, insert_row, list_rows
 from app.schemas.generation import GenerationJobResponse
-from app.schemas.project import GenerateNovelRequest, ProjectCreate, ProjectResponse, SceneWriteRequest
+from app.schemas.project import (
+    GenerateNovelRequest,
+    ProjectCreate,
+    ProjectResponse,
+    SceneWriteRequest,
+)
 from app.services.generation.service import generation_service
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -51,7 +57,12 @@ async def generate_full_novel(
     tenant: TenantDep,
     user: CurrentUserDep,
 ) -> dict:
-    return generation_service.create_full_novel_job(user, tenant, project_id, payload.estimate_words)
+    return generation_service.create_full_novel_job(
+        user,
+        tenant,
+        project_id,
+        payload.estimate_words,
+    )
 
 
 @router.post("/{project_id}/scenes/{scene_id}/write", response_model=GenerationJobResponse)
@@ -62,4 +73,10 @@ async def write_scene(
     tenant: TenantDep,
     user: CurrentUserDep,
 ) -> dict:
-    return generation_service.create_scene_write_job(user, tenant, project_id, scene_id, payload.target_words)
+    return generation_service.create_scene_write_job(
+        user,
+        tenant,
+        project_id,
+        scene_id,
+        payload.target_words,
+    )

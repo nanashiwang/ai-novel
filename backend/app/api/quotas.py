@@ -1,7 +1,8 @@
 from fastapi import APIRouter
+
 from app.api.deps import TenantDep
-from app.schemas.billing import QuotaBalanceResponse, UsageEventResponse
 from app.repositories.memory_store import list_rows
+from app.schemas.billing import QuotaBalanceResponse, UsageEventResponse
 from app.services.quota.service import quota_service
 
 router = APIRouter(tags=["quota"])

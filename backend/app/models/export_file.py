@@ -1,6 +1,8 @@
 from sqlalchemy import ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
+
 from app.core.database import Base
+
 from .common import TenantMixin, TimestampMixin
 
 

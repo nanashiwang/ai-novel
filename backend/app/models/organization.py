@@ -1,6 +1,8 @@
 from sqlalchemy import ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
+
 from app.core.database import Base
+
 from .common import TimestampMixin
 
 
@@ -18,7 +20,11 @@ class OrganizationMember(Base, TimestampMixin):
     __tablename__ = "organization_members"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    organization_id: Mapped[str] = mapped_column(String(64), ForeignKey("organizations.id"), index=True)
+    organization_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("organizations.id"),
+        index=True,
+    )
     user_id: Mapped[str] = mapped_column(String(64), ForeignKey("users.id"), index=True)
     role: Mapped[str] = mapped_column(String(64), default="member")
     status: Mapped[str] = mapped_column(String(32), default="active")

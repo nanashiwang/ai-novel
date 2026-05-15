@@ -1,4 +1,5 @@
 from fastapi import APIRouter
+
 from app.api.deps import CurrentUserDep, TenantDep
 from app.schemas.auth import CurrentUserResponse
 

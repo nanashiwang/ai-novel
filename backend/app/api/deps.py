@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from typing import Annotated
+
 from fastapi import Depends, Header
+
 from app.core.security import CurrentUser, get_current_user
 from app.core.tenancy import TenantContext, resolve_tenant
 

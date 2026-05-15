@@ -1,6 +1,8 @@
 from fastapi import APIRouter
+
 from app.api import auth, billing, generation_jobs, projects, quotas
-from app.api.admin import content_reviews, jobs as admin_jobs, logs, organizations, users
+from app.api.admin import content_reviews, logs, organizations, users
+from app.api.admin import jobs as admin_jobs
 
 api_router = APIRouter()
 api_router.include_router(auth.router)

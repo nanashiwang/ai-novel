@@ -1,9 +1,12 @@
 from __future__ import annotations
+
 from typing import Optional
 
 from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column
+
 from app.core.database import Base
+
 from .common import TimestampMixin
 
 

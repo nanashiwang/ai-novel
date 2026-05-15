@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, status
+
 from app.api.deps import CurrentUserDep, TenantDep
 from app.schemas.generation import GenerationJobResponse
 from app.services.generation.service import generation_service

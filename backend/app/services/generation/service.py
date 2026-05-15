@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from fastapi import HTTPException, status
+
 from app.core.permissions import require_permission
 from app.core.security import CurrentUser
 from app.core.tenancy import TenantContext, ensure_same_tenant
@@ -29,7 +31,7 @@ class GenerationService:
         require_entitlement(tenant, "generation:full_novel")
         project = get_row("projects", project_id, tenant.organization_id)
         if not project:
-            raise ValueError("project_not_found")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project_not_found")
         ensure_same_tenant(project["organization_id"], tenant)
         job = insert_row(
             "generation_jobs",
@@ -89,7 +91,15 @@ class GenerationService:
 
     def cancel_job(self, user: CurrentUser, tenant: TenantContext, job_id: str) -> dict | None:
         require_permission(user, "generation_job:cancel")
-        return update_row("generation_jobs", job_id, {"status": "cancelled"})
+        job = get_row("generation_jobs", job_id, tenant.organization_id)
+        if not job:
+            return None
+        return update_row(
+            "generation_jobs",
+            job_id,
+            {"status": "cancelled"},
+            tenant.organization_id,
+        )
 
 
 generation_service = GenerationService()

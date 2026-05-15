@@ -2,7 +2,13 @@ from app.services.model_gateway.service import model_gateway
 
 
 class AuditorService:
-    async def audit_scene(self, organization_id: str, project_id: str, job_id: str, scene_text: str) -> dict:
+    async def audit_scene(
+        self,
+        organization_id: str,
+        project_id: str,
+        job_id: str,
+        scene_text: str,
+    ) -> dict:
         return await model_gateway.generate_json(
             organization_id=organization_id,
             project_id=project_id,

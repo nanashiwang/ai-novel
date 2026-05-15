@@ -1,6 +1,7 @@
 from fastapi import APIRouter
+
 from app.api.deps import CurrentUserDep
-from app.core.permissions import require_platform_admin, require_permission
+from app.core.permissions import require_permission, require_platform_admin
 from app.repositories.memory_store import insert_row
 
 router = APIRouter(prefix="/admin/organizations", tags=["admin-organizations"])
@@ -9,14 +10,21 @@ router = APIRouter(prefix="/admin/organizations", tags=["admin-organizations"])
 @router.get("")
 async def organizations(user: CurrentUserDep) -> list[dict]:
     require_platform_admin(user)
-    return [{"id": "org_personal", "name": "personal-workspace", "plan_code": "Pro", "status": "active"}]
+    return [
+        {
+            "id": "org_personal",
+            "name": "personal-workspace",
+            "plan_code": "Pro",
+            "status": "active",
+        }
+    ]
 
 
 @router.patch("/{organization_id}/quota")
 async def adjust_quota(organization_id: str, user: CurrentUserDep) -> dict:
     require_permission(user, "admin:quota:update")
     audit = insert_row(
-        "audit_logs",
+        "admin_audit_logs",
         {
             "organization_id": organization_id,
             "actor_user_id": user.id,

@@ -3,7 +3,12 @@ from app.services.prompt_manager.service import prompt_manager
 
 
 class NovelPlannerService:
-    async def generate_story_bible(self, organization_id: str, project_id: str, job_id: str) -> dict:
+    async def generate_story_bible(
+        self,
+        organization_id: str,
+        project_id: str,
+        job_id: str,
+    ) -> dict:
         prompt = prompt_manager.load("bible/generate_story_bible")
         return await model_gateway.generate_json(
             organization_id=organization_id,

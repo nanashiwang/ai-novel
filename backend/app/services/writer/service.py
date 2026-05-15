@@ -3,7 +3,13 @@ from app.services.prompt_manager.service import prompt_manager
 
 
 class WriterService:
-    async def write_scene(self, organization_id: str, project_id: str, job_id: str, scene_id: str) -> str:
+    async def write_scene(
+        self,
+        organization_id: str,
+        project_id: str,
+        job_id: str,
+        scene_id: str,
+    ) -> str:
         prompt = prompt_manager.load("writing/write_scene")
         return await model_gateway.generate_text(
             organization_id=organization_id,
