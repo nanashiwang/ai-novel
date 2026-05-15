@@ -1,0 +1,317 @@
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  email TEXT UNIQUE NOT NULL,
+  phone TEXT,
+  password_hash TEXT,
+  display_name TEXT NOT NULL,
+  avatar_url TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  is_platform_staff BOOLEAN NOT NULL DEFAULT FALSE,
+  platform_role TEXT NOT NULL DEFAULT 'user',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS organizations (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'personal',
+  owner_user_id TEXT NOT NULL REFERENCES users(id),
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS organization_members (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL REFERENCES organizations(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  role TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  joined_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (organization_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS plans (
+  id TEXT PRIMARY KEY,
+  code TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  price_monthly NUMERIC(10, 2) NOT NULL DEFAULT 0,
+  price_yearly NUMERIC(10, 2),
+  currency TEXT NOT NULL DEFAULT 'CNY',
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS plan_features (
+  id TEXT PRIMARY KEY,
+  plan_id TEXT NOT NULL REFERENCES plans(id),
+  feature_key TEXT NOT NULL,
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  limit_value INTEGER,
+  limit_unit TEXT NOT NULL DEFAULT 'times',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL REFERENCES organizations(id),
+  created_by TEXT NOT NULL REFERENCES users(id),
+  title TEXT NOT NULL,
+  genre TEXT NOT NULL DEFAULT '',
+  target_word_count INTEGER NOT NULL DEFAULT 0,
+  target_chapter_count INTEGER NOT NULL DEFAULT 0,
+  language TEXT NOT NULL DEFAULT 'zh-CN',
+  style TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'created',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_projects_org ON projects(organization_id);
+
+CREATE TABLE IF NOT EXISTS novel_specs (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL REFERENCES organizations(id),
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  premise TEXT NOT NULL DEFAULT '',
+  theme TEXT NOT NULL DEFAULT '',
+  genre TEXT NOT NULL DEFAULT '',
+  tone TEXT NOT NULL DEFAULT '',
+  target_reader TEXT NOT NULL DEFAULT '',
+  narrative_pov TEXT NOT NULL DEFAULT '',
+  style_guide TEXT NOT NULL DEFAULT '',
+  constraints JSONB NOT NULL DEFAULT '[]',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS characters (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL REFERENCES organizations(id),
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  name TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  personality TEXT NOT NULL DEFAULT '',
+  motivation TEXT NOT NULL DEFAULT '',
+  secret TEXT NOT NULL DEFAULT '',
+  arc TEXT NOT NULL DEFAULT '',
+  relationships JSONB NOT NULL DEFAULT '{}',
+  current_state JSONB NOT NULL DEFAULT '{}',
+  embedding vector(1536),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS world_items (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL REFERENCES organizations(id),
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  type TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  rules JSONB NOT NULL DEFAULT '{}',
+  related_characters JSONB NOT NULL DEFAULT '[]',
+  importance TEXT NOT NULL DEFAULT 'medium',
+  is_hard_rule BOOLEAN NOT NULL DEFAULT FALSE,
+  embedding vector(1536),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS volumes (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL REFERENCES organizations(id),
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  volume_index INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  goal TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'planned',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS chapters (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL REFERENCES organizations(id),
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  volume_id TEXT REFERENCES volumes(id),
+  chapter_index INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  goal TEXT NOT NULL DEFAULT '',
+  conflict TEXT NOT NULL DEFAULT '',
+  ending_hook TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'planned',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS scenes (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL REFERENCES organizations(id),
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  chapter_id TEXT NOT NULL REFERENCES chapters(id),
+  scene_index INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  time_marker TEXT NOT NULL DEFAULT '',
+  location TEXT NOT NULL DEFAULT '',
+  characters JSONB NOT NULL DEFAULT '[]',
+  goal TEXT NOT NULL DEFAULT '',
+  conflict TEXT NOT NULL DEFAULT '',
+  emotion_start TEXT NOT NULL DEFAULT '',
+  emotion_end TEXT NOT NULL DEFAULT '',
+  reveal TEXT NOT NULL DEFAULT '',
+  hook TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'planned',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS generation_jobs (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL REFERENCES organizations(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  job_type TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  priority TEXT NOT NULL DEFAULT 'queue_standard',
+  plan_code TEXT NOT NULL,
+  reserved_quota INTEGER NOT NULL DEFAULT 0,
+  consumed_quota INTEGER NOT NULL DEFAULT 0,
+  input_payload JSONB NOT NULL DEFAULT '{}',
+  output_payload JSONB,
+  error_message TEXT,
+  workflow_id TEXT,
+  started_at TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_generation_jobs_org_status ON generation_jobs(organization_id, status);
+
+CREATE TABLE IF NOT EXISTS quota_balances (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL REFERENCES organizations(id),
+  quota_key TEXT NOT NULL,
+  period_start TIMESTAMPTZ NOT NULL,
+  period_end TIMESTAMPTZ NOT NULL,
+  limit_value INTEGER NOT NULL,
+  used_value INTEGER NOT NULL DEFAULT 0,
+  reserved_value INTEGER NOT NULL DEFAULT 0,
+  reset_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (organization_id, quota_key, period_start)
+);
+
+CREATE TABLE IF NOT EXISTS quota_reservations (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL REFERENCES organizations(id),
+  job_id TEXT NOT NULL REFERENCES generation_jobs(id),
+  quota_key TEXT NOT NULL,
+  reserved_amount INTEGER NOT NULL,
+  consumed_amount INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'reserved',
+  expires_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS usage_events (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL REFERENCES organizations(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  project_id TEXT,
+  job_id TEXT,
+  event_type TEXT NOT NULL,
+  amount INTEGER NOT NULL,
+  unit TEXT NOT NULL,
+  metadata JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS model_calls (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL REFERENCES organizations(id),
+  project_id TEXT,
+  job_id TEXT,
+  task_type TEXT NOT NULL,
+  model TEXT NOT NULL,
+  prompt_key TEXT NOT NULL DEFAULT '',
+  prompt_version TEXT NOT NULL DEFAULT 'v1',
+  system_prompt TEXT NOT NULL DEFAULT '',
+  user_prompt TEXT NOT NULL DEFAULT '',
+  response_text TEXT,
+  response_json JSONB,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  latency_ms INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'success',
+  error_message TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_model_calls_org_job ON model_calls(organization_id, job_id);
+
+CREATE TABLE IF NOT EXISTS memory_entries (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL REFERENCES organizations(id),
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  source_type TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  memory_type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  importance INTEGER NOT NULL DEFAULT 3,
+  embedding vector(1536),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS continuity_issues (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL REFERENCES organizations(id),
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  chapter_id TEXT,
+  scene_id TEXT,
+  issue_type TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  description TEXT NOT NULL,
+  suggested_fix TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS export_files (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL REFERENCES organizations(id),
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  export_type TEXT NOT NULL,
+  file_url TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'queued',
+  created_by TEXT NOT NULL REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS admin_audit_logs (
+  id TEXT PRIMARY KEY,
+  actor_user_id TEXT NOT NULL,
+  organization_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  target_type TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  before_data JSONB,
+  after_data JSONB,
+  ip_address TEXT,
+  user_agent TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

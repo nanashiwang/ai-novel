@@ -8,3 +8,11 @@ coverage/
 .env
 .env.*
 !.env.example
+
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+*.egg-info/
