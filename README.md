@@ -6,16 +6,23 @@ AI 小说自动生产 SaaS 平台骨架：前端 Studio/Admin Console、FastAPI 
 
 全新 Linux 服务器推荐使用傻瓜式安装命令：
 
+私有仓库需要先准备 GitHub Token（只需 repo 读取权限），然后执行：
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/nanashiwang/ai-novel/main/install.sh | bash
+export GITHUB_TOKEN=你的GitHubToken
+curl -fsSL \
+  -H "Authorization: Bearer $GITHUB_TOKEN" \
+  -H "Accept: application/vnd.github.raw" \
+  "https://api.github.com/repos/nanashiwang/ai-novel/contents/install.sh?ref=main" \
+  | GITHUB_TOKEN="$GITHUB_TOKEN" APP_DIR=/data/ai-novel bash
 ```
 
 这条命令会自动安装基础依赖和 Docker，拉取 GitHub 项目，并执行 `make deploy`。
 
-自定义安装目录：
+如果仓库改成公开仓库，也可以直接用：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/nanashiwang/ai-novel/main/install.sh | APP_DIR=/opt/ai-novel bash
+curl -fsSL https://raw.githubusercontent.com/nanashiwang/ai-novel/main/install.sh | APP_DIR=/data/ai-novel bash
 ```
 
 已经拉好代码时使用：

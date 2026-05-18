@@ -4,6 +4,7 @@ set -euo pipefail
 REPO_URL="${REPO_URL:-https://github.com/nanashiwang/ai-novel.git}"
 BRANCH="${BRANCH:-main}"
 APP_DIR="${APP_DIR:-/opt/ai-novel}"
+GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 
 if [ "$(uname -s)" != "Linux" ]; then
   echo "当前脚本面向 Linux 服务器。"
@@ -82,6 +83,11 @@ ensure_docker() {
 }
 
 checkout_project() {
+  clone_url="$REPO_URL"
+  if [ -n "$GITHUB_TOKEN" ] && [[ "$REPO_URL" == https://github.com/* ]]; then
+    clone_url="${REPO_URL/https:\/\/github.com\//https:\/\/x-access-token:${GITHUB_TOKEN}@github.com\/}"
+  fi
+
   if [ -d "$APP_DIR/.git" ]; then
     cd "$APP_DIR"
     if ! git diff --quiet || ! git diff --cached --quiet; then
@@ -101,7 +107,7 @@ checkout_project() {
     fi
   fi
 
-  git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"
+  git clone --branch "$BRANCH" "$clone_url" "$APP_DIR"
   cd "$APP_DIR"
 }
 
