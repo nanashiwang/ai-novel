@@ -9,6 +9,7 @@ import { useAuth } from "@/components/providers/auth-provider";
 import { PlanBadge } from "@/components/ui/badge";
 import { quotaApi } from "@/lib/api";
 import { cn } from "@/lib/cn";
+import { findActiveNavHref } from "@/lib/nav-active";
 import { isPlatformAdmin } from "@/lib/permissions";
 import { adminNav, studioNav } from "@/lib/routes";
 import { useScopedKey } from "@/lib/use-scoped-key";
@@ -17,6 +18,7 @@ export function StudioSidebar() {
   const pathname = usePathname();
   const { user } = useAuth();
   const adminVisible = isPlatformAdmin(user);
+  const activeHref = findActiveNavHref(pathname, studioNav);
 
   const { data: quotas } = useQuery({
     queryKey: useScopedKey("quotas"),
@@ -47,8 +49,7 @@ export function StudioSidebar() {
 
       <nav className="mt-5 space-y-2">
         {studioNav.map((item) => {
-          const active =
-            pathname === item.href || (item.href !== "/studio" && pathname.startsWith(item.href));
+          const active = activeHref === item.href;
           const Icon = item.icon;
           return (
             <Link
