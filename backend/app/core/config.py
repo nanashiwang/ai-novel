@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     anthropic_api_key: str = ""
     anthropic_base_url: str = "https://api.anthropic.com/v1"
-    default_model: str = "gpt-4o"
+    default_model: str = "gpt-5.5"
 
     # 鉴权与会话
     jwt_secret: str = Field(default="dev-only-change-me", min_length=8)

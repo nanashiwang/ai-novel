@@ -205,6 +205,28 @@ export const exportsApi = {
 };
 
 // ----- Admin -----
+export type ModelGatewaySettings = {
+  mode: "mock" | "real";
+  provider: "openai" | "anthropic";
+  default_model: string;
+  openai_base_url: string;
+  openai_api_key_configured: boolean;
+  anthropic_base_url: string;
+  anthropic_api_key_configured: boolean;
+  active_base_url: string;
+  ready: boolean;
+};
+
+export type ModelGatewaySettingsUpdate = {
+  mode: "mock" | "real";
+  provider: "openai" | "anthropic";
+  default_model: string;
+  openai_base_url: string;
+  openai_api_key?: string | null;
+  anthropic_base_url: string;
+  anthropic_api_key?: string | null;
+};
+
 export const adminApi = {
   users: () => http.get<unknown[]>("/admin/users"),
   organizations: () => http.get<unknown[]>("/admin/organizations"),
@@ -212,4 +234,8 @@ export const adminApi = {
   modelCalls: () => http.get<unknown[]>("/admin/model-calls"),
   auditLogs: () => http.get<unknown[]>("/admin/audit-logs"),
   contentReviews: () => http.get<unknown[]>("/admin/content-reviews"),
+  modelGatewaySettings: () =>
+    http.get<ModelGatewaySettings>("/admin/settings/model-gateway"),
+  updateModelGatewaySettings: (payload: ModelGatewaySettingsUpdate) =>
+    http.put<ModelGatewaySettings>("/admin/settings/model-gateway", payload),
 };

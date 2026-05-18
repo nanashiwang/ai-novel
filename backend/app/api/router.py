@@ -13,7 +13,7 @@ from app.api import (
     scenes,
     world_items,
 )
-from app.api.admin import content_reviews, logs, organizations as admin_orgs, users
+from app.api.admin import content_reviews, logs, organizations as admin_orgs, settings, users
 from app.api.admin import jobs as admin_jobs
 
 api_router = APIRouter()
@@ -35,3 +35,4 @@ api_router.include_router(admin_orgs.router)
 api_router.include_router(admin_jobs.router)
 api_router.include_router(logs.router)
 api_router.include_router(content_reviews.router)
+api_router.include_router(settings.router)

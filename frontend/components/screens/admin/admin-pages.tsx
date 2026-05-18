@@ -1,8 +1,20 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Area, AreaChart, CartesianGrid, Tooltip, XAxis, YAxis } from "recharts";
-import { AlertTriangle, Building2, LockKeyhole, Save, Sparkles, Users } from "lucide-react";
+import {
+  AlertTriangle,
+  Building2,
+  CheckCircle2,
+  EyeOff,
+  KeyRound,
+  Link2,
+  LockKeyhole,
+  Save,
+  Server,
+  Sparkles,
+  Users,
+} from "lucide-react";
 import { toast } from "sonner";
 import { useState } from "react";
 
@@ -13,7 +25,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/data-table";
 import { ProgressBar, QuotaProgress } from "@/components/ui/progress";
 import { StatCard } from "@/components/ui/stat-card";
-import { adminApi, billingApi, jobsApi, quotaApi } from "@/lib/api";
+import {
+  adminApi,
+  billingApi,
+  jobsApi,
+  quotaApi,
+  type ModelGatewaySettingsUpdate,
+} from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { isSuperAdmin } from "@/lib/permissions";
 
@@ -523,11 +541,72 @@ export function AdminContentReviewPage() {
 
 export function AdminSettingsPage() {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const editable = isSuperAdmin(user);
-  const [model, setModel] = useState("gpt-4o");
+  const { data, isLoading } = useQuery({
+    queryKey: ["admin", "settings", "model-gateway"],
+    queryFn: adminApi.modelGatewaySettings,
+  });
+  const [draft, setDraft] = useState<Partial<ModelGatewaySettingsUpdate>>({});
+  const form: ModelGatewaySettingsUpdate = {
+    mode: draft.mode ?? data?.mode ?? "mock",
+    provider: draft.provider ?? data?.provider ?? "openai",
+    default_model: draft.default_model ?? data?.default_model ?? "gpt-5.5",
+    openai_base_url:
+      draft.openai_base_url ?? data?.openai_base_url ?? "https://api.openai.com/v1",
+    openai_api_key: draft.openai_api_key ?? "",
+    anthropic_base_url:
+      draft.anthropic_base_url ?? data?.anthropic_base_url ?? "https://api.anthropic.com/v1",
+    anthropic_api_key: draft.anthropic_api_key ?? "",
+  };
+
+  const saveMutation = useMutation({
+    mutationFn: (payload: ModelGatewaySettingsUpdate) =>
+      adminApi.updateModelGatewaySettings(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "settings", "model-gateway"] });
+      setDraft({});
+      toast.success("模型配置已保存");
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "保存失败");
+    },
+  });
+
+  const selectedKeyConfigured =
+    form.provider === "anthropic"
+      ? data?.anthropic_api_key_configured
+      : data?.openai_api_key_configured;
+  const typedSelectedKey =
+    form.provider === "anthropic" ? form.anthropic_api_key : form.openai_api_key;
+  const canSave =
+    editable &&
+    form.default_model.trim() &&
+    form.openai_base_url.trim() &&
+    form.anthropic_base_url.trim() &&
+    (form.mode === "mock" || selectedKeyConfigured || typedSelectedKey?.trim());
+
+  function updateField<K extends keyof ModelGatewaySettingsUpdate>(
+    key: K,
+    value: ModelGatewaySettingsUpdate[K],
+  ) {
+    setDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  function save() {
+    saveMutation.mutate({
+      ...form,
+      default_model: form.default_model.trim(),
+      openai_base_url: form.openai_base_url.trim(),
+      openai_api_key: form.openai_api_key?.trim() || null,
+      anthropic_base_url: form.anthropic_base_url.trim(),
+      anthropic_api_key: form.anthropic_api_key?.trim() || null,
+    });
+  }
+
   return (
     <div className="space-y-6">
-      <AdminTitle title="系统设置" desc="模型配置、Prompt 版本、队列；仅 super_admin 可修改。" />
+      <AdminTitle title="系统设置" desc="配置模型服务地址、密钥和默认模型。" />
       {!editable ? (
         <Card className="border-amber-200 bg-amber-50">
           <CardContent className="flex items-center gap-3 text-amber-800">
@@ -535,31 +614,260 @@ export function AdminSettingsPage() {
           </CardContent>
         </Card>
       ) : null}
+      <div className="grid gap-4 lg:grid-cols-3">
+        <SettingStatusCard
+          icon={Server}
+          label="运行模式"
+          value={form.mode === "real" ? "真实模型" : "Mock"}
+          tone={form.mode === "real" ? "green" : "amber"}
+        />
+        <SettingStatusCard
+          icon={Link2}
+          label="当前地址"
+          value={data?.active_base_url ?? "-"}
+          tone={data?.ready ? "green" : "rose"}
+        />
+        <SettingStatusCard
+          icon={KeyRound}
+          label="密钥状态"
+          value={selectedKeyConfigured ? "已配置" : "未配置"}
+          tone={selectedKeyConfigured ? "green" : "rose"}
+        />
+      </div>
+
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle>模型配置</CardTitle>
-          <Badge tone={editable ? "green" : "amber"}>
-            {editable ? "super_admin 可编辑" : "只读"}
+        <CardHeader className="flex flex-row items-center justify-between gap-4">
+          <div>
+            <CardTitle>模型网关</CardTitle>
+            <p className="mt-1 text-sm text-slate-500">
+              这里保存后，后端生成任务会使用新的 URL 和 Key。
+            </p>
+          </div>
+          <Badge tone={data?.ready ? "green" : "amber"}>
+            {isLoading ? "加载中" : data?.ready ? "可用" : "待配置"}
           </Badge>
         </CardHeader>
-        <CardContent className="grid gap-4 md:grid-cols-2">
-          <label className="block text-sm font-bold text-slate-700">
-            默认文本模型
-            <input
+        <CardContent className="space-y-6">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <SegmentButton
+              active={form.mode === "mock"}
               disabled={!editable}
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              className="mt-2 h-11 w-full rounded-xl border border-slate-200 px-4 disabled:bg-slate-100"
+              title="Mock"
+              desc="本地演示，不消耗额度"
+              onClick={() => updateField("mode", "mock")}
             />
-          </label>
-          <Button
+            <SegmentButton
+              active={form.mode === "real"}
+              disabled={!editable}
+              title="真实模型"
+              desc="使用下方 URL 和 Key"
+              onClick={() => updateField("mode", "real")}
+            />
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="block text-sm font-bold text-slate-700">
+              服务商
+              <select
+                disabled={!editable}
+                value={form.provider}
+                onChange={(e) =>
+                  updateField(
+                    "provider",
+                    e.target.value === "anthropic" ? "anthropic" : "openai",
+                  )
+                }
+                className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-4 disabled:bg-slate-100"
+              >
+                <option value="openai">OpenAI / 兼容接口</option>
+                <option value="anthropic">Anthropic</option>
+              </select>
+            </label>
+            <label className="block text-sm font-bold text-slate-700">
+              默认模型
+              <input
+                disabled={!editable}
+                value={form.default_model}
+                onChange={(e) => updateField("default_model", e.target.value)}
+                placeholder="gpt-5.5"
+                className="mt-2 h-11 w-full rounded-xl border border-slate-200 px-4 disabled:bg-slate-100"
+              />
+            </label>
+          </div>
+
+          <ProviderFields
+            title="OpenAI / 兼容接口"
+            active={form.provider === "openai"}
+            configured={Boolean(data?.openai_api_key_configured)}
+            baseUrl={form.openai_base_url}
+            apiKey={form.openai_api_key ?? ""}
             disabled={!editable}
-            onClick={() => toast.info("系统设置写入接口待对接")}
-          >
-            <Save className="size-4" /> 保存
-          </Button>
+            onBaseUrlChange={(value) => updateField("openai_base_url", value)}
+            onApiKeyChange={(value) => updateField("openai_api_key", value)}
+            baseUrlPlaceholder="https://api.openai.com/v1"
+            keyPlaceholder={
+              data?.openai_api_key_configured ? "留空表示保留已有 Key" : "sk-..."
+            }
+          />
+
+          <ProviderFields
+            title="Anthropic"
+            active={form.provider === "anthropic"}
+            configured={Boolean(data?.anthropic_api_key_configured)}
+            baseUrl={form.anthropic_base_url}
+            apiKey={form.anthropic_api_key ?? ""}
+            disabled={!editable}
+            onBaseUrlChange={(value) => updateField("anthropic_base_url", value)}
+            onApiKeyChange={(value) => updateField("anthropic_api_key", value)}
+            baseUrlPlaceholder="https://api.anthropic.com/v1"
+            keyPlaceholder={
+              data?.anthropic_api_key_configured ? "留空表示保留已有 Key" : "sk-ant-..."
+            }
+          />
+
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-5">
+            <p className="text-sm text-slate-500">
+              {form.mode === "real" && !canSave
+                ? "真实模型模式需要当前服务商的 Key。"
+                : "Key 不会在页面回显。"}
+            </p>
+            <Button disabled={!canSave || saveMutation.isPending} onClick={save}>
+              <Save className="size-4" />
+              {saveMutation.isPending ? "保存中" : "保存配置"}
+            </Button>
+          </div>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function SettingStatusCard({
+  icon: Icon,
+  label,
+  value,
+  tone,
+}: {
+  icon: typeof Server;
+  label: string;
+  value: string;
+  tone: "green" | "amber" | "rose";
+}) {
+  const toneClass =
+    tone === "green"
+      ? "bg-emerald-50 text-emerald-700"
+      : tone === "amber"
+      ? "bg-amber-50 text-amber-700"
+      : "bg-rose-50 text-rose-700";
+  return (
+    <Card>
+      <CardContent className="flex items-center gap-3">
+        <span className={`grid size-10 shrink-0 place-items-center rounded-xl ${toneClass}`}>
+          <Icon className="size-5" />
+        </span>
+        <div className="min-w-0">
+          <p className="text-xs font-bold uppercase text-slate-400">{label}</p>
+          <p className="truncate text-sm font-bold text-slate-950">{value}</p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function SegmentButton({
+  active,
+  disabled,
+  title,
+  desc,
+  onClick,
+}: {
+  active: boolean;
+  disabled: boolean;
+  title: string;
+  desc: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={`flex min-h-20 items-center justify-between rounded-xl border px-4 text-left transition disabled:cursor-not-allowed disabled:opacity-60 ${
+        active
+          ? "border-indigo-500 bg-indigo-50 text-indigo-900"
+          : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+      }`}
+    >
+      <span>
+        <span className="block font-bold">{title}</span>
+        <span className="mt-1 block text-sm opacity-70">{desc}</span>
+      </span>
+      {active ? <CheckCircle2 className="size-5 shrink-0" /> : null}
+    </button>
+  );
+}
+
+function ProviderFields({
+  title,
+  active,
+  configured,
+  baseUrl,
+  apiKey,
+  disabled,
+  onBaseUrlChange,
+  onApiKeyChange,
+  baseUrlPlaceholder,
+  keyPlaceholder,
+}: {
+  title: string;
+  active: boolean;
+  configured: boolean;
+  baseUrl: string;
+  apiKey: string;
+  disabled: boolean;
+  onBaseUrlChange: (value: string) => void;
+  onApiKeyChange: (value: string) => void;
+  baseUrlPlaceholder: string;
+  keyPlaceholder: string;
+}) {
+  return (
+    <div
+      className={`rounded-xl border p-4 ${
+        active ? "border-indigo-200 bg-indigo-50/40" : "border-slate-200 bg-white"
+      }`}
+    >
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <p className="font-bold text-slate-950">{title}</p>
+        <Badge tone={configured ? "green" : "slate"}>
+          {configured ? "Key 已保存" : "未保存 Key"}
+        </Badge>
+      </div>
+      <div className="grid gap-4 md:grid-cols-[1.2fr_0.8fr]">
+        <label className="block text-sm font-bold text-slate-700">
+          Base URL
+          <input
+            disabled={disabled}
+            value={baseUrl}
+            onChange={(e) => onBaseUrlChange(e.target.value)}
+            placeholder={baseUrlPlaceholder}
+            className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-4 disabled:bg-slate-100"
+          />
+        </label>
+        <label className="block text-sm font-bold text-slate-700">
+          API Key
+          <div className="relative mt-2">
+            <input
+              disabled={disabled}
+              value={apiKey}
+              onChange={(e) => onApiKeyChange(e.target.value)}
+              placeholder={keyPlaceholder}
+              type="password"
+              className="h-11 w-full rounded-xl border border-slate-200 bg-white px-4 pr-10 disabled:bg-slate-100"
+            />
+            <EyeOff className="pointer-events-none absolute right-3 top-3 size-5 text-slate-400" />
+          </div>
+        </label>
+      </div>
     </div>
   );
 }

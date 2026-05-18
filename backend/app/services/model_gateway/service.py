@@ -16,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.models.common import new_id
 from app.models.model_call import ModelCall
+from app.services.model_gateway.providers import AnthropicMessagesProvider, OpenAIChatProvider
+from app.services.system_settings import ModelGatewayConfig, system_settings_service
 
 
 class ModelProvider(Protocol):
@@ -86,6 +88,7 @@ class _RealProviderPlaceholder:
 class ModelGateway:
     def __init__(self) -> None:
         self.settings = get_settings()
+        self._default_model = self.settings.default_model
         self._provider: ModelProvider = (
             _MockProvider() if self.settings.model_gateway_mode == "mock" else _RealProviderPlaceholder()
         )
@@ -93,6 +96,29 @@ class ModelGateway:
     def set_provider(self, provider: ModelProvider) -> None:
         """部署时注入真实 provider。"""
         self._provider = provider
+
+    def configure(self, config: ModelGatewayConfig) -> None:
+        self._default_model = config.default_model
+        if config.mode != "real":
+            self._provider = _MockProvider()
+            return
+        if config.provider == "openai" and config.openai_api_key:
+            self._provider = OpenAIChatProvider(
+                api_key=config.openai_api_key,
+                base_url=config.openai_base_url,
+            )
+            return
+        if config.provider == "anthropic" and config.anthropic_api_key:
+            self._provider = AnthropicMessagesProvider(
+                api_key=config.anthropic_api_key,
+                base_url=config.anthropic_base_url,
+            )
+            return
+        self._provider = _RealProviderPlaceholder()
+
+    async def refresh_from_settings(self, session: AsyncSession) -> None:
+        config = await system_settings_service.get_model_config(session)
+        self.configure(config)
 
     async def generate_json(
         self,
@@ -108,9 +134,10 @@ class ModelGateway:
         temperature: float = 0.7,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        await self.refresh_from_settings(session)
         started = time.perf_counter()
         response_json = await self._provider.complete_json(
-            model=self.settings.default_model,
+            model=self._default_model,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             schema=schema,
@@ -143,9 +170,10 @@ class ModelGateway:
         temperature: float = 0.7,
         metadata: dict[str, Any] | None = None,
     ) -> str:
+        await self.refresh_from_settings(session)
         started = time.perf_counter()
         response_text = await self._provider.complete_text(
-            model=self.settings.default_model,
+            model=self._default_model,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             temperature=temperature,
@@ -186,7 +214,7 @@ class ModelGateway:
             project_id=project_id,
             job_id=job_id,
             task_type=task_type,
-            model=self.settings.default_model,
+            model=self._default_model,
             prompt_key=task_type,
             prompt_version="v1",
             system_prompt=system_prompt,

@@ -4,6 +4,7 @@ import {
   ApiError,
   getAccessToken,
   getOrganizationId,
+  http,
   onAuthExpired,
   setAccessToken,
   setOrganizationId,
@@ -43,5 +44,9 @@ describe("http token store", () => {
     expect(err.status).toBe(403);
     expect(err.code).toBe("permission_denied");
     expect(err.details).toEqual({ reason: "x" });
+  });
+
+  it("http exposes put helper", () => {
+    expect(typeof http.put).toBe("function");
   });
 });

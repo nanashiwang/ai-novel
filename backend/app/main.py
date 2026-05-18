@@ -23,7 +23,7 @@ settings = get_settings()
 
 
 def _wire_model_provider() -> None:
-    """启动时按配置选择 provider 并注入 model_gateway。"""
+    """启动时按环境变量选择 provider；数据库设置会在运行时覆盖。"""
     if settings.model_gateway_mode != "real":
         return
     if settings.model_gateway_provider == "openai" and settings.openai_api_key:
