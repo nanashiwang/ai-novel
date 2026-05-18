@@ -13,6 +13,7 @@ from .plan import Plan, PlanFeature
 from .project import NovelSpec, Project
 from .quota import QuotaBalance, QuotaReservation
 from .scene import Scene
+from .system_setting import SystemSetting
 from .usage import UsageEvent
 from .user import User
 from .world_item import WorldItem
@@ -37,6 +38,7 @@ __all__ = [
     "QuotaBalance",
     "QuotaReservation",
     "Scene",
+    "SystemSetting",
     "UsageEvent",
     "User",
     "Volume",

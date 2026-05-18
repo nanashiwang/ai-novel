@@ -43,6 +43,15 @@ _POSTGRES_SCHEMA_FIXES = [
     "CREATE INDEX IF NOT EXISTS ix_invitations_email ON organization_invitations(email)",
     "CREATE INDEX IF NOT EXISTS ix_invitations_status ON organization_invitations(status)",
     "CREATE UNIQUE INDEX IF NOT EXISTS ix_invitations_token ON organization_invitations(token)",
+    """
+    CREATE TABLE IF NOT EXISTS system_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT,
+      is_secret BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
 ]
 
 

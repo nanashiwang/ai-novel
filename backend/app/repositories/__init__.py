@@ -22,6 +22,7 @@ from app.models.plan import Plan, PlanFeature
 from app.models.project import NovelSpec, Project
 from app.models.quota import QuotaBalance, QuotaReservation
 from app.models.scene import Scene
+from app.models.system_setting import SystemSetting
 from app.models.usage import UsageEvent
 from app.models.user import User
 from app.models.world_item import WorldItem
@@ -133,6 +134,11 @@ class AuditLogRepository(BaseRepository[AdminAuditLog]):
     id_prefix = "audit"
 
 
+class SystemSettingRepository(BaseRepository[SystemSetting]):
+    model = SystemSetting
+    id_prefix = "setting"
+
+
 class QuotaBalanceRepository(BaseRepository[QuotaBalance]):
     """额度余额仓储，包含针对竞态的行级锁查询。"""
 
@@ -183,6 +189,7 @@ __all__ = [
     "QuotaBalanceRepository",
     "QuotaReservationRepository",
     "SceneRepository",
+    "SystemSettingRepository",
     "UsageEventRepository",
     "UserRepository",
     "VolumeRepository",

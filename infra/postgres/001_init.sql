@@ -26,6 +26,14 @@ CREATE TABLE IF NOT EXISTS organizations (
 );
 CREATE INDEX IF NOT EXISTS idx_organizations_plan_code ON organizations(plan_code);
 
+CREATE TABLE IF NOT EXISTS system_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT,
+  is_secret BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS organization_members (
   id TEXT PRIMARY KEY,
   organization_id TEXT NOT NULL REFERENCES organizations(id),
