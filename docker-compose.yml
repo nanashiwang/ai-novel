@@ -56,8 +56,6 @@ services:
       POSTGRES_USER: novelflow
       POSTGRES_PASSWORD: novelflow
       POSTGRES_DB: novelflow
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./infra/postgres:/docker-entrypoint-initdb.d:ro
@@ -70,8 +68,6 @@ services:
   redis:
     image: redis:7-alpine
     container_name: ai-novel-redis
-    ports:
-      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -85,8 +81,6 @@ services:
       POSTGRES_USER: temporal
       POSTGRES_PASSWORD: temporal
       POSTGRES_DB: temporal
-    ports:
-      - "5433:5432"
     volumes:
       - temporal_postgres_data:/var/lib/postgresql/data
 
@@ -102,8 +96,6 @@ services:
       POSTGRES_PWD: temporal
       POSTGRES_SEEDS: temporal-postgres
       DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
-    ports:
-      - "7233:7233"
 
   temporal-ui:
     image: temporalio/ui:2.30.1
@@ -124,7 +116,6 @@ services:
       MINIO_ROOT_USER: novelflow
       MINIO_ROOT_PASSWORD: novelflow123
     ports:
-      - "9000:9000"
       - "9001:9001"
     volumes:
       - minio_data:/data
