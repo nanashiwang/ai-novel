@@ -15,6 +15,8 @@ from app.services.model_gateway.providers import (
     OpenAIChatProvider,
 )
 from app.services.model_gateway.service import model_gateway
+from app.core.database import AsyncSessionLocal
+from app.services.auth.service import auth_service
 
 configure_logging()
 settings = get_settings()
@@ -70,6 +72,8 @@ app.include_router(api_router, prefix=settings.api_prefix)
 @app.on_event("startup")
 async def startup() -> None:
     await ensure_runtime_schema()
+    async with AsyncSessionLocal() as session:
+        await auth_service.ensure_bootstrap_super_admin(session)
 
 
 @app.get("/health", response_model=HealthResponse, tags=["health"])

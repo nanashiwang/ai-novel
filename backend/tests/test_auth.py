@@ -4,6 +4,10 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import text
 
+from app.core.passwords import hash_password
+from app.models.user import User
+from app.services.auth.service import auth_service
+
 
 @pytest.mark.asyncio
 async def test_register_creates_personal_org(client):
@@ -17,6 +21,76 @@ async def test_register_creates_personal_org(client):
     assert data["user"]["email"] == "alice@example.com"
     assert data["user"]["organization_id"]
     assert data["user"]["plan_code"] == "Free"
+    assert data["user"]["platform_role"] == "super_admin"
+
+
+@pytest.mark.asyncio
+async def test_only_first_registered_user_becomes_super_admin(client):
+    first = await client.post(
+        "/api/v1/auth/register",
+        json={"email": "first@example.com", "password": "password123", "display_name": "First"},
+    )
+    assert first.status_code == 201, first.text
+    assert first.json()["user"]["platform_role"] == "super_admin"
+
+    second = await client.post(
+        "/api/v1/auth/register",
+        json={"email": "second@example.com", "password": "password123", "display_name": "Second"},
+    )
+    assert second.status_code == 201, second.text
+    assert second.json()["user"]["platform_role"] == "user"
+
+
+@pytest.mark.asyncio
+async def test_seed_users_do_not_block_first_real_registered_super_admin(client, db_session):
+    await db_session.execute(
+        text(
+            """
+            INSERT INTO users
+              (id, email, password_hash, display_name, status, is_platform_staff, platform_role)
+            VALUES
+              (:writer_id, :writer_email, :writer_hash, '演示作者', 'active', false, 'user'),
+              (:admin_id, :admin_email, :admin_hash, '种子管理员', 'active', true, 'super_admin')
+            """
+        ),
+        {
+            "writer_id": "user_writer",
+            "writer_email": "writer@example.com",
+            "writer_hash": hash_password("writer123456"),
+            "admin_id": "user_admin",
+            "admin_email": "admin@novelflow.ai",
+            "admin_hash": hash_password("admin123456"),
+        },
+    )
+    await db_session.commit()
+
+    response = await client.post(
+        "/api/v1/auth/register",
+        json={"email": "owner@example.com", "password": "password123", "display_name": "Owner"},
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["user"]["platform_role"] == "super_admin"
+
+
+@pytest.mark.asyncio
+async def test_startup_promotes_existing_first_real_user_to_super_admin(db_session):
+    user = User(
+        id="user_real",
+        email="real@example.com",
+        password_hash=hash_password("password123"),
+        display_name="Real",
+        status="active",
+        platform_role="user",
+        is_platform_staff=False,
+    )
+    db_session.add(user)
+    await db_session.commit()
+
+    await auth_service.ensure_bootstrap_super_admin(db_session)
+
+    await db_session.refresh(user)
+    assert user.platform_role == "super_admin"
+    assert user.is_platform_staff is True
 
 
 @pytest.mark.asyncio

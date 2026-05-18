@@ -20,6 +20,7 @@ async def _register_and_token(client, email: str) -> tuple[str, str]:
 
 @pytest.mark.asyncio
 async def test_user_cannot_access_other_org_via_header(client):
+    await _register_and_token(client, "admin-bootstrap@example.com")
     a_token, a_org = await _register_and_token(client, "ua@example.com")
     _, b_org = await _register_and_token(client, "ub@example.com")
 

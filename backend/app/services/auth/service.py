@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.jwt_tokens import create_access_token, create_refresh_token, decode_token
@@ -18,6 +18,8 @@ from app.models.common import new_id
 from app.models.organization import Organization, OrganizationMember
 from app.models.user import User
 from app.services.auth.token_store import is_refresh_jti_revoked, revoke_refresh_jti
+
+BOOTSTRAP_SEED_EMAILS = {"admin@novelflow.ai", "writer@example.com"}
 
 
 @dataclass
@@ -48,13 +50,15 @@ class AuthService:
                 detail="email_already_registered",
             )
 
+        bootstrap_super_admin = await self._should_bootstrap_super_admin(session)
         user = User(
             id=new_id("user"),
             email=email,
             password_hash=hash_password(password),
             display_name=display_name or email.split("@")[0],
             status="active",
-            platform_role="user",
+            is_platform_staff=bootstrap_super_admin,
+            platform_role="super_admin" if bootstrap_super_admin else "user",
         )
         session.add(user)
         await session.flush()
@@ -81,6 +85,54 @@ class AuthService:
         )
         await session.flush()
         return await self._issue_tokens(user, org)
+
+    async def _should_bootstrap_super_admin(self, session: AsyncSession) -> bool:
+        await self._acquire_bootstrap_lock(session)
+        return not await self._has_real_user(session)
+
+    async def _has_real_user(self, session: AsyncSession) -> bool:
+        real_user = await session.execute(
+            select(User.id)
+            .where(User.email.not_in(BOOTSTRAP_SEED_EMAILS))
+            .limit(1)
+        )
+        return real_user.scalar_one_or_none() is not None
+
+    async def _has_real_super_admin(self, session: AsyncSession) -> bool:
+        real_super_admin = await session.execute(
+            select(User.id)
+            .where(
+                User.email.not_in(BOOTSTRAP_SEED_EMAILS),
+                User.platform_role == "super_admin",
+            )
+            .limit(1)
+        )
+        return real_super_admin.scalar_one_or_none() is not None
+
+    async def _acquire_bootstrap_lock(self, session: AsyncSession) -> None:
+        bind = session.get_bind()
+        if bind.dialect.name == "postgresql":
+            await session.execute(text("SELECT pg_advisory_xact_lock(2026051801)"))
+
+    async def ensure_bootstrap_super_admin(self, session: AsyncSession) -> None:
+        await self._acquire_bootstrap_lock(session)
+        if await self._has_real_super_admin(session):
+            return
+
+        real_user = (
+            await session.execute(
+                select(User)
+                .where(User.email.not_in(BOOTSTRAP_SEED_EMAILS))
+                .order_by(User.created_at.asc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if not real_user:
+            return
+
+        real_user.is_platform_staff = True
+        real_user.platform_role = "super_admin"
+        await session.commit()
 
     async def login(
         self,
