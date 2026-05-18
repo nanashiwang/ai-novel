@@ -39,11 +39,14 @@ async def test_invite_existing_user(client):
 
 
 @pytest.mark.asyncio
-async def test_invite_nonexistent_user_returns_404(client):
+async def test_invite_nonexistent_user_creates_pending_invitation(client):
     owner_token, _, _ = await _register(client, "owner2@example.com")
     res = await client.post(
         "/api/v1/organizations/current/members",
         json={"email": "nobody@example.com", "role": "editor"},
         headers={"Authorization": f"Bearer {owner_token}"},
     )
-    assert res.status_code == 404
+    assert res.status_code == 201, res.text
+    assert res.json()["email"] == "nobody@example.com"
+    assert res.json()["status"] == "pending"
+    assert res.json()["token"]

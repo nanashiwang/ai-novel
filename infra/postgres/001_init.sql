@@ -19,10 +19,12 @@ CREATE TABLE IF NOT EXISTS organizations (
   name TEXT NOT NULL,
   type TEXT NOT NULL DEFAULT 'personal',
   owner_user_id TEXT NOT NULL REFERENCES users(id),
+  plan_code TEXT NOT NULL DEFAULT 'Free',
   status TEXT NOT NULL DEFAULT 'active',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_organizations_plan_code ON organizations(plan_code);
 
 CREATE TABLE IF NOT EXISTS organization_members (
   id TEXT PRIMARY KEY,
@@ -145,9 +147,14 @@ CREATE TABLE IF NOT EXISTS projects (
   genre TEXT NOT NULL DEFAULT '',
   target_word_count INTEGER NOT NULL DEFAULT 0,
   target_chapter_count INTEGER NOT NULL DEFAULT 0,
+  current_word_count INTEGER NOT NULL DEFAULT 0,
+  completed_chapter_count INTEGER NOT NULL DEFAULT 0,
   language TEXT NOT NULL DEFAULT 'zh-CN',
   style TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'created',
+  cover_url TEXT NOT NULL DEFAULT '',
+  tags JSONB NOT NULL DEFAULT '[]',
+  target_reader TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -409,3 +416,22 @@ CREATE TABLE IF NOT EXISTS admin_audit_logs (
   user_agent TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS organization_invitations (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL,
+  email TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'editor',
+  token TEXT UNIQUE NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  invited_by TEXT NOT NULL REFERENCES users(id),
+  expires_at TIMESTAMPTZ NOT NULL,
+  accepted_by TEXT REFERENCES users(id),
+  accepted_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_invitations_organization_id ON organization_invitations(organization_id);
+CREATE INDEX IF NOT EXISTS idx_invitations_email ON organization_invitations(email);
+CREATE INDEX IF NOT EXISTS idx_invitations_status ON organization_invitations(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_invitations_token ON organization_invitations(token);

@@ -8,6 +8,7 @@ from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging
 from app.core.middleware import register_middlewares
 from app.core.rate_limit import register_rate_limit
+from app.core.schema import ensure_runtime_schema
 from app.schemas.common import HealthResponse
 from app.services.model_gateway.providers import (
     AnthropicMessagesProvider,
@@ -64,6 +65,11 @@ app.add_middleware(
 register_exception_handlers(app)
 app.include_router(healthz_router)
 app.include_router(api_router, prefix=settings.api_prefix)
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    await ensure_runtime_schema()
 
 
 @app.get("/health", response_model=HealthResponse, tags=["health"])

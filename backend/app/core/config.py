@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     db_pool_pre_ping: bool = True
 
     # 限流（slowapi）
+    rate_limit_enabled: bool = True
     rate_limit_login: str = "10/minute"
     rate_limit_register: str = "5/minute"
     rate_limit_default: str = "120/minute"

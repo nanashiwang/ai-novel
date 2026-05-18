@@ -39,21 +39,6 @@ class InvitationService:
     ) -> OrganizationInvitation:
         email = email.strip().lower()
 
-        # 校验：已是该组织 active member 拒绝
-        existing_member = (
-            await session.execute(
-                select(OrganizationMember)
-                .join(
-                    # 通过 user 表查 email；这里直接在调用方传入用户已存在的判断
-                    OrganizationMember.user_id != "",
-                    isouter=True,
-                )
-                .where(OrganizationMember.organization_id == organization_id)
-                .limit(1)
-            )
-        )
-        _ = existing_member  # 占位避免歧义；具体重复邀请校验下面 invitation 表完成
-
         # 校验：是否已有 pending 邀请
         prev = (
             await session.execute(

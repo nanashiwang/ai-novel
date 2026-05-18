@@ -65,14 +65,15 @@ async def register(
         password=payload.password,
         display_name=payload.display_name or "",
     )
-    # 尝试消费邀请：注册后自动加入对应组织
+    # 尝试消费邀请：邀请失败不能影响注册事务。
     try:
-        await invitation_service.consume_for_registration(
-            db,
-            user_id=token_pair.user.id,
-            user_email=token_pair.user.email,
-            token=payload.invitation_token,
-        )
+        async with db.begin_nested():
+            await invitation_service.consume_for_registration(
+                db,
+                user_id=token_pair.user.id,
+                user_email=token_pair.user.email,
+                token=payload.invitation_token,
+            )
     except Exception:  # noqa: BLE001 — 邀请处理失败不阻断注册
         pass
     await db.commit()

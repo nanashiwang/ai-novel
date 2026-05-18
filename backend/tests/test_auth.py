@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import text
 
 
 @pytest.mark.asyncio
@@ -61,3 +62,21 @@ async def test_login_returns_access_and_me_works(client):
     me = await client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert me.status_code == 200
     assert me.json()["email"] == "carol@example.com"
+
+
+@pytest.mark.asyncio
+async def test_register_persists_when_invitation_table_is_missing(client, db_session):
+    await db_session.execute(text("DROP TABLE organization_invitations"))
+    await db_session.commit()
+
+    response = await client.post(
+        "/api/v1/auth/register",
+        json={"email": "dora@example.com", "password": "password123", "display_name": "Dora"},
+    )
+    assert response.status_code == 201, response.text
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "dora@example.com", "password": "password123"},
+    )
+    assert login.status_code == 200, login.text
