@@ -11,7 +11,7 @@ import { quotaApi } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { findActiveNavHref } from "@/lib/nav-active";
 import { isPlatformAdmin } from "@/lib/permissions";
-import { adminNav, studioNav } from "@/lib/routes";
+import { studioNav } from "@/lib/routes";
 import { useScopedKey } from "@/lib/use-scoped-key";
 
 export function StudioSidebar() {
@@ -66,28 +66,6 @@ export function StudioSidebar() {
         })}
       </nav>
 
-      {adminVisible ? (
-        <div className="mt-6 border-t border-white/10 pt-5">
-          <p className="px-4 text-xs font-bold uppercase tracking-widest text-violet-200">
-            管理员导航
-          </p>
-          <div className="mt-2 space-y-1">
-            {adminNav.slice(0, 6).map((item) => {
-              const Icon = item.icon;
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className="flex items-center gap-3 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-300 transition hover:bg-white/10 hover:text-white"
-                >
-                  <Icon className="size-4" /> {item.label}
-                </Link>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
-
       <div className="mt-auto space-y-3">
         <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
           <PlanBadge plan={user.plan_code as never} />
@@ -99,6 +77,18 @@ export function StudioSidebar() {
               style={{ width: `${usedPct}%` }}
             />
           </div>
+          {adminVisible ? (
+            <Link
+              href="/admin"
+              className="mt-4 flex items-center justify-between rounded-xl border border-violet-300/20 bg-violet-500/15 px-3 py-2.5 text-sm font-bold text-violet-100 transition hover:border-violet-200/40 hover:bg-violet-500/25"
+            >
+              <span className="flex items-center gap-2">
+                <ShieldCheck className="size-4" />
+                管理员工作台
+              </span>
+              <span className="text-xs text-violet-200">进入</span>
+            </Link>
+          ) : null}
         </div>
         <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 p-3">
           <div className="grid size-10 place-items-center rounded-full bg-slate-700 text-sm font-black">
