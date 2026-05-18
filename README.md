@@ -75,12 +75,19 @@ make check     # 前后端基础校验 + compose 配置校验
 
 ## 本地开发
 
+先启动基础服务：
+
+```bash
+make infra-up
+./scripts/compose.sh stop backend frontend
+```
+
 前端：
 
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run dev -- --port 13000
 ```
 
 后端：
@@ -92,3 +99,5 @@ source .venv/bin/activate
 python -m pip install -e '.[dev]'
 uvicorn app.main:app --reload --port 8000
 ```
+
+访问：http://localhost:13000
