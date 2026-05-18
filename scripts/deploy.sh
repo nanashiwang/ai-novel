@@ -9,7 +9,7 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! docker compose version >/dev/null 2>&1; then
+if ! ./scripts/compose.sh version >/dev/null 2>&1; then
   echo "Docker Compose 未安装或不可用。"
   exit 1
 fi
@@ -19,8 +19,8 @@ if [ ! -f .env ]; then
   echo "已从 .env.example 创建 .env。生产部署前请修改密钥。"
 fi
 
-docker compose build
-docker compose up -d
+./scripts/compose.sh build
+./scripts/compose.sh up -d
 
 echo
 echo "部署完成："

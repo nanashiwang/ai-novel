@@ -35,7 +35,7 @@ check-backend:
 check: check-frontend check-backend docker-config
 
 docker-config:
-	docker compose config >/dev/null
+	./scripts/compose.sh config >/dev/null
 
 migrate:
 	cd backend && alembic upgrade head
@@ -63,25 +63,25 @@ update:
 u: update
 
 restart:
-	docker compose restart backend frontend
+	./scripts/compose.sh restart backend frontend
 
 r: restart
 
 logs:
-	docker compose logs -f --tail=200
+	./scripts/compose.sh logs -f --tail=200
 
 l: logs
 
 status:
-	docker compose ps
+	./scripts/compose.sh ps
 
 ps: status
 
 stop down:
-	docker compose down
+	./scripts/compose.sh down
 
 infra-up:
-	docker compose up -d postgres redis temporal-postgres temporal temporal-ui minio
+	./scripts/compose.sh up -d postgres redis temporal-postgres temporal temporal-ui minio
 
 infra-down:
-	docker compose down
+	./scripts/compose.sh down

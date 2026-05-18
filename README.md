@@ -4,6 +4,22 @@ AI 小说自动生产 SaaS 平台骨架：前端 Studio/Admin Console、FastAPI 
 
 ## 一键部署
 
+全新 Linux 服务器推荐使用傻瓜式安装命令：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nanashiwang/ai-novel/main/install.sh | bash
+```
+
+这条命令会自动安装基础依赖和 Docker，拉取 GitHub 项目，并执行 `make deploy`。
+
+自定义安装目录：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nanashiwang/ai-novel/main/install.sh | APP_DIR=/opt/ai-novel bash
+```
+
+已经拉好代码时使用：
+
 ```bash
 make deploy
 ```
