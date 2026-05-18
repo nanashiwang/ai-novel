@@ -11,7 +11,11 @@
 
 const API_BASE =
   (typeof process !== "undefined" && process.env?.NEXT_PUBLIC_API_BASE) ||
-  "http://localhost:8000/api/v1";
+  "/api/v1";
+
+const SERVER_API_ORIGIN =
+  (typeof process !== "undefined" && process.env?.INTERNAL_API_BASE) ||
+  "http://localhost:8000";
 
 const AUTH_EXPIRED_EVENT = "novelflow:auth_expired";
 
@@ -81,9 +85,26 @@ type RequestOptions = {
 
 let refreshPromise: Promise<boolean> | null = null;
 
+function buildApiUrl(path: string): URL {
+  const normalizedBase = API_BASE.replace(/\/$/, "");
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  const target = `${normalizedBase}${normalizedPath}`;
+
+  if (/^https?:\/\//.test(target)) {
+    return new URL(target);
+  }
+
+  const origin =
+    typeof window !== "undefined"
+      ? window.location.origin
+      : SERVER_API_ORIGIN.replace(/\/$/, "");
+
+  return new URL(target, origin);
+}
+
 async function attemptRefresh(): Promise<boolean> {
   if (!refreshPromise) {
-    refreshPromise = fetch(`${API_BASE}/auth/refresh`, {
+    refreshPromise = fetch(buildApiUrl("/auth/refresh").toString(), {
       method: "POST",
       credentials: "include",
     })
@@ -108,7 +129,7 @@ export async function request<T = unknown>(
   path: string,
   options: RequestOptions = {},
 ): Promise<T> {
-  const url = new URL(`${API_BASE}${path}`);
+  const url = buildApiUrl(path);
   if (options.query) {
     for (const [key, value] of Object.entries(options.query)) {
       if (value === undefined || value === null) continue;

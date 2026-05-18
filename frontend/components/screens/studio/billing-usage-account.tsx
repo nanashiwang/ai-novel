@@ -83,7 +83,7 @@ export function BillingPage() {
                     try {
                       const res = await billingApi.checkout(plan.code);
                       toast.success(`已生成结算链接：${res.checkout_url}`);
-                    } catch (err) {
+                    } catch {
                       toast.error("生成支付链接失败");
                     }
                   }}

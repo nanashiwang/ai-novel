@@ -42,7 +42,8 @@ services:
       dockerfile: frontend/Dockerfile
     container_name: ai-novel-frontend
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000/api/v1
+      NEXT_PUBLIC_API_BASE: /api/v1
+      INTERNAL_API_BASE: http://backend:8000
     ports:
       - "${FRONTEND_PORT:-13000}:3000"
     depends_on:
