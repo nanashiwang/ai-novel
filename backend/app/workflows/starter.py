@@ -1,16 +1,76 @@
+"""Temporal Workflow Starter。
+
+- TEMPORAL_ENABLED=false（默认）：返回 mock workflow_id，便于无依赖本地开发
+- TEMPORAL_ENABLED=true：通过 temporalio 客户端启动真实 workflow
+
+设计：starter 不直接 await client 启动结果，使用 fire-and-forget，
+workflow_id 立即返回；任务状态由 worker 异步回写 generation_jobs。
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import Any
+
 from app.core.config import get_settings
+
+_logger = logging.getLogger(__name__)
 
 
 class WorkflowStarter:
+    def __init__(self) -> None:
+        self.settings = get_settings()
+        self._client = None
+
+    async def _get_client(self):
+        if self._client is not None:
+            return self._client
+        if not self.settings.temporal_enabled:
+            return None
+        try:
+            from temporalio.client import Client  # type: ignore
+
+            self._client = await Client.connect(
+                self.settings.temporal_host,
+                namespace=self.settings.temporal_namespace,
+            )
+            return self._client
+        except Exception:  # noqa: BLE001
+            _logger.exception("failed_to_connect_temporal")
+            return None
+
+    async def _start(self, workflow_name: str, args: list[Any], workflow_id: str) -> str:
+        client = await self._get_client()
+        if not client:
+            return f"mock-{workflow_id}"
+        try:
+            await client.start_workflow(
+                workflow_name,
+                args=args,
+                id=workflow_id,
+                task_queue="novelflow-generation",
+            )
+            return workflow_id
+        except Exception:  # noqa: BLE001
+            _logger.exception("failed_to_start_workflow", extra={"workflow": workflow_name})
+            return f"mock-{workflow_id}"
+
+    def _fire_and_forget(self, workflow_name: str, job: dict, prefix: str) -> str:
+        workflow_id = f"{prefix}-{job['id']}"
+        if not self.settings.temporal_enabled:
+            return f"mock-{workflow_id}"
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._start(workflow_name, [job], workflow_id))
+            return workflow_id
+        except RuntimeError:
+            return f"mock-{workflow_id}"
+
     def start_generate_full_novel(self, job: dict) -> str:
-        if get_settings().environment == "local":
-            return f"mock-generate-full-novel-{job['id']}"
-        return f"temporal-generate-full-novel-{job['id']}"
+        return self._fire_and_forget("GenerateFullNovelWorkflow", job, "generate-full-novel")
 
     def start_write_scene(self, job: dict) -> str:
-        if get_settings().environment == "local":
-            return f"mock-write-scene-{job['id']}"
-        return f"temporal-write-scene-{job['id']}"
+        return self._fire_and_forget("WriteSceneWorkflow", job, "write-scene")
 
 
 workflow_starter = WorkflowStarter()

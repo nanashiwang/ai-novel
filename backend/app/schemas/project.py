@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from .common import APIModel
 
 
@@ -8,6 +10,9 @@ class ProjectCreate(APIModel):
     target_word_count: int = 300_000
     target_chapter_count: int = 48
     style: str = ""
+    target_reader: str = ""
+    cover_url: str = ""
+    tags: list[str] = []
 
 
 class ProjectResponse(APIModel):
@@ -17,7 +22,14 @@ class ProjectResponse(APIModel):
     genre: str
     target_word_count: int
     target_chapter_count: int
+    current_word_count: int = 0
+    completed_chapter_count: int = 0
+    language: str
+    style: str
     status: str
+    cover_url: str = ""
+    tags: list[str] = []
+    target_reader: str = ""
 
 
 class GenerateNovelRequest(APIModel):

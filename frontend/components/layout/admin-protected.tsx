@@ -1,12 +1,12 @@
 "use client";
 
-import { useMockAuth } from "@/components/providers/mock-auth-provider";
-import { PermissionNotice } from "@/components/ui/permission-notice";
-import { isPlatformAdmin } from "@/lib/permissions";
+import { RequirePlatformAdmin } from "@/components/auth/require-platform-admin";
 import { AppShell } from "./app-shell";
 
 export function AdminProtected({ children }: { children: React.ReactNode }) {
-  const { user } = useMockAuth();
-  if (!isPlatformAdmin(user)) return <PermissionNotice />;
-  return <AppShell mode="admin">{children}</AppShell>;
+  return (
+    <RequirePlatformAdmin>
+      <AppShell mode="admin">{children}</AppShell>
+    </RequirePlatformAdmin>
+  );
 }

@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,10 +14,69 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     temporal_host: str = "localhost:7233"
     temporal_namespace: str = "default"
+    temporal_enabled: bool = False
     model_gateway_mode: str = "mock"
+    model_gateway_provider: str = "openai"  # openai | anthropic
+    openai_api_key: str = ""
+    openai_base_url: str = "https://api.openai.com/v1"
+    anthropic_api_key: str = ""
+    anthropic_base_url: str = "https://api.anthropic.com/v1"
     default_model: str = "gpt-4o"
+
+    # 鉴权与会话
     jwt_secret: str = Field(default="dev-only-change-me", min_length=8)
+    jwt_algorithm: str = "HS256"
+    jwt_issuer: str = "novelflow-api"
+    jwt_audience: str = "novelflow-client"
+    access_token_ttl_minutes: int = 15
+    refresh_token_ttl_days: int = 7
+    bcrypt_rounds: int = 12
+
+    # 跨域
     cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+    # Cookie
+    refresh_cookie_name: str = "novelflow_refresh"
+    refresh_cookie_secure: bool = False
+    refresh_cookie_samesite: str = "lax"
+
+    # DB 连接池
+    db_pool_size: int = 20
+    db_max_overflow: int = 10
+    db_pool_pre_ping: bool = True
+
+    # 限流（slowapi）
+    rate_limit_login: str = "10/minute"
+    rate_limit_register: str = "5/minute"
+    rate_limit_default: str = "120/minute"
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _parse_cors(cls, v):
+        if isinstance(v, str):
+            import json
+
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return [item.strip() for item in v.split(",") if item.strip()]
+        return v
+
+    @model_validator(mode="after")
+    def _validate_secrets(self) -> "Settings":
+        """生产环境必须使用强密钥，且 CORS 不能与 credentials 冲突。"""
+        if self.environment in {"production", "prod"}:
+            if self.jwt_secret in {"dev-only-change-me", "please-change-me-in-production-min-32-chars"}:
+                raise ValueError("JWT_SECRET 在生产环境必须替换为强随机密钥（≥32 字符）")
+            if len(self.jwt_secret) < 32:
+                raise ValueError("JWT_SECRET 在生产环境必须 ≥32 字符")
+            if not self.refresh_cookie_secure:
+                raise ValueError("生产环境 REFRESH_COOKIE_SECURE 必须为 true")
+        if "*" in self.cors_origins:
+            raise ValueError(
+                "CORS_ORIGINS 不能包含 '*'（与 allow_credentials=true 冲突）"
+            )
+        return self
 
 
 @lru_cache

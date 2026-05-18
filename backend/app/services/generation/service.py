@@ -1,11 +1,14 @@
+"""生成任务服务（ORM 化）。"""
 from __future__ import annotations
 
-from fastapi import HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import NotFoundError
 from app.core.permissions import require_permission
 from app.core.security import CurrentUser
 from app.core.tenancy import TenantContext, ensure_same_tenant
-from app.repositories.memory_store import get_row, insert_row, list_rows, update_row
+from app.models.generation_job import GenerationJob
+from app.repositories import GenerationJobRepository, ProjectRepository
 from app.services.entitlement.service import require_entitlement
 from app.services.quota.service import quota_service
 from app.workflows.starter import workflow_starter
@@ -20,86 +23,128 @@ PLAN_QUEUE = {
 
 
 class GenerationService:
-    def create_full_novel_job(
+    async def create_full_novel_job(
         self,
+        session: AsyncSession,
         user: CurrentUser,
         tenant: TenantContext,
+        *,
         project_id: str,
         estimate_words: int,
-    ) -> dict:
-        require_permission(user, "generation_job:create")
+    ) -> GenerationJob:
+        require_permission(user, "generation_job:create", tenant)
         require_entitlement(tenant, "generation:full_novel")
-        project = get_row("projects", project_id, tenant.organization_id)
-        if not project:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project_not_found")
-        ensure_same_tenant(project["organization_id"], tenant)
-        job = insert_row(
-            "generation_jobs",
-            {
-                "organization_id": tenant.organization_id,
-                "user_id": user.id,
-                "project_id": project_id,
-                "job_type": "full_novel",
-                "status": "queued",
-                "priority": PLAN_QUEUE.get(tenant.plan_code, "queue_standard"),
-                "plan_code": tenant.plan_code,
-                "reserved_quota": estimate_words,
-                "consumed_quota": 0,
-                "input_payload": {"estimate_words": estimate_words},
-            },
-            "job",
-        )
-        quota_service.reserve_quota(tenant, job["id"], "monthly_generated_words", estimate_words)
-        workflow_id = workflow_starter.start_generate_full_novel(job)
-        return update_row("generation_jobs", job["id"], {"workflow_id": workflow_id}) or job
 
-    def create_scene_write_job(
+        project = await ProjectRepository(session).get(
+            project_id, organization_id=tenant.organization_id
+        )
+        if not project:
+            raise NotFoundError("project_not_found")
+        ensure_same_tenant(project.organization_id, tenant)
+
+        job = await GenerationJobRepository(session).create(
+            organization_id=tenant.organization_id,
+            user_id=user.id,
+            project_id=project_id,
+            job_type="full_novel",
+            status="queued",
+            priority=PLAN_QUEUE.get(tenant.plan_code, "queue_standard"),
+            plan_code=tenant.plan_code,
+            reserved_quota=estimate_words,
+            consumed_quota=0,
+            input_payload={"estimate_words": estimate_words},
+        )
+        await quota_service.reserve_quota(
+            session,
+            tenant,
+            job_id=job.id,
+            quota_key="monthly_generated_words",
+            amount=estimate_words,
+        )
+        job.workflow_id = workflow_starter.start_generate_full_novel({"id": job.id})
+        await session.flush()
+        return job
+
+    async def create_scene_write_job(
         self,
+        session: AsyncSession,
         user: CurrentUser,
         tenant: TenantContext,
+        *,
         project_id: str,
         scene_id: str,
         target_words: int,
-    ) -> dict:
-        require_permission(user, "generation_job:create")
+    ) -> GenerationJob:
+        require_permission(user, "generation_job:create", tenant)
         require_entitlement(tenant, "generation:scene")
-        job = insert_row(
-            "generation_jobs",
-            {
-                "organization_id": tenant.organization_id,
-                "user_id": user.id,
-                "project_id": project_id,
-                "job_type": "scene_write",
-                "status": "queued",
-                "priority": PLAN_QUEUE.get(tenant.plan_code, "queue_standard"),
-                "plan_code": tenant.plan_code,
-                "reserved_quota": target_words,
-                "consumed_quota": 0,
-                "input_payload": {"scene_id": scene_id, "target_words": target_words},
-            },
-            "job",
+
+        project = await ProjectRepository(session).get(
+            project_id, organization_id=tenant.organization_id
         )
-        quota_service.reserve_quota(tenant, job["id"], "monthly_generated_words", target_words)
-        workflow_id = workflow_starter.start_write_scene(job)
-        return update_row("generation_jobs", job["id"], {"workflow_id": workflow_id}) or job
+        if not project:
+            raise NotFoundError("project_not_found")
 
-    def get_job(self, tenant: TenantContext, job_id: str) -> dict | None:
-        return get_row("generation_jobs", job_id, tenant.organization_id)
+        job = await GenerationJobRepository(session).create(
+            organization_id=tenant.organization_id,
+            user_id=user.id,
+            project_id=project_id,
+            job_type="scene_write",
+            status="queued",
+            priority=PLAN_QUEUE.get(tenant.plan_code, "queue_standard"),
+            plan_code=tenant.plan_code,
+            reserved_quota=target_words,
+            consumed_quota=0,
+            input_payload={"scene_id": scene_id, "target_words": target_words},
+        )
+        await quota_service.reserve_quota(
+            session,
+            tenant,
+            job_id=job.id,
+            quota_key="monthly_generated_words",
+            amount=target_words,
+        )
+        job.workflow_id = workflow_starter.start_write_scene({"id": job.id})
+        await session.flush()
+        return job
 
-    def list_jobs(self, tenant: TenantContext | None = None) -> list[dict]:
-        return list_rows("generation_jobs", tenant.organization_id if tenant else None)
+    async def get_job(
+        self,
+        session: AsyncSession,
+        tenant: TenantContext,
+        job_id: str,
+    ) -> GenerationJob | None:
+        return await GenerationJobRepository(session).get(
+            job_id, organization_id=tenant.organization_id
+        )
 
-    def cancel_job(self, user: CurrentUser, tenant: TenantContext, job_id: str) -> dict | None:
-        require_permission(user, "generation_job:cancel")
-        job = get_row("generation_jobs", job_id, tenant.organization_id)
+    async def list_jobs(
+        self,
+        session: AsyncSession,
+        tenant: TenantContext | None = None,
+        *,
+        limit: int = 100,
+    ) -> list[GenerationJob]:
+        repo = GenerationJobRepository(session)
+        org_id = tenant.organization_id if tenant else None
+        rows = await repo.list(organization_id=org_id, limit=limit)
+        return list(rows)
+
+    async def cancel_job(
+        self,
+        session: AsyncSession,
+        user: CurrentUser,
+        tenant: TenantContext,
+        job_id: str,
+    ) -> GenerationJob | None:
+        require_permission(user, "generation_job:cancel", tenant)
+        job = await GenerationJobRepository(session).get(
+            job_id, organization_id=tenant.organization_id
+        )
         if not job:
             return None
-        return update_row(
-            "generation_jobs",
-            job_id,
-            {"status": "cancelled"},
-            tenant.organization_id,
-        )
+        job.status = "cancelled"
+        await session.flush()
+        return job
 
 
 generation_service = GenerationService()

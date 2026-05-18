@@ -13,6 +13,7 @@ class Organization(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(String(160), index=True)
     type: Mapped[str] = mapped_column(String(32), default="personal")
     owner_user_id: Mapped[str] = mapped_column(String(64), ForeignKey("users.id"))
+    plan_code: Mapped[str] = mapped_column(String(64), default="Free", index=True)
     status: Mapped[str] = mapped_column(String(32), default="active")
 
 

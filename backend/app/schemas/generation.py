@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from .common import APIModel
 
 
 class GenerationJobResponse(APIModel):
     id: str
     organization_id: str
+    user_id: str
     project_id: str
     job_type: str
     status: str
@@ -14,6 +17,11 @@ class GenerationJobResponse(APIModel):
     reserved_quota: int
     consumed_quota: int
     workflow_id: str | None = None
+    error_message: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
 
 
 class ModelCallResponse(APIModel):
@@ -27,3 +35,4 @@ class ModelCallResponse(APIModel):
     output_tokens: int
     latency_ms: int
     status: str
+    created_at: datetime

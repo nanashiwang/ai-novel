@@ -1,13 +1,16 @@
 "use client";
 
-import { useState } from "react";
 import { Bold, Code2, Image, Italic, Link2, List, Quote, Redo2, Save, Underline, Undo2 } from "lucide-react";
+import { useState } from "react";
 import { toast } from "sonner";
-import { editorDraft } from "@/lib/mock-data";
+
 import { Button } from "./button";
 
+const PLACEHOLDER =
+  "尚未生成正文。请在写作工作台中执行生成任务，或导入既有章节内容。";
+
 export function EditorMock() {
-  const [value, setValue] = useState(editorDraft);
+  const [value, setValue] = useState(PLACEHOLDER);
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="flex flex-wrap items-center gap-1 border-b border-slate-100 bg-slate-50 px-4 py-3 text-slate-500">

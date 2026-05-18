@@ -1,19 +1,30 @@
+from __future__ import annotations
+
 from fastapi import APIRouter
 
-from app.api.deps import CurrentUserDep
+from app.api.deps import CurrentUserDep, DbDep
+from app.core.exceptions import NotFoundError
 from app.core.permissions import require_platform_admin
-from app.services.generation.service import generation_service
+from app.repositories import GenerationJobRepository
+from app.schemas.generation import GenerationJobResponse
 
 router = APIRouter(prefix="/admin/generation-jobs", tags=["admin-generation-jobs"])
 
 
-@router.get("")
-async def jobs(user: CurrentUserDep) -> list[dict]:
+@router.get("", response_model=list[GenerationJobResponse])
+async def jobs(user: CurrentUserDep, db: DbDep):
     require_platform_admin(user)
-    return generation_service.list_jobs()
+    rows = await GenerationJobRepository(db).list(limit=500)
+    return rows
 
 
-@router.post("/{job_id}/cancel")
-async def cancel(job_id: str, user: CurrentUserDep) -> dict:
+@router.post("/{job_id}/cancel", response_model=GenerationJobResponse)
+async def cancel(job_id: str, user: CurrentUserDep, db: DbDep):
     require_platform_admin(user)
-    return {"job_id": job_id, "status": "cancel_requested", "actor": user.id}
+    repo = GenerationJobRepository(db)
+    job = await repo.get(job_id)
+    if not job:
+        raise NotFoundError("job_not_found")
+    job.status = "cancelled"
+    await db.commit()
+    return job
