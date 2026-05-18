@@ -17,12 +17,12 @@ services:
       ACCESS_TOKEN_TTL_MINUTES: ${ACCESS_TOKEN_TTL_MINUTES:-15}
       REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-7}
       BCRYPT_ROUNDS: ${BCRYPT_ROUNDS:-12}
-      CORS_ORIGINS: '["http://localhost:3000","http://127.0.0.1:3000"]'
+      CORS_ORIGINS: ${CORS_ORIGINS:-'["http://localhost:13000","http://127.0.0.1:13000"]'}
       REFRESH_COOKIE_NAME: ${REFRESH_COOKIE_NAME:-novelflow_refresh}
       REFRESH_COOKIE_SECURE: ${REFRESH_COOKIE_SECURE:-false}
       REFRESH_COOKIE_SAMESITE: ${REFRESH_COOKIE_SAMESITE:-lax}
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -44,7 +44,7 @@ services:
     environment:
       NEXT_PUBLIC_API_BASE_URL: http://localhost:8000/api/v1
     ports:
-      - "3000:3000"
+      - "${FRONTEND_PORT:-13000}:3000"
     depends_on:
       backend:
         condition: service_healthy
@@ -104,7 +104,7 @@ services:
       - temporal
     environment:
       TEMPORAL_ADDRESS: temporal:7233
-      TEMPORAL_CORS_ORIGINS: http://localhost:3000
+      TEMPORAL_CORS_ORIGINS: http://localhost:${FRONTEND_PORT:-13000}
     ports:
       - "8080:8080"
 

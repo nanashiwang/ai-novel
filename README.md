@@ -39,12 +39,13 @@ make d
 
 完成后访问：
 
-- 前端：http://localhost:3000
+- 前端：http://localhost:13000
 - 后端健康检查：http://localhost:8000/health
 - Temporal UI：http://localhost:8080
 - MinIO Console：http://localhost:9001
 
 首次运行会自动从 `.env.example` 创建 `.env`。生产部署前请修改 `.env` 里的密钥和外部服务配置。
+默认前端端口是 `13000`；如需修改，编辑 `.env` 里的 `FRONTEND_PORT`。
 
 ## 一键更新
 
