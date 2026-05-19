@@ -42,6 +42,13 @@ class GenerateOutlineRequest(APIModel):
     force_regenerate: bool = False
 
 
+class GenerateScenePlanRequest(APIModel):
+    scenes_per_chapter: int = Field(default=3, ge=1, le=8)
+    expected_words: int = Field(default=1500, ge=300, le=10000)
+    estimate_words: int = Field(default=2000, ge=1, le=20000)
+    force_regenerate: bool = False
+
+
 class BibleSpecResponse(APIModel):
     id: str
     premise: str
@@ -247,6 +254,36 @@ async def generate_outline(
         tenant,
         project_id=project_id,
         target_chapters=payload.target_chapters,
+        estimate_words=payload.estimate_words,
+        force_regenerate=payload.force_regenerate,
+    )
+    await db.refresh(job)
+    response = GenerationJobResponse.model_validate(job)
+    await db.commit()
+    return response
+
+
+@router.post(
+    "/{project_id}/chapters/{chapter_id}/scenes/generate",
+    response_model=GenerationJobResponse,
+    status_code=202,
+)
+async def generate_scene_plan(
+    project_id: str,
+    chapter_id: str,
+    payload: GenerateScenePlanRequest,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    job = await generation_service.create_scene_plan_job(
+        db,
+        user,
+        tenant,
+        project_id=project_id,
+        chapter_id=chapter_id,
+        scenes_per_chapter=payload.scenes_per_chapter,
+        expected_words=payload.expected_words,
         estimate_words=payload.estimate_words,
         force_regenerate=payload.force_regenerate,
     )

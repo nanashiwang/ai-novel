@@ -9,6 +9,7 @@ from app.core.security import CurrentUser
 from app.core.tenancy import TenantContext, ensure_same_tenant
 from app.models.generation_job import GenerationJob
 from app.repositories import (
+    ChapterRepository,
     GenerationJobRepository,
     NovelSpecRepository,
     ProjectRepository,
@@ -148,6 +149,85 @@ class GenerationService:
         if workflow_starter.is_mock_workflow(job.workflow_id):
             session.sync_session.info.setdefault("after_commit_tasks", []).append(
                 ("generate_outline", job.id)
+            )
+        return job
+
+    async def create_scene_plan_job(
+        self,
+        session: AsyncSession,
+        user: CurrentUser,
+        tenant: TenantContext,
+        *,
+        project_id: str,
+        chapter_id: str,
+        scenes_per_chapter: int = 3,
+        expected_words: int = 1500,
+        estimate_words: int = 2000,
+        force_regenerate: bool = False,
+    ) -> GenerationJob:
+        """单章场景计划生成任务。
+
+        前置：
+        - project 存在且属于当前 tenant
+        - NovelSpec 已存在（generate_bible 已完成）
+        - chapter 存在且属于该 project
+
+        说明：不改变 project.status —— 单章生成是"局部更新"，让用户能逐章
+        生成而不影响整体状态机。
+        """
+        require_permission(user, "generation_job:create", tenant)
+
+        project = await ProjectRepository(session).get(
+            project_id, organization_id=tenant.organization_id
+        )
+        if not project:
+            raise NotFoundError("project_not_found")
+        ensure_same_tenant(project.organization_id, tenant)
+
+        spec = await NovelSpecRepository(session).get_by(
+            organization_id=tenant.organization_id,
+            project_id=project_id,
+        )
+        if not spec:
+            raise NotFoundError("novel_spec_not_found")
+
+        chapter = await ChapterRepository(session).get(
+            chapter_id, organization_id=tenant.organization_id
+        )
+        if not chapter or chapter.project_id != project_id:
+            raise NotFoundError("chapter_not_found")
+
+        estimate_words = max(1, estimate_words)
+        job = await GenerationJobRepository(session).create(
+            organization_id=tenant.organization_id,
+            user_id=user.id,
+            project_id=project_id,
+            job_type="generate_scene_plan",
+            status="queued",
+            priority=PLAN_QUEUE.get(tenant.plan_code, "queue_standard"),
+            plan_code=tenant.plan_code,
+            reserved_quota=estimate_words,
+            consumed_quota=0,
+            input_payload={
+                "chapter_id": chapter_id,
+                "scenes_per_chapter": scenes_per_chapter,
+                "expected_words": expected_words,
+                "estimate_words": estimate_words,
+                "force_regenerate_scenes": force_regenerate,
+            },
+        )
+        await quota_service.reserve_quota(
+            session,
+            tenant,
+            job_id=job.id,
+            quota_key="monthly_generated_words",
+            amount=estimate_words,
+        )
+        job.workflow_id = workflow_starter.start_generate_scene_plan({"id": job.id})
+        await session.flush()
+        if workflow_starter.is_mock_workflow(job.workflow_id):
+            session.sync_session.info.setdefault("after_commit_tasks", []).append(
+                ("generate_scene_plan", job.id)
             )
         return job
 
