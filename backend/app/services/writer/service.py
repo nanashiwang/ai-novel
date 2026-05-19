@@ -9,6 +9,10 @@ from app.schemas.story_generation import SceneDraftContract
 from app.services.model_gateway.service import model_gateway
 from app.services.prompt_manager.service import prompt_manager
 
+# 集中管理 prompt 路径与版本，便于升级时 model_calls 表同步记录真实版本。
+_PROMPT_WRITE_SCENE = "writing/write_scene"
+_PROMPT_VERSION = "v1"
+
 
 class WriterService:
     async def write_scene(
@@ -20,7 +24,7 @@ class WriterService:
         job_id: str,
         scene_id: str,
     ) -> str:
-        prompt = prompt_manager.load("writing/write_scene")
+        prompt = prompt_manager.load(_PROMPT_WRITE_SCENE, version=_PROMPT_VERSION)
         return await model_gateway.generate_text(
             session,
             organization_id=organization_id,
@@ -29,6 +33,8 @@ class WriterService:
             task_type="write_scene",
             system_prompt=prompt,
             user_prompt=f"以 scene 为最小单位生成正文，scene_id={scene_id}",
+            prompt_key=_PROMPT_WRITE_SCENE,
+            prompt_version=_PROMPT_VERSION,
             metadata={"scene_id": scene_id},
         )
 
@@ -45,7 +51,7 @@ class WriterService:
         previous_scene_excerpt: str = "",
         target_words: int = 1200,
     ) -> SceneDraftContract:
-        prompt = prompt_manager.load("writing/write_scene")
+        prompt = prompt_manager.load(_PROMPT_WRITE_SCENE, version=_PROMPT_VERSION)
         user_prompt = (
             "请根据故事圣经、章节大纲和 scene card 写出一个完整场景正文。\n"
             f"故事圣经：{spec.premise}\n"
@@ -79,6 +85,8 @@ class WriterService:
             system_prompt=prompt,
             user_prompt=user_prompt,
             schema=SceneDraftContract.model_json_schema(),
+            prompt_key=_PROMPT_WRITE_SCENE,
+            prompt_version=_PROMPT_VERSION,
             metadata={"scene_id": scene.id, "chapter_id": chapter.id},
         )
         draft = SceneDraftContract.model_validate(

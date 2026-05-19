@@ -16,6 +16,13 @@ from app.schemas.story_generation import (
 from app.services.model_gateway.service import model_gateway
 from app.services.prompt_manager.service import prompt_manager
 
+# Prompt 标识与版本：作为常量集中，便于版本号升级与 model_calls 表追溯。
+# 修改这里的版本号 → prompt 文件命名 → model_calls.prompt_version 同步生效。
+_PROMPT_STORY_BIBLE = "bible/generate_story_bible"
+_PROMPT_PLAN_CHAPTERS = "outline/plan_chapters"
+_PROMPT_PLAN_SCENES = "outline/plan_scenes"
+_PROMPT_VERSION = "v1"
+
 
 class NovelPlannerService:
     async def generate_story_bible(
@@ -28,7 +35,7 @@ class NovelPlannerService:
         project: Project,
         topic: str = "",
     ) -> StoryBibleContract:
-        prompt = prompt_manager.load("bible/generate_story_bible")
+        prompt = prompt_manager.load(_PROMPT_STORY_BIBLE, version=_PROMPT_VERSION)
         user_prompt = (
             "请从上到下生成小说故事圣经。\n"
             f"初始题材/topic：{topic or project.title}\n"
@@ -49,6 +56,8 @@ class NovelPlannerService:
             system_prompt=prompt,
             user_prompt=user_prompt,
             schema=StoryBibleContract.model_json_schema(),
+            prompt_key=_PROMPT_STORY_BIBLE,
+            prompt_version=_PROMPT_VERSION,
             metadata={"module": "novel_planner"},
         )
         return self._normalize_story_bible(StoryBibleContract.model_validate(raw), project, topic)
@@ -64,7 +73,7 @@ class NovelPlannerService:
         bible: StoryBibleContract | NovelSpec,
         target_chapters: int,
     ) -> ChapterPlanContract:
-        prompt = prompt_manager.load("outline/plan_chapters")
+        prompt = prompt_manager.load(_PROMPT_PLAN_CHAPTERS, version=_PROMPT_VERSION)
         target_chapters = max(1, target_chapters)
         user_prompt = (
             "请把故事圣经拆成章节大纲，采用三幕式推进，但不要输出幕名层级。\n"
@@ -82,6 +91,8 @@ class NovelPlannerService:
             system_prompt=prompt,
             user_prompt=user_prompt,
             schema=ChapterPlanContract.model_json_schema(),
+            prompt_key=_PROMPT_PLAN_CHAPTERS,
+            prompt_version=_PROMPT_VERSION,
             metadata={"module": "novel_planner", "target_chapters": target_chapters},
         )
         contract = ChapterPlanContract.model_validate(raw)
@@ -102,7 +113,7 @@ class NovelPlannerService:
         scenes_per_chapter: int,
         expected_words: int,
     ) -> ScenePlanContract:
-        prompt = prompt_manager.load("outline/plan_scenes")
+        prompt = prompt_manager.load(_PROMPT_PLAN_SCENES, version=_PROMPT_VERSION)
         scenes_per_chapter = max(1, scenes_per_chapter)
         user_prompt = (
             "请把指定章节拆成 scene cards。\n"
@@ -126,6 +137,8 @@ class NovelPlannerService:
             system_prompt=prompt,
             user_prompt=user_prompt,
             schema=ScenePlanContract.model_json_schema(),
+            prompt_key=_PROMPT_PLAN_SCENES,
+            prompt_version=_PROMPT_VERSION,
             metadata={
                 "module": "novel_planner",
                 "chapter_id": chapter.id,
