@@ -14,6 +14,7 @@ import {
   CheckCircle2,
   Download,
   FileArchive,
+  Layers3,
   Network,
   RefreshCw,
   Sparkles,
@@ -22,6 +23,7 @@ import {
   Wand2,
   XCircle,
 } from "lucide-react";
+import Link from "next/link";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -42,7 +44,13 @@ import {
   scenesApi,
   worldItemsApi,
 } from "@/lib/api";
-import type { Bible, BibleCharacter, BiblePlotThread, BibleWorldItem } from "@/lib/api";
+import type {
+  Bible,
+  BibleCharacter,
+  BiblePlotThread,
+  BibleWorldItem,
+  GenerationJob,
+} from "@/lib/api";
 import { ApiError } from "@/lib/http";
 import { formatDateTime } from "@/lib/format";
 import { useScopedKey } from "@/lib/use-scoped-key";
@@ -54,17 +62,6 @@ type Character = {
   description: string;
   motivation: string;
   secret: string;
-};
-
-type Chapter = {
-  id: string;
-  chapter_index: number;
-  title: string;
-  summary: string;
-  goal: string;
-  conflict: string;
-  ending_hook: string;
-  status: string;
 };
 
 type Scene = {
@@ -310,6 +307,29 @@ export function BiblePage({ projectId }: { projectId: string }) {
               )}
             </CardContent>
           </Card>
+
+          {/* Sprint 2 衔接：bible 已生成 → 引导用户到大纲页生成章节大纲 */}
+          <Card>
+            <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
+              <div className="flex items-center gap-3">
+                <div className="rounded-2xl bg-indigo-50 p-2 text-indigo-600">
+                  <Layers3 className="size-5" />
+                </div>
+                <div>
+                  <p className="font-bold text-slate-950">下一步：生成章节大纲</p>
+                  <p className="text-sm text-slate-500">
+                    根据故事圣经规划三幕推进，逐章产出标题、目标、冲突、钩子。
+                  </p>
+                </div>
+              </div>
+              <Link
+                href={`/studio/projects/${projectId}/outline`}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-800 transition hover:bg-slate-50"
+              >
+                前往大纲页 <Sparkles className="size-4" />
+              </Link>
+            </CardContent>
+          </Card>
         </>
       )}
     </div>
@@ -451,10 +471,54 @@ export function WorldPage({ projectId }: { projectId: string }) {
 
 // =========== 大纲 ===========
 export function OutlinePage({ projectId }: { projectId: string }) {
+  const queryClient = useQueryClient();
+  const projectKey = useScopedKey("project", projectId);
+  const chaptersKey = useScopedKey("project", projectId, "chapters");
+  const jobsKey = useScopedKey("jobs");
+
   const { data: chapters = [] } = useQuery({
-    queryKey: useScopedKey("project", projectId, "chapters"),
-    queryFn: () => chaptersApi.list(projectId) as Promise<Chapter[]>,
+    queryKey: chaptersKey,
+    queryFn: () => chaptersApi.list(projectId),
   });
+
+  // 找出本项目的 generate_outline 任务最近一条（jobs.list 默认 created_at desc）。
+  // 用于驱动生成按钮的 loading 态与轮询刷新。
+  const { data: jobs = [] } = useQuery({
+    queryKey: jobsKey,
+    queryFn: () => jobsApi.list() as Promise<GenerationJob[]>,
+    refetchInterval: (query) => {
+      const list = (query.state.data as GenerationJob[] | undefined) ?? [];
+      const latest = list.find(
+        (j) => j.project_id === projectId && j.job_type === "generate_outline",
+      );
+      const waitingForJob = latest?.status === "queued" || latest?.status === "running";
+      const waitingForChapters =
+        latest?.status === "succeeded" && chapters.length === 0;
+      return waitingForJob || waitingForChapters ? 1500 : false;
+    },
+  });
+  const latestJob = jobs.find(
+    (j) => j.project_id === projectId && j.job_type === "generate_outline",
+  );
+  const isGenerating = latestJob?.status === "queued" || latestJob?.status === "running";
+
+  const generate = useMutation({
+    mutationFn: () =>
+      projectsApi.generateOutline(projectId, {
+        estimate_words: 3000,
+        force_regenerate: chapters.length > 0,
+      }),
+    onSuccess: () => {
+      toast.success("已提交章节大纲生成任务");
+      queryClient.invalidateQueries({ queryKey: chaptersKey });
+      queryClient.invalidateQueries({ queryKey: projectKey });
+      queryClient.invalidateQueries({ queryKey: jobsKey });
+    },
+    onError: (e: unknown) => {
+      toast.error(e instanceof ApiError ? e.message : "提交失败");
+    },
+  });
+
   const [activeId, setActiveId] = useState<string | null>(null);
   const active = chapters.find((c) => c.id === activeId) ?? chapters[0];
 
@@ -467,6 +531,54 @@ export function OutlinePage({ projectId }: { projectId: string }) {
   return (
     <div className="space-y-6">
       <ProjectHeader projectId={projectId} />
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <div>
+            <CardTitle>章节大纲 Outline</CardTitle>
+            <p className="mt-1 text-sm text-slate-500">
+              依赖故事圣经；生成后会同步写入 chapters 表并更新项目状态。
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {latestJob ? <StatusBadge status={latestJob.status as never} /> : null}
+            <Badge tone={chapters.length > 0 ? "blue" : "slate"}>
+              {chapters.length > 0 ? `已生成 ${chapters.length} 章` : "未生成"}
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-slate-50 p-4">
+            <div>
+              <p className="font-bold text-slate-950">Sprint 2 大纲闭环</p>
+              <p className="text-sm text-slate-500">
+                调用模型规划三幕推进，每章产出标题、摘要、目标、冲突、结尾钩子。
+              </p>
+            </div>
+            <Button
+              onClick={() => generate.mutate()}
+              disabled={generate.isPending || isGenerating}
+            >
+              {isGenerating ? (
+                <RefreshCw className="size-4 animate-spin" />
+              ) : (
+                <Sparkles className="size-4" />
+              )}
+              {chapters.length > 0 ? "重新生成大纲" : "启动生成"}
+            </Button>
+          </div>
+          {latestJob ? (
+            <div className="grid gap-3 md:grid-cols-3">
+              <BibleBlock title="任务类型" text={latestJob.job_type} />
+              <BibleBlock
+                title="额度"
+                text={`${latestJob.consumed_quota}/${latestJob.reserved_quota}`}
+              />
+              <BibleBlock title="Workflow" text={latestJob.workflow_id ?? "—"} />
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
       <div className="grid gap-4 xl:grid-cols-[0.75fr_1.25fr]">
         <Card>
           <CardHeader>

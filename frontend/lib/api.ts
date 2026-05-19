@@ -116,6 +116,27 @@ export type GenerateBiblePayload = {
   force_regenerate?: boolean;
 };
 
+// 与 backend/app/schemas/story_generation.py::ChapterPlanItem 对齐
+export type Chapter = {
+  id: string;
+  project_id: string;
+  volume_id: string | null;
+  chapter_index: number;
+  title: string;
+  summary: string;
+  goal: string;
+  conflict: string;
+  ending_hook: string;
+  status: string;
+};
+
+export type GenerateOutlinePayload = {
+  // null/undefined 时由 activity 回落到 project.target_chapter_count 或 6
+  target_chapters?: number | null;
+  estimate_words?: number;
+  force_regenerate?: boolean;
+};
+
 export const projectsApi = {
   list: () => http.get<Project[]>("/projects"),
   get: (id: string) => http.get<Project>(`/projects/${id}`),
@@ -124,6 +145,8 @@ export const projectsApi = {
   getBible: (id: string) => http.get<Bible>(`/projects/${id}/bible`),
   generateBible: (id: string, payload: GenerateBiblePayload) =>
     http.post<GenerationJob>(`/projects/${id}/bible/generate`, payload),
+  generateOutline: (id: string, payload: GenerateOutlinePayload = {}) =>
+    http.post<GenerationJob>(`/projects/${id}/outline/generate`, payload),
   generateFullNovel: (id: string, estimate_words: number) =>
     http.post<GenerationJob>(`/projects/${id}/generate-full-novel`, { estimate_words }),
 };
@@ -243,7 +266,7 @@ export const charactersApi = {
 };
 export const chaptersApi = {
   list: (projectId: string) =>
-    http.get<unknown[]>(`/projects/${projectId}/chapters`),
+    http.get<Chapter[]>(`/projects/${projectId}/chapters`),
 };
 export const scenesApi = {
   list: (projectId: string, chapterId?: string) =>

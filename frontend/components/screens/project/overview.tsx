@@ -1,7 +1,21 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, BookOpen, CheckCircle2, FileClock, Gauge, GitBranch, Sparkles } from "lucide-react";
+import {
+  AlertTriangle,
+  BookOpen,
+  CheckCircle2,
+  FileClock,
+  FileDown,
+  Gauge,
+  GitBranch,
+  Layers3,
+  PenLine,
+  RefreshCw,
+  Sparkles,
+} from "lucide-react";
+import Link from "next/link";
+import type { LucideIcon } from "lucide-react";
 
 import { ProjectHeader } from "./project-frame";
 import { Badge, StatusBadge } from "@/components/ui/badge";
@@ -30,6 +44,117 @@ type JobRow = {
   reserved_quota: number;
   consumed_quota: number;
 };
+
+// 单一真相源：project.status → 下一步可点击动作。
+// "等待中" 的过渡态把 CTA 指向 /jobs，让用户能直接看到任务进度而不是空白页。
+type NextAction = {
+  title: string;
+  description: string;
+  cta: string;
+  hrefSuffix: string;
+  icon: LucideIcon;
+  waiting?: boolean;
+};
+
+const NEXT_ACTION_BY_STATUS: Record<string, NextAction> = {
+  created: {
+    title: "下一步：生成故事圣经",
+    description: "提交 generate_bible 任务，预留额度并生成核心设定。",
+    cta: "前往故事圣经",
+    hrefSuffix: "/bible",
+    icon: Sparkles,
+  },
+  bible_generating: {
+    title: "故事圣经生成中",
+    description: "等待 generate_bible 任务完成，可在任务页查看进度。",
+    cta: "查看任务进度",
+    hrefSuffix: "/jobs",
+    icon: RefreshCw,
+    waiting: true,
+  },
+  bible_ready: {
+    title: "下一步：生成章节大纲",
+    description: "依赖故事圣经，规划三幕推进与每章目标/冲突/钩子。",
+    cta: "前往大纲页",
+    hrefSuffix: "/outline",
+    icon: Layers3,
+  },
+  outline_generating: {
+    title: "章节大纲生成中",
+    description: "等待 generate_outline 任务完成。",
+    cta: "查看任务进度",
+    hrefSuffix: "/jobs",
+    icon: RefreshCw,
+    waiting: true,
+  },
+  outlined: {
+    title: "下一步：拆分场景计划",
+    description: "把每章拆成 scene cards（Sprint 3 接入）。",
+    cta: "前往大纲页",
+    hrefSuffix: "/outline",
+    icon: Layers3,
+  },
+  scenes_planning: {
+    title: "场景计划生成中",
+    description: "等待 generate_scene_plan 任务完成。",
+    cta: "查看任务进度",
+    hrefSuffix: "/jobs",
+    icon: RefreshCw,
+    waiting: true,
+  },
+  scenes_planned: {
+    title: "下一步：进入写作工作台",
+    description: "按场景生成正文草稿（Sprint 4 接入）。",
+    cta: "前往写作",
+    hrefSuffix: "/write",
+    icon: PenLine,
+  },
+  drafting: {
+    title: "继续写作",
+    description: "已有草稿，可继续按场景生成或编辑。",
+    cta: "前往写作",
+    hrefSuffix: "/write",
+    icon: PenLine,
+  },
+  completed: {
+    title: "下一步：导出或审稿",
+    description: "全书草稿完成，可触发导出或进入审稿。",
+    cta: "前往导出",
+    hrefSuffix: "/export",
+    icon: FileDown,
+  },
+};
+
+function NextActionCard({ projectId, status }: { projectId: string; status: string }) {
+  const action = NEXT_ACTION_BY_STATUS[status];
+  if (!action) return null;
+  const Icon = action.icon;
+  return (
+    <Card>
+      <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
+        <div className="flex items-center gap-3">
+          <div
+            className={`rounded-2xl p-2 ${
+              action.waiting ? "bg-amber-50 text-amber-600" : "bg-indigo-50 text-indigo-600"
+            }`}
+          >
+            <Icon className={`size-5 ${action.waiting ? "animate-spin" : ""}`} />
+          </div>
+          <div>
+            <p className="font-bold text-slate-950">{action.title}</p>
+            <p className="text-sm text-slate-500">{action.description}</p>
+          </div>
+        </div>
+        <Link
+          href={`/studio/projects/${projectId}${action.hrefSuffix}`}
+          className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm shadow-indigo-200 transition hover:bg-indigo-700"
+        >
+          {action.cta} <Sparkles className="size-4" />
+        </Link>
+      </CardContent>
+    </Card>
+  );
+}
 
 export function ProjectOverviewPage({ projectId }: { projectId: string }) {
   const { data: project } = useQuery({
@@ -73,6 +198,8 @@ export function ProjectOverviewPage({ projectId }: { projectId: string }) {
           tone="orange"
         />
       </div>
+
+      {project ? <NextActionCard projectId={projectId} status={project.status} /> : null}
 
       <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
         <Card>
