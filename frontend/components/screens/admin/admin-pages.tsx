@@ -29,10 +29,10 @@ import { ProgressBar, QuotaProgress } from "@/components/ui/progress";
 import { StatCard } from "@/components/ui/stat-card";
 import {
   adminApi,
-  quotaApi,
   type AdminPlan,
   type AdminPlanFeature,
   type AdminPlanUpsert,
+  type AdminUserUpdate,
   type ModelGatewaySettingsUpdate,
 } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
@@ -211,13 +211,70 @@ function AlertItem({
 }
 
 export function AdminUsersPage() {
+  const queryClient = useQueryClient();
+  const { user: currentUser } = useAuth();
+  const isSuper = isSuperAdmin(currentUser);
   const { data = [], isPending } = useQuery({
     queryKey: ["admin", "users"],
     queryFn: () => adminApi.users() as Promise<AdminUser[]>,
   });
+  const [detailUserId, setDetailUserId] = useState<string | null>(null);
+
+  const updateMutation = useMutation({
+    mutationFn: ({ userId, payload }: { userId: string; payload: AdminUserUpdate }) =>
+      adminApi.updateUser(userId, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+      if (detailUserId) {
+        queryClient.invalidateQueries({ queryKey: ["admin", "user", detailUserId] });
+      }
+      toast.success("已保存");
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : "保存失败"),
+  });
+  const resetPwdMutation = useMutation({
+    mutationFn: (userId: string) => adminApi.resetUserPassword(userId),
+    onSuccess: (data) => {
+      window.prompt(
+        "已重置密码。请复制临时密码并通过安全渠道告知用户：",
+        data.temp_password,
+      );
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : "重置失败"),
+  });
+
+  function toggleStatus(row: AdminUser) {
+    if (row.id === currentUser?.id) {
+      toast.error("不能禁用自己");
+      return;
+    }
+    const nextStatus = row.status === "active" ? "disabled" : "active";
+    if (!window.confirm(`确认把 ${row.email} 设为 ${nextStatus}？`)) return;
+    updateMutation.mutate({ userId: row.id, payload: { status: nextStatus } });
+  }
+
+  function changeRole(row: AdminUser, nextRole: string) {
+    if (nextRole === row.platform_role) return;
+    if (row.id === currentUser?.id) {
+      toast.error("不能修改自己的角色");
+      return;
+    }
+    if ((nextRole === "admin" || nextRole === "super_admin") && !isSuper) {
+      toast.error("仅 super_admin 可提升角色");
+      return;
+    }
+    if (!window.confirm(`确认把 ${row.email} 的角色改为 ${nextRole}？`)) return;
+    updateMutation.mutate({ userId: row.id, payload: { platform_role: nextRole } });
+  }
+
+  function resetPwd(row: AdminUser) {
+    if (!window.confirm(`确认重置 ${row.email} 的密码？旧密码将立即失效。`)) return;
+    resetPwdMutation.mutate(row.id);
+  }
+
   return (
     <div className="space-y-6">
-      <AdminTitle title="用户管理" desc="平台用户、角色、状态。" />
+      <AdminTitle title="用户管理" desc="平台用户、角色、状态。可禁用、改角色、重置密码。" />
       {isPending ? (
         <Card>
           <CardContent className="p-12 text-center text-slate-500">加载中…</CardContent>
@@ -231,7 +288,13 @@ export function AdminUsersPage() {
               header: "用户",
               render: (row) => (
                 <div>
-                  <p className="font-bold text-slate-950">{row.display_name}</p>
+                  <button
+                    type="button"
+                    onClick={() => setDetailUserId(row.id)}
+                    className="text-left font-bold text-slate-950 hover:text-indigo-600"
+                  >
+                    {row.display_name}
+                  </button>
                   <p className="text-xs text-slate-500">{row.email}</p>
                 </div>
               ),
@@ -240,9 +303,16 @@ export function AdminUsersPage() {
               key: "role",
               header: "角色",
               render: (row) => (
-                <Badge tone={row.platform_role === "super_admin" ? "amber" : "blue"}>
-                  {row.platform_role}
-                </Badge>
+                <select
+                  disabled={row.id === currentUser?.id}
+                  value={row.platform_role}
+                  onChange={(e) => changeRole(row, e.target.value)}
+                  className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs disabled:bg-slate-100"
+                >
+                  <option value="user">user</option>
+                  <option value="admin">admin</option>
+                  <option value="super_admin">super_admin</option>
+                </select>
               ),
             },
             {
@@ -252,22 +322,155 @@ export function AdminUsersPage() {
                 <StatusBadge status={row.status === "active" ? "succeeded" : "failed"} />
               ),
             },
+            {
+              key: "actions",
+              header: "操作",
+              render: (row) => (
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={row.id === currentUser?.id || updateMutation.isPending}
+                    onClick={() => toggleStatus(row)}
+                  >
+                    {row.status === "active" ? "禁用" : "启用"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={resetPwdMutation.isPending}
+                    onClick={() => resetPwd(row)}
+                  >
+                    <KeyRound className="size-3.5" /> 重置密码
+                  </Button>
+                </div>
+              ),
+            },
             { key: "id", header: "user_id", render: (row) => row.id },
           ]}
         />
       )}
+      {detailUserId ? (
+        <UserDetailDrawer userId={detailUserId} onClose={() => setDetailUserId(null)} />
+      ) : null}
     </div>
   );
 }
 
+function UserDetailDrawer({
+  userId,
+  onClose,
+}: {
+  userId: string;
+  onClose: () => void;
+}) {
+  const { data, isLoading } = useQuery({
+    queryKey: ["admin", "user", userId],
+    queryFn: () => adminApi.user(userId),
+  });
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle>用户详情</CardTitle>
+        <Button size="sm" variant="ghost" onClick={onClose}>
+          关闭
+        </Button>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {isLoading || !data ? (
+          <p className="text-sm text-slate-500">加载中…</p>
+        ) : (
+          <>
+            <div className="space-y-1 text-sm">
+              <p className="font-bold text-slate-950">{data.display_name}</p>
+              <p className="text-slate-500">{data.email}</p>
+              <p className="text-xs text-slate-400">user_id: {data.id}</p>
+            </div>
+            <div>
+              <p className="mb-2 text-sm font-bold text-slate-700">所属组织</p>
+              {data.organizations.length === 0 ? (
+                <p className="text-sm text-slate-500">未加入任何组织。</p>
+              ) : (
+                <ul className="space-y-2 text-sm">
+                  {data.organizations.map((org) => (
+                    <li
+                      key={org.organization_id}
+                      className="flex items-center justify-between rounded-lg border border-slate-200 p-3"
+                    >
+                      <div>
+                        <p className="font-semibold text-slate-900">{org.organization_name}</p>
+                        <p className="text-xs text-slate-500">{org.organization_id}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Badge tone="blue">{org.role}</Badge>
+                        <PlanBadge plan={org.plan_code as never} />
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function AdminOrganizationsPage() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const editable = isSuperAdmin(user);
   const { data = [] } = useQuery({
     queryKey: ["admin", "organizations"],
     queryFn: () => adminApi.organizations() as Promise<AdminOrg[]>,
   });
+  const { data: plans = [] } = useQuery({
+    queryKey: ["admin", "plans"],
+    queryFn: adminApi.plans,
+  });
+  // 仅 active 套餐可用于切换；archived 仍允许保留历史绑定
+  const activePlanCodes = plans
+    .filter((p) => p.status === "active")
+    .map((p) => p.code);
+
+  const switchPlanMutation = useMutation({
+    mutationFn: ({ orgId, planCode }: { orgId: string; planCode: string }) =>
+      adminApi.updateOrganization(orgId, {
+        plan_code: planCode,
+        reason: "admin 手动调整",
+      }),
+    onSuccess: () => {
+      toast.success("已切换套餐，额度按新套餐自动同步");
+      queryClient.invalidateQueries({ queryKey: ["admin", "organizations"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "plans"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "quotas"] });
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "切换套餐失败");
+    },
+  });
+
+  function changePlan(row: AdminOrg, nextPlan: string) {
+    if (nextPlan === row.plan_code) return;
+    const confirmed = window.confirm(
+      `确认把组织 ${row.name} 从 ${row.plan_code} 切换为 ${nextPlan}？\n` +
+        `已用额度（used）保留，额度上限会按新套餐重置。`,
+    );
+    if (!confirmed) return;
+    switchPlanMutation.mutate({ orgId: row.id, planCode: nextPlan });
+  }
+
   return (
     <div className="space-y-6">
       <AdminTitle title="组织管理" desc="组织状态、套餐、成员入口。" />
+      {!editable ? (
+        <Card className="border-amber-200 bg-amber-50">
+          <CardContent className="flex items-center gap-3 text-amber-800">
+            <LockKeyhole className="size-5" /> 仅 super_admin 可切换套餐。
+          </CardContent>
+        </Card>
+      ) : null}
       {data.length === 0 ? (
         <Card>
           <CardContent className="p-12 text-center text-slate-500">暂无组织。</CardContent>
@@ -285,7 +488,26 @@ export function AdminOrganizationsPage() {
             {
               key: "plan",
               header: "Plan",
-              render: (row) => <PlanBadge plan={row.plan_code as never} />,
+              render: (row) => (
+                <div className="flex items-center gap-2">
+                  <PlanBadge plan={row.plan_code as never} />
+                  <select
+                    disabled={!editable || switchPlanMutation.isPending}
+                    value={row.plan_code}
+                    onChange={(e) => changePlan(row, e.target.value)}
+                    className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs disabled:bg-slate-100"
+                  >
+                    {!activePlanCodes.includes(row.plan_code) ? (
+                      <option value={row.plan_code}>{row.plan_code}（当前）</option>
+                    ) : null}
+                    {activePlanCodes.map((code) => (
+                      <option key={code} value={code}>
+                        {code}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ),
             },
             {
               key: "status",
@@ -311,6 +533,10 @@ export function AdminPlansPage() {
     queryKey: ["admin", "plans"],
     queryFn: adminApi.plans,
   });
+  const { data: quotaKeyOptions = [] } = useQuery({
+    queryKey: ["admin", "quota-keys"],
+    queryFn: adminApi.quotaKeys,
+  });
   const [selectedId, setSelectedId] = useState<string | "new">("new");
   const selectedPlan =
     selectedId === "new" ? undefined : data.find((plan) => plan.id === selectedId);
@@ -324,6 +550,7 @@ export function AdminPlansPage() {
         : adminApi.createPlan(payload),
     onSuccess: (saved) => {
       queryClient.invalidateQueries({ queryKey: ["admin", "plans"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "quota-keys"] });
       queryClient.invalidateQueries({ queryKey: ["billing", "plans"] });
       setSelectedId(saved.id);
       setDraft({});
@@ -331,6 +558,22 @@ export function AdminPlansPage() {
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : "保存失败");
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (planId: string) => adminApi.deletePlan(planId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "plans"] });
+      queryClient.invalidateQueries({ queryKey: ["billing", "plans"] });
+      setSelectedId("new");
+      setDraft({});
+      toast.success("套餐已删除");
+    },
+    onError: (error) => {
+      const msg = error instanceof Error ? error.message : "删除失败";
+      // 后端返回 plan_in_use 时给更友好的提示
+      toast.error(msg.includes("plan_in_use") ? "仍有组织使用此套餐，无法删除" : msg);
     },
   });
 
@@ -354,7 +597,7 @@ export function AdminPlansPage() {
     updateField("features", [
       ...form.features,
       {
-        feature_key: "monthly_generated_words",
+        feature_key: quotaKeyOptions[0]?.feature_key ?? "monthly_generated_words",
         enabled: true,
         limit_value: 0,
         limit_unit: "words",
@@ -367,6 +610,17 @@ export function AdminPlansPage() {
       "features",
       form.features.filter((_, featureIndex) => featureIndex !== index),
     );
+  }
+
+  function deletePlan() {
+    if (!selectedPlan) return;
+    const orgCount = selectedPlan.organization_count ?? 0;
+    if (orgCount > 0) {
+      toast.error(`仍有 ${orgCount} 个组织在使用此套餐，请先把它们迁走再删除`);
+      return;
+    }
+    if (!window.confirm(`确认删除套餐「${selectedPlan.name}」？此操作不可恢复。`)) return;
+    deleteMutation.mutate(selectedPlan.id);
   }
 
   function savePlan() {
@@ -441,6 +695,10 @@ export function AdminPlansPage() {
                     {plan.currency} {plan.price_monthly}/月
                     {plan.price_yearly !== null ? ` · ${plan.price_yearly}/年` : ""}
                   </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    <Building2 className="mr-1 inline size-3" />
+                    使用组织：{plan.organization_count ?? 0}
+                  </p>
                 </button>
               ))
             )}
@@ -455,9 +713,16 @@ export function AdminPlansPage() {
                 额度项会用于生成任务的周期限制。
               </p>
             </div>
-            <Badge tone={editable ? "green" : "amber"}>
-              {editable ? "super_admin 可编辑" : "只读"}
-            </Badge>
+            <div className="flex items-center gap-2">
+              {selectedPlan ? (
+                <Badge tone={(selectedPlan.organization_count ?? 0) > 0 ? "blue" : "amber"}>
+                  绑定组织 {selectedPlan.organization_count ?? 0}
+                </Badge>
+              ) : null}
+              <Badge tone={editable ? "green" : "amber"}>
+                {editable ? "super_admin 可编辑" : "只读"}
+              </Badge>
+            </div>
           </CardHeader>
           <CardContent className="space-y-6">
             <div className="grid gap-4 md:grid-cols-2">
@@ -570,6 +835,7 @@ export function AdminPlansPage() {
                       value={feature.feature_key}
                       onChange={(e) => updateFeature(index, { feature_key: e.target.value })}
                       placeholder="monthly_generated_words"
+                      list="admin-plan-quota-keys"
                       className="h-10 rounded-xl border border-slate-200 px-3 disabled:bg-slate-100"
                     />
                     <input
@@ -617,10 +883,31 @@ export function AdminPlansPage() {
                     暂无额度项。
                   </p>
                 ) : null}
+                {/* 全局 datalist：feature_key 自动补全。来源 GET /admin/quota-keys */}
+                <datalist id="admin-plan-quota-keys">
+                  {quotaKeyOptions.map((opt) => (
+                    <option key={opt.feature_key} value={opt.feature_key}>
+                      {opt.feature_key}
+                    </option>
+                  ))}
+                </datalist>
               </div>
             </div>
 
-            <div className="flex justify-end border-t border-slate-100 pt-5">
+            <div className="flex items-center justify-between border-t border-slate-100 pt-5">
+              {selectedPlan ? (
+                <Button
+                  variant="ghost"
+                  disabled={!editable || deleteMutation.isPending}
+                  onClick={deletePlan}
+                  className="text-red-600 hover:bg-red-50"
+                >
+                  <Trash2 className="size-4" />
+                  {deleteMutation.isPending ? "删除中" : "删除套餐"}
+                </Button>
+              ) : (
+                <span />
+              )}
               <Button disabled={!canSave || saveMutation.isPending} onClick={savePlan}>
                 <Save className="size-4" />
                 {saveMutation.isPending ? "保存中" : "保存套餐"}
@@ -665,30 +952,138 @@ function buildPlanForm(
 }
 
 export function AdminQuotasPage() {
-  const { data = [] } = useQuery({
-    queryKey: ["admin", "quotas"],
-    queryFn: () => quotaApi.list(),
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const editable = isSuperAdmin(user);
+  const [filter, setFilter] = useState<{ organization_id: string; quota_key: string }>({
+    organization_id: "",
+    quota_key: "",
   });
+  const queryFilter = {
+    organization_id: filter.organization_id || undefined,
+    quota_key: filter.quota_key || undefined,
+  };
+  const { data = [], isLoading } = useQuery({
+    queryKey: ["admin", "quotas", queryFilter],
+    queryFn: () => adminApi.quotaBalances(queryFilter),
+  });
+  const { data: quotaKeyOptions = [] } = useQuery({
+    queryKey: ["admin", "quota-keys"],
+    queryFn: adminApi.quotaKeys,
+  });
+
+  const adjustMutation = useMutation({
+    mutationFn: ({
+      orgId,
+      payload,
+    }: {
+      orgId: string;
+      payload: { quota_key: string; delta: number; reason: string };
+    }) => adminApi.adjustOrganizationQuota(orgId, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "quotas"] });
+      toast.success("已写入 audit_logs");
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : "调整失败"),
+  });
+
+  function adjust(quota: { organization_id: string; quota_key: string }, sign: 1 | -1) {
+    const raw = window.prompt(
+      `输入要${sign > 0 ? "增加" : "扣减"}的额度（${quota.quota_key}）：`,
+      "1000",
+    );
+    if (!raw) return;
+    const amount = Number(raw);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast.error("请输入正整数");
+      return;
+    }
+    const reason = window.prompt("调整原因（写入 audit_log）", "运营补偿") || "";
+    adjustMutation.mutate({
+      orgId: quota.organization_id,
+      payload: { quota_key: quota.quota_key, delta: sign * amount, reason },
+    });
+  }
+
   return (
     <div className="space-y-6">
-      <AdminTitle title="额度管理" desc="组织额度、预留额度。手动调整接口需写入 audit_logs。" />
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {data.map((quota) => (
-          <Card key={quota.id}>
-            <CardContent>
-              <div className="mb-3 flex items-center justify-between">
-                <p className="font-bold text-slate-950">{quota.quota_key}</p>
-                <Badge tone="blue">{quota.organization_id.slice(0, 10)}</Badge>
-              </div>
-              <QuotaProgress
-                used={quota.used_value}
-                reserved={quota.reserved_value}
-                limit={quota.limit_value}
-              />
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+      <AdminTitle title="额度管理" desc="组织额度 / 预留 / 已用。手动调整自动写入 audit_logs。" />
+      <Card>
+        <CardHeader className="flex flex-row flex-wrap items-center gap-3">
+          <CardTitle>quota_balances</CardTitle>
+          <input
+            type="text"
+            placeholder="organization_id 过滤"
+            value={filter.organization_id}
+            onChange={(e) =>
+              setFilter((f) => ({ ...f, organization_id: e.target.value.trim() }))
+            }
+            className="h-9 w-64 rounded-lg border border-slate-200 px-3 text-sm"
+          />
+          <select
+            value={filter.quota_key}
+            onChange={(e) => setFilter((f) => ({ ...f, quota_key: e.target.value }))}
+            className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm"
+          >
+            <option value="">全部额度类型</option>
+            {quotaKeyOptions.map((opt) => (
+              <option key={opt.feature_key} value={opt.feature_key}>
+                {opt.feature_key}
+              </option>
+            ))}
+          </select>
+          {!editable ? (
+            <Badge tone="amber">仅 super_admin 可调整</Badge>
+          ) : null}
+        </CardHeader>
+      </Card>
+      {isLoading ? (
+        <Card>
+          <CardContent className="p-12 text-center text-slate-500">加载中…</CardContent>
+        </Card>
+      ) : data.length === 0 ? (
+        <Card>
+          <CardContent className="p-12 text-center text-slate-500">
+            暂无符合条件的额度记录。
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {data.map((quota) => (
+            <Card key={quota.id}>
+              <CardContent>
+                <div className="mb-3 flex items-center justify-between">
+                  <p className="font-bold text-slate-950">{quota.quota_key}</p>
+                  <Badge tone="blue">{quota.organization_id.slice(0, 14)}</Badge>
+                </div>
+                <QuotaProgress
+                  used={quota.used_value}
+                  reserved={quota.reserved_value}
+                  limit={quota.limit_value}
+                />
+                <div className="mt-3 flex justify-end gap-2">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={!editable || adjustMutation.isPending}
+                    onClick={() => adjust(quota, 1)}
+                  >
+                    + 加额
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={!editable || adjustMutation.isPending}
+                    onClick={() => adjust(quota, -1)}
+                  >
+                    − 扣减
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

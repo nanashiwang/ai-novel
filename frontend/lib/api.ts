@@ -488,6 +488,7 @@ export type AdminPlan = Required<Pick<Plan, "id">> &
   Plan & {
     price_yearly: number | null;
     currency: string;
+    organization_count?: number;
     features: AdminPlanFeature[];
   };
 
@@ -520,7 +521,30 @@ export type AdminModelCallsFilter = {
 
 export const adminApi = {
   users: () => http.get<unknown[]>("/admin/users"),
+  user: (userId: string) => http.get<AdminUserDetail>(`/admin/users/${userId}`),
+  updateUser: (userId: string, payload: AdminUserUpdate) =>
+    http.patch<AdminUser>(`/admin/users/${userId}`, payload),
+  resetUserPassword: (userId: string) =>
+    http.post<{ temp_password: string; note: string }>(
+      `/admin/users/${userId}/reset-password`,
+    ),
   organizations: () => http.get<unknown[]>("/admin/organizations"),
+  updateOrganization: (orgId: string, payload: AdminOrgUpdate) =>
+    http.patch<{ id: string; plan_code: string; status: string }>(
+      `/admin/organizations/${orgId}`,
+      payload,
+    ),
+  organizationQuotas: (orgId: string) =>
+    http.get<AdminQuotaBalance[]>(`/admin/organizations/${orgId}/quotas`),
+  adjustOrganizationQuota: (orgId: string, payload: AdjustQuotaPayload) =>
+    http.patch<{ status: string; limit_value: number }>(
+      `/admin/organizations/${orgId}/quota`,
+      payload,
+    ),
+  quotaBalances: (filter: { organization_id?: string; quota_key?: string } = {}) =>
+    http.get<AdminQuotaBalance[]>("/admin/quota-balances", filter),
+  quotaKeys: () =>
+    http.get<{ feature_key: string; used_in_plans: number }[]>("/admin/quota-keys"),
   jobs: (filter: AdminJobsFilter = {}) =>
     http.get<GenerationJob[]>("/admin/generation-jobs", filter),
   cancelJob: (jobId: string) =>
@@ -533,8 +557,60 @@ export const adminApi = {
   createPlan: (payload: AdminPlanUpsert) => http.post<AdminPlan>("/admin/plans", payload),
   updatePlan: (id: string, payload: AdminPlanUpsert) =>
     http.put<AdminPlan>(`/admin/plans/${id}`, payload),
+  deletePlan: (id: string) => http.delete<void>(`/admin/plans/${id}`),
   modelGatewaySettings: () =>
     http.get<ModelGatewaySettings>("/admin/settings/model-gateway"),
   updateModelGatewaySettings: (payload: ModelGatewaySettingsUpdate) =>
     http.put<ModelGatewaySettings>("/admin/settings/model-gateway", payload),
+};
+
+export type AdminUser = {
+  id: string;
+  email: string;
+  display_name: string;
+  platform_role: string;
+  status: string;
+};
+
+export type AdminUserOrgInfo = {
+  organization_id: string;
+  organization_name: string;
+  plan_code: string;
+  role: string;
+  member_status: string;
+};
+
+export type AdminUserDetail = AdminUser & {
+  is_platform_staff: boolean;
+  organizations: AdminUserOrgInfo[];
+};
+
+export type AdminUserUpdate = {
+  display_name?: string;
+  platform_role?: string;
+  status?: string;
+  reason?: string;
+};
+
+export type AdminOrgUpdate = {
+  plan_code?: string;
+  status?: string;
+  reason?: string;
+};
+
+export type AdminQuotaBalance = {
+  id: string;
+  organization_id: string;
+  quota_key: string;
+  limit_value: number;
+  used_value: number;
+  reserved_value: number;
+  period_start: string | null;
+  period_end: string | null;
+};
+
+export type AdjustQuotaPayload = {
+  quota_key: string;
+  delta: number;
+  reason?: string;
 };
