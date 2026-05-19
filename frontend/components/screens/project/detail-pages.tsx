@@ -1513,6 +1513,15 @@ export function JobsPage({ projectId }: { projectId: string }) {
     onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "取消失败"),
   });
 
+  const retry = useMutation({
+    mutationFn: (id: string) => jobsApi.retry(id),
+    onSuccess: (newJob) => {
+      toast.success(`已重新提交任务（${newJob.job_type}）`);
+      queryClient.invalidateQueries({ queryKey: ["org"] });
+    },
+    onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "重试失败"),
+  });
+
   return (
     <div className="space-y-6">
       <ProjectHeader projectId={projectId} />
@@ -1581,17 +1590,33 @@ export function JobsPage({ projectId }: { projectId: string }) {
                 {
                   key: "actions",
                   header: "操作",
-                  render: (row) =>
-                    row.status === "queued" || row.status === "running" ? (
-                      <Button
-                        size="sm"
-                        variant="danger"
-                        onClick={() => cancel.mutate(row.id)}
-                        disabled={cancel.isPending}
-                      >
-                        取消
-                      </Button>
-                    ) : null,
+                  render: (row) => {
+                    if (row.status === "queued" || row.status === "running") {
+                      return (
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          onClick={() => cancel.mutate(row.id)}
+                          disabled={cancel.isPending}
+                        >
+                          取消
+                        </Button>
+                      );
+                    }
+                    if (row.status === "failed" || row.status === "cancelled") {
+                      return (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => retry.mutate(row.id)}
+                          disabled={retry.isPending}
+                        >
+                          <RefreshCw className="size-4" /> 重试
+                        </Button>
+                      );
+                    }
+                    return null;
+                  },
                 },
               ]}
             />

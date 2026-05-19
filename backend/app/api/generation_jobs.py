@@ -31,3 +31,20 @@ async def cancel_job(job_id: str, tenant: TenantDep, user: CurrentUserDep, db: D
         raise NotFoundError("job_not_found")
     await db.commit()
     return job
+
+
+@router.post("/{job_id}/retry", response_model=GenerationJobResponse, status_code=202)
+async def retry_job(job_id: str, tenant: TenantDep, user: CurrentUserDep, db: DbDep):
+    """重试已失败/已取消的任务。
+
+    Sprint 6-A：根据原 job 的 job_type 与 input_payload 创建一个新 job，
+    通过 input_payload.retry_of 保留溯源；原 job 行保持不动以供审计。
+    """
+    job = await generation_service.get_job(db, tenant, job_id)
+    if not job:
+        raise NotFoundError("job_not_found")
+    new_job = await generation_service.retry_job(db, user, tenant, job=job)
+    await db.refresh(new_job)
+    response = GenerationJobResponse.model_validate(new_job)
+    await db.commit()
+    return response

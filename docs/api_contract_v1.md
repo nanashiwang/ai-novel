@@ -111,11 +111,13 @@
 | GET | `/{project_id}/bible` | ✅ | 1 |
 | POST | `/{project_id}/bible/generate` | ✅ | 1 |
 | POST | `/{project_id}/outline/generate` | ✅ | 2 |
-| POST | `/{project_id}/chapters/{chapter_id}/scenes/generate` | ✅ | **3** |
+| POST | `/{project_id}/chapters/{chapter_id}/scenes/generate` | ✅ | 3 |
 | POST | `/{project_id}/scenes/{scene_id}/write` | ✅ | 1 / 升级 4 |
-| POST | `/{project_id}/audit` | 🟡 | 5 |
+| POST | `/{project_id}/scenes/{scene_id}/audit` | ✅ | 5-A |
+| POST | `/{project_id}/scenes/{scene_id}/rewrite` | ✅ | 5-A |
 | POST | `/{project_id}/generate-full-novel` | ✅ | 1 |
-| POST | `/{project_id}/exports` | ✅ | 1（占位） / 升级 5 |
+| POST | `/{project_id}/exports` | ✅ | 5-B |
+| GET | `/{project_id}/exports/{export_id}/download` | ✅ | 5-B |
 
 **Sprint 3 关键决策**：scene-plan 是**章节级**而非项目级（`POST /projects/{pid}/chapters/{cid}/scenes/generate`），用户可逐章生成 scene cards 而不影响项目级状态机。项目级"为整本一次性拆 scenes"仍由 full_novel pipeline 处理。
 
@@ -143,7 +145,7 @@
 | GET | `/` | ✅ |
 | GET | `/{job_id}` | ✅ |
 | POST | `/{job_id}/cancel` | ✅ |
-| POST | `/{job_id}/retry` | 🟡 6 |
+| POST | `/{job_id}/retry` | ✅ 6 |
 
 ### 2.6 计费 `/api/v1/billing` 与 `/api/v1/quotas`
 
@@ -216,9 +218,9 @@
 | `generate_outline` | ✅ 2 | `start_generate_outline` | Outline 闭环 |
 | `generate_scene_plan` | ✅ 3 | `start_generate_scene_plan` | 单章 scene cards 拆分 |
 | `write_scene` | ✅ 1（升级 4） | `start_write_scene` | 单场景写作 |
-| `audit_scene` | 🟡 5 | `start_audit_scene` | 单场景审稿 |
-| `rewrite_scene` | 🟡 5 | `start_rewrite_scene` | 单场景重写 |
-| `export_novel` | 🟡 5 | `start_export_novel` | 导出 |
+| `audit_scene` | ✅ 5-A | `start_audit_scene` | 单场景审稿 |
+| `rewrite_scene` | ✅ 5-A | `start_rewrite_scene` | 单场景重写 |
+| `export_novel` | ⚪ 同步 endpoint | — | Sprint 5-B 改为同步 `POST /exports`，不再走 job |
 | `full_novel` | ✅ 1 | `start_generate_full_novel` | 兼容入口，串联多步 |
 
 ### 4.2 `generation_jobs.status`（v1 简化状态机）
@@ -298,6 +300,7 @@ created ──→ bible_generating ──→ bible_ready ──→ outline_gener
 | `validation_error` | 422 | Pydantic schema 校验失败 |
 | `internal_error` | 500 | 未捕获异常兜底 |
 | `http_error` | 透传 | 兼容老式 HTTPException |
+| `conflict` | 409 | 业务状态冲突（retry/cancel 已结束 job 等） |
 
 #### 资源不存在（通过 `*_not_found` 命名约定保持一致）
 
@@ -316,6 +319,7 @@ created ──→ bible_generating ──→ bible_ready ──→ outline_gener
 | `organization_not_found` | organizations |
 | `member_not_found` | organizations |
 | `quota_not_found` | admin/organizations |
+| `draft_not_found` | workflows（audit/rewrite/write 需要前置 draft） |
 
 #### 额度/付费
 
@@ -332,6 +336,9 @@ created ──→ bible_generating ──→ bible_ready ──→ outline_gener
 |---|---|
 | `scene_id_required` | run_scene_writing 缺少 scene_id payload |
 | `chapter_id_required` | generate_chapter_scene_cards 缺少 chapter_id payload |
+| `export_type_not_supported` | 导出格式超出 markdown/txt 范围 |
+| `job_not_retryable` | 试图 retry 一个 succeeded/queued/running 任务 |
+| `unknown_job_type` | retry 收到契约外的 job_type |
 
 **新增规则**：所有新 error code 必须先登记到本表与 `app/contracts.py::ERROR_CODES`，命名必须 snake_case，资源不存在统一用 `<resource>_not_found`。`tests/test_contract_consistency.py` 会扫描代码字面量，未登记的值在 CI 中会失败。
 

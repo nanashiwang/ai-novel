@@ -87,6 +87,7 @@ ERROR_CODES: frozenset[str] = frozenset(
         "internal_error",
         "http_error",
         "app_error",
+        "conflict",
         # 资源不存在
         "project_not_found",
         "novel_spec_not_found",
@@ -111,6 +112,8 @@ ERROR_CODES: frozenset[str] = frozenset(
         "scene_id_required",
         "chapter_id_required",
         "export_type_not_supported",
+        "job_not_retryable",
+        "unknown_job_type",
     }
 )
 

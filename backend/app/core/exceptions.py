@@ -43,6 +43,13 @@ class QuotaInsufficient(AppError):
     status_code = status.HTTP_402_PAYMENT_REQUIRED
 
 
+class ConflictError(AppError):
+    """业务状态冲突。典型场景：retry 一个 succeeded job、cancel 已结束 job 等。"""
+
+    code = "conflict"
+    status_code = status.HTTP_409_CONFLICT
+
+
 def _wrap_error(code: str, message: str, details: Any = None) -> dict:
     return {"error": {"code": code, "message": message, "details": details}}
 

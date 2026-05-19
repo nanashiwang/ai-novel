@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import ConflictError, NotFoundError
 from app.core.permissions import require_permission
 from app.core.security import CurrentUser
 from app.core.tenancy import TenantContext, ensure_same_tenant
@@ -443,6 +443,97 @@ class GenerationService:
                 ("rewrite_scene", job.id)
             )
         return job
+
+    async def retry_job(
+        self,
+        session: AsyncSession,
+        user: CurrentUser,
+        tenant: TenantContext,
+        *,
+        job: GenerationJob,
+    ) -> GenerationJob:
+        """根据原 job 的 job_type 与 input_payload 重新创建一个同类型任务。
+
+        Sprint 6-A：不复用原 job 行（status/quota 状态机已结束）；新建后
+        通过 input_payload.retry_of 记录溯源链。仅允许 failed / cancelled
+        状态的 job 触发；succeeded 的 job 想"重生成"应该让用户直接调
+        force_regenerate=true 的对应 endpoint。
+        """
+        if job.status not in {"failed", "cancelled"}:
+            raise ConflictError("job_not_retryable")
+
+        payload = dict(job.input_payload or {})
+
+        if job.job_type == "generate_bible":
+            new_job = await self.create_bible_job(
+                session, user, tenant,
+                project_id=job.project_id,
+                estimate_words=int(payload.get("estimate_words") or 2000),
+                topic=str(payload.get("topic") or ""),
+                force_regenerate=bool(payload.get("force_regenerate_spec")),
+            )
+        elif job.job_type == "generate_outline":
+            new_job = await self.create_outline_job(
+                session, user, tenant,
+                project_id=job.project_id,
+                target_chapters=payload.get("target_chapters"),
+                estimate_words=int(payload.get("estimate_words") or 3000),
+                force_regenerate=bool(payload.get("force_regenerate_outline")),
+            )
+        elif job.job_type == "generate_scene_plan":
+            new_job = await self.create_scene_plan_job(
+                session, user, tenant,
+                project_id=job.project_id,
+                chapter_id=str(payload.get("chapter_id") or ""),
+                scenes_per_chapter=int(payload.get("scenes_per_chapter") or 3),
+                expected_words=int(payload.get("expected_words") or 1500),
+                estimate_words=int(payload.get("estimate_words") or 2000),
+                force_regenerate=bool(payload.get("force_regenerate_scenes")),
+            )
+        elif job.job_type == "write_scene":
+            new_job = await self.create_write_scene_job(
+                session, user, tenant,
+                project_id=job.project_id,
+                scene_id=str(payload.get("scene_id") or ""),
+                target_words=int(payload.get("target_words") or 1200),
+            )
+        elif job.job_type == "audit_scene":
+            new_job = await self.create_audit_scene_job(
+                session, user, tenant,
+                project_id=job.project_id,
+                scene_id=str(payload.get("scene_id") or ""),
+                estimate_words=int(payload.get("estimate_words") or 500),
+            )
+        elif job.job_type == "rewrite_scene":
+            new_job = await self.create_rewrite_scene_job(
+                session, user, tenant,
+                project_id=job.project_id,
+                scene_id=str(payload.get("scene_id") or ""),
+                target_words=int(payload.get("target_words") or 1200),
+                estimate_words=int(payload.get("estimate_words") or 2000),
+            )
+        elif job.job_type == "full_novel":
+            new_job = await self.create_full_novel_job(
+                session, user, tenant,
+                project_id=job.project_id,
+                estimate_words=int(payload.get("estimate_words") or 20000),
+                mode=str(payload.get("mode") or "full_novel"),
+                topic=str(payload.get("topic") or ""),
+                target_chapters=payload.get("target_chapters"),
+                scenes_per_chapter=int(payload.get("scenes_per_chapter") or 3),
+                write_drafts=bool(payload.get("write_drafts", True)),
+            )
+        else:
+            raise ConflictError("unknown_job_type")
+
+        # 在新 job 的 input_payload 上追加 retry_of 溯源；create_* 系列内部
+        # 不读这个字段，所以单独打补丁不会影响业务逻辑。
+        new_job.input_payload = {
+            **(new_job.input_payload or {}),
+            "retry_of": job.id,
+        }
+        await session.flush()
+        return new_job
 
     async def get_job(
         self,

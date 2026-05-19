@@ -7,6 +7,7 @@ from pydantic import Field, field_validator
 
 from app.api.deps import CurrentUserDep, DbDep
 from app.core.permissions import require_permission, require_platform_admin
+from app.repositories import AuditLogRepository
 from app.schemas.common import APIModel
 from app.services.model_gateway.service import model_gateway
 from app.services.system_settings import ModelGatewayConfig, system_settings_service
@@ -81,6 +82,19 @@ async def update_model_gateway_settings(
     db: DbDep,
 ):
     require_permission(user, "admin:system:update")
+
+    # 记录变更前的配置（不含敏感字段），用于审计 before/after 对比
+    before = await system_settings_service.get_model_config(db)
+    before_snapshot = {
+        "mode": before.mode,
+        "provider": before.provider,
+        "default_model": before.default_model,
+        "openai_base_url": before.openai_base_url,
+        "anthropic_base_url": before.anthropic_base_url,
+        "openai_api_key_configured": bool(before.openai_api_key),
+        "anthropic_api_key_configured": bool(before.anthropic_api_key),
+    }
+
     config = await system_settings_service.upsert_model_config(
         db,
         mode=payload.mode,
@@ -94,6 +108,30 @@ async def update_model_gateway_settings(
     if config.mode == "real" and not config.active_api_key:
         raise HTTPException(status_code=400, detail="active_provider_api_key_required")
     model_gateway.configure(config)
+
+    after_snapshot = {
+        "mode": config.mode,
+        "provider": config.provider,
+        "default_model": config.default_model,
+        "openai_base_url": config.openai_base_url,
+        "anthropic_base_url": config.anthropic_base_url,
+        "openai_api_key_configured": bool(config.openai_api_key),
+        "anthropic_api_key_configured": bool(config.anthropic_api_key),
+    }
+    # 写 audit_logs：actor / target / before / after，敏感字段（api_key 全文）
+    # 不进入 before/after，避免审计表泄露密钥；仅记录"是否配置"布尔位。
+    # admin/settings 是平台级配置，organization_id 用 actor 用户的当前 org
+    # 上下文，没有时回落到 "platform" sentinel。
+    await AuditLogRepository(db).create(
+        organization_id=user.preferred_organization_id or "platform",
+        actor_user_id=user.id,
+        action="model_gateway:update",
+        target_type="system_setting",
+        target_id="model-gateway",
+        before_data=before_snapshot,
+        after_data=after_snapshot,
+    )
+
     await db.commit()
     return _to_response(config)
 

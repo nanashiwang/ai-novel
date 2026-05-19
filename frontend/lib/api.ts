@@ -275,6 +275,7 @@ export const jobsApi = {
   list: () => http.get<GenerationJob[]>("/generation-jobs"),
   get: (id: string) => http.get<GenerationJob>(`/generation-jobs/${id}`),
   cancel: (id: string) => http.post<GenerationJob>(`/generation-jobs/${id}/cancel`),
+  retry: (id: string) => http.post<GenerationJob>(`/generation-jobs/${id}/retry`),
 };
 
 // ----- Quota / Usage -----
