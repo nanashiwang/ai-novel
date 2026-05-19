@@ -336,6 +336,114 @@ class GenerationService:
             )
         return job
 
+    async def create_audit_scene_job(
+        self,
+        session: AsyncSession,
+        user: CurrentUser,
+        tenant: TenantContext,
+        *,
+        project_id: str,
+        scene_id: str,
+        estimate_words: int = 500,
+    ) -> GenerationJob:
+        """对单 scene 的最新 draft 触发审稿。
+
+        前置：scene 必须存在并属于该 project。activity 会进一步要求该 scene
+        已有至少一个 draft；如果没有则抛 draft_not_found。
+        """
+        require_permission(user, "generation_job:create", tenant)
+        project = await ProjectRepository(session).get(
+            project_id, organization_id=tenant.organization_id
+        )
+        if not project:
+            raise NotFoundError("project_not_found")
+        ensure_same_tenant(project.organization_id, tenant)
+
+        estimate_words = max(1, estimate_words)
+        job = await GenerationJobRepository(session).create(
+            organization_id=tenant.organization_id,
+            user_id=user.id,
+            project_id=project_id,
+            job_type="audit_scene",
+            status="queued",
+            priority=PLAN_QUEUE.get(tenant.plan_code, "queue_standard"),
+            plan_code=tenant.plan_code,
+            reserved_quota=estimate_words,
+            consumed_quota=0,
+            input_payload={"scene_id": scene_id, "estimate_words": estimate_words},
+        )
+        await quota_service.reserve_quota(
+            session,
+            tenant,
+            job_id=job.id,
+            quota_key="monthly_generated_words",
+            amount=estimate_words,
+        )
+        job.workflow_id = workflow_starter.start_audit_scene({"id": job.id})
+        await session.flush()
+        if workflow_starter.is_mock_workflow(job.workflow_id):
+            session.sync_session.info.setdefault("after_commit_tasks", []).append(
+                ("audit_scene", job.id)
+            )
+        return job
+
+    async def create_rewrite_scene_job(
+        self,
+        session: AsyncSession,
+        user: CurrentUser,
+        tenant: TenantContext,
+        *,
+        project_id: str,
+        scene_id: str,
+        target_words: int = 1200,
+        estimate_words: int = 2000,
+    ) -> GenerationJob:
+        """基于 scene 的 open issues 触发重写。
+
+        Sprint 5-A：activity 自动捞所有 open issues，无需调用方筛选；
+        Sprint 5+ 再支持"只修复某几条"的细粒度。
+        """
+        require_permission(user, "generation_job:create", tenant)
+        require_entitlement(tenant, "generation:scene")
+        project = await ProjectRepository(session).get(
+            project_id, organization_id=tenant.organization_id
+        )
+        if not project:
+            raise NotFoundError("project_not_found")
+        ensure_same_tenant(project.organization_id, tenant)
+
+        estimate_words = max(1, estimate_words)
+        job = await GenerationJobRepository(session).create(
+            organization_id=tenant.organization_id,
+            user_id=user.id,
+            project_id=project_id,
+            job_type="rewrite_scene",
+            status="queued",
+            priority=PLAN_QUEUE.get(tenant.plan_code, "queue_standard"),
+            plan_code=tenant.plan_code,
+            reserved_quota=estimate_words,
+            consumed_quota=0,
+            input_payload={
+                "scene_id": scene_id,
+                "target_words": target_words,
+                "estimate_words": estimate_words,
+            },
+        )
+        await quota_service.reserve_quota(
+            session,
+            tenant,
+            job_id=job.id,
+            quota_key="monthly_generated_words",
+            amount=estimate_words,
+        )
+        job.workflow_id = workflow_starter.start_rewrite_scene({"id": job.id})
+        await session.flush()
+        if workflow_starter.is_mock_workflow(job.workflow_id):
+            session.sync_session.info.setdefault("after_commit_tasks", []).append(
+                ("rewrite_scene", job.id)
+            )
+        return job
+
     async def get_job(
         self,
         session: AsyncSession,

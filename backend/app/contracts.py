@@ -101,6 +101,7 @@ ERROR_CODES: frozenset[str] = frozenset(
         "organization_not_found",
         "member_not_found",
         "quota_not_found",
+        "draft_not_found",
         # 额度
         "quota_insufficient",
         "quota_not_in_plan",

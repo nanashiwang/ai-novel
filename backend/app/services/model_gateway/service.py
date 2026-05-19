@@ -75,9 +75,9 @@ class _MockProvider:
                 "tone": "冷峻、克制、逐步升温",
                 "target_reader": "中文长篇类型小说读者",
                 "narrative_pov": "第三人称有限视角",
-                "style_guide": "画面清晰，冲突明确，每章保留悬念钩子。",
+                "style_guide": "画面清晰,冲突明确,每章保留悬念钩子。",
                 "constraints": ["保持世界规则前后一致", "避免无铺垫反转"],
-                "world_rules": ["记忆可以被交易，但会留下情绪残影", "城市档案馆记录每一次被篡改的过去"],
+                "world_rules": ["记忆可以被交易,但会留下情绪残影", "城市档案馆记录每一次被篡改的过去"],
                 "main_characters": [
                     {
                         "name": "林澈",
@@ -96,6 +96,45 @@ class _MockProvider:
                 ],
                 "continuity_rules": ["林澈不能直接想起核心真相", "记忆交易必须付出等价情绪代价"],
                 "plot_threads": ["妹妹失踪案", "地下记忆交易网络", "档案馆隐藏的城市原罪"],
+            }
+        schema_str = str(schema)
+        # AuditResultContract: 含 issues 数组的 schema
+        if "AuditIssueItem" in schema_str or (
+            "issues" in schema.get("properties", {})
+            and "premise" not in schema.get("properties", {})
+        ):
+            return {
+                "issues": [
+                    {
+                        "issue_type": "continuity",
+                        "severity": "medium",
+                        "description": "场景结尾出现的关键道具与上一章描述不一致。",
+                        "suggested_fix": "在场景中部加一句明确道具属性，再让其在结尾出现。",
+                    },
+                    {
+                        "issue_type": "character",
+                        "severity": "low",
+                        "description": "主角在高压下的语气过于冷静，与设定的'急于求成'弧光不符。",
+                        "suggested_fix": "把主角的关键对白改为更急促的短句。",
+                    },
+                ]
+            }
+        # SceneDraftContract: 含 scene_id + content
+        if "SceneDraftContract" in schema_str or "unresolved_threads" in schema.get(
+            "properties", {}
+        ):
+            return {
+                "scene_id": "",
+                "title": "Mock 重写场景",
+                "content": (
+                    "雾笼罩档案馆的清晨，林澈推开门，发现门禁锁芯比昨晚多了一道刻痕。"
+                    "他蹲下，指尖蹭过冰凉的金属，记忆里浮起一段被篡改过的画面——"
+                    "妹妹的笑声、关上的门、和那枚他从未真正见过的钥匙。"
+                    "（Mock 重写正文：已基于待修复问题润色，保留原场景目标与钩子。）"
+                ),
+                "word_count": 96,
+                "continuity_notes": ["mock 重写：已按 issues 修订关键道具描述"],
+                "unresolved_threads": [],
             }
         return {
             "mock": True,

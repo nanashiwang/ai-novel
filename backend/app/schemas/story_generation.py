@@ -108,3 +108,52 @@ class SceneDraftContract(APIModel):
     word_count: int = 0
     continuity_notes: list[str] = Field(default_factory=list)
     unresolved_threads: list[str] = Field(default_factory=list)
+
+
+class AuditIssueItem(APIModel):
+    """单条 continuity / character / world / style 审稿问题。
+
+    issue_type 与后端 ContinuityIssue.issue_type 字段对齐；severity 用
+    low/medium/high 三档，UI 直接按 severity 着色。
+    """
+
+    issue_type: str = "continuity"
+    severity: str = "medium"
+    description: str = ""
+    suggested_fix: str = ""
+
+    @field_validator("issue_type", mode="before")
+    @classmethod
+    def normalize_issue_type(cls, value: Any) -> str:
+        v = ("" if value is None else str(value)).lower().strip()
+        # 把模型偶尔吐出的中文/同义词映射到固定枚举
+        mapping = {
+            "连续性": "continuity",
+            "continuity": "continuity",
+            "人物": "character",
+            "character": "character",
+            "世界": "world_rule",
+            "world": "world_rule",
+            "world_rule": "world_rule",
+            "风格": "style",
+            "style": "style",
+        }
+        return mapping.get(v, v or "continuity")
+
+    @field_validator("severity", mode="before")
+    @classmethod
+    def normalize_severity(cls, value: Any) -> str:
+        v = ("" if value is None else str(value)).lower().strip()
+        mapping = {
+            "高": "high",
+            "中": "medium",
+            "低": "low",
+            "high": "high",
+            "medium": "medium",
+            "low": "low",
+        }
+        return mapping.get(v, v or "medium")
+
+
+class AuditResultContract(APIModel):
+    issues: list[AuditIssueItem] = Field(default_factory=list)

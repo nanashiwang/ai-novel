@@ -25,6 +25,7 @@ from app.models.scene import Scene
 from app.repositories import (
     ChapterRepository,
     CharacterRepository,
+    ContinuityIssueRepository,
     DraftVersionRepository,
     GenerationJobRepository,
     NovelSpecRepository,
@@ -34,8 +35,10 @@ from app.repositories import (
     WorldItemRepository,
     SceneRepository,
 )
+from app.services.auditor.service import auditor_service
 from app.services.novel_planner.service import novel_planner_service
 from app.services.quota.service import quota_service
+from app.services.rewriter.service import rewriter_service
 from app.services.writer.service import writer_service
 from app.services.context_builder.service import context_builder
 
@@ -931,6 +934,193 @@ async def run_full_novel_pipeline(job: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@activity.defn(name="audit_scene")
+async def audit_scene(job: dict[str, Any]) -> dict[str, Any]:
+    """对单个 scene 的最新 draft 审稿，把发现的问题写入 continuity_issues。
+
+    input_payload 字段：
+      - scene_id (必填)
+
+    返回 result：
+      - scene_id / draft_id 用于联动
+      - issue_count: 新写入的问题数（0 表示无问题）
+      - issues: 摘要数组，UI 可以即时展示
+    """
+    async with _activity_session() as session:
+        job_row = await _load_job(session, job["id"])
+        payload = job_row.input_payload or {}
+        scene_id = payload.get("scene_id")
+        if not scene_id:
+            raise NotFoundError("scene_id_required")
+        project = await _load_project(session, job_row)
+        spec = await _load_spec(session, job_row)
+        scene = await SceneRepository(session).get(
+            scene_id, organization_id=job_row.organization_id
+        )
+        if not scene or scene.project_id != project.id:
+            raise NotFoundError("scene_not_found")
+        chapter = await ChapterRepository(session).get(
+            scene.chapter_id, organization_id=job_row.organization_id
+        )
+        if not chapter:
+            raise NotFoundError("chapter_not_found")
+
+        # 加载最新 draft 作为待审稿文本
+        latest_draft_id = await _latest_draft_id(session, scene)
+        if not latest_draft_id:
+            raise NotFoundError("draft_not_found")
+        draft_repo = DraftVersionRepository(session)
+        latest_draft = await draft_repo.get(
+            latest_draft_id, organization_id=job_row.organization_id
+        )
+        if not latest_draft:
+            raise NotFoundError("draft_not_found")
+
+        contract = await auditor_service.audit_scene_draft(
+            session,
+            organization_id=job_row.organization_id,
+            project_id=job_row.project_id,
+            job_id=job_row.id,
+            project=project,
+            spec=spec,
+            chapter=chapter,
+            scene=scene,
+            draft_content=latest_draft.content,
+        )
+
+        issue_repo = ContinuityIssueRepository(session)
+        created_issues: list[dict[str, Any]] = []
+        for item in contract.issues:
+            row = await issue_repo.create(
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                chapter_id=chapter.id,
+                scene_id=scene.id,
+                issue_type=item.issue_type,
+                severity=item.severity,
+                description=item.description,
+                suggested_fix=item.suggested_fix,
+                status="open",
+            )
+            created_issues.append(
+                {
+                    "id": row.id,
+                    "issue_type": row.issue_type,
+                    "severity": row.severity,
+                    "description": row.description,
+                }
+            )
+
+        # 不动 scene.status —— 审稿是"附加分析"，scene 仍处于 drafted 状态
+        # 等用户决定 rewrite 时才推到 "writing" 再到 "drafted"。
+        await _settle_job_usage(session, job_row, amount=job_row.reserved_quota)
+
+        return {
+            "scene_id": scene.id,
+            "draft_id": latest_draft.id,
+            "issue_count": len(created_issues),
+            "issues": created_issues,
+        }
+
+
+@activity.defn(name="rewrite_scene")
+async def rewrite_scene(job: dict[str, Any]) -> dict[str, Any]:
+    """基于当前 scene 的 open issues 重写 draft，并把那些 issues 标 fixed。
+
+    input_payload 字段：
+      - scene_id (必填)
+      - target_words (可选，默认 1200)
+
+    activity 自动捞取本 scene 的所有 open issues，全部送给 rewriter；
+    Sprint 5-A 不提供 "只修复某几条" 的细粒度。
+    """
+    async with _activity_session() as session:
+        job_row = await _load_job(session, job["id"])
+        payload = job_row.input_payload or {}
+        scene_id = payload.get("scene_id")
+        if not scene_id:
+            raise NotFoundError("scene_id_required")
+        project = await _load_project(session, job_row)
+        spec = await _load_spec(session, job_row)
+        scene = await SceneRepository(session).get(
+            scene_id, organization_id=job_row.organization_id
+        )
+        if not scene or scene.project_id != project.id:
+            raise NotFoundError("scene_not_found")
+        chapter = await ChapterRepository(session).get(
+            scene.chapter_id, organization_id=job_row.organization_id
+        )
+        if not chapter:
+            raise NotFoundError("chapter_not_found")
+
+        latest_draft_id = await _latest_draft_id(session, scene)
+        if not latest_draft_id:
+            raise NotFoundError("draft_not_found")
+        draft_repo = DraftVersionRepository(session)
+        latest_draft = await draft_repo.get(
+            latest_draft_id, organization_id=job_row.organization_id
+        )
+        if not latest_draft:
+            raise NotFoundError("draft_not_found")
+
+        # 取当前 scene 所有 open issues。空列表也能 rewrite（仅做风格打磨）。
+        issue_repo = ContinuityIssueRepository(session)
+        issues = list(
+            await issue_repo.list(
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                scene_id=scene.id,
+                status="open",
+            )
+        )
+
+        scene.status = "writing"
+        await session.flush()
+
+        target_words = _payload_int(payload, "target_words", 1200)
+        new_draft = await rewriter_service.rewrite_scene_draft(
+            session,
+            organization_id=job_row.organization_id,
+            project_id=job_row.project_id,
+            job_id=job_row.id,
+            project=project,
+            spec=spec,
+            chapter=chapter,
+            scene=scene,
+            current_content=latest_draft.content,
+            issues=issues,
+            target_words=target_words,
+        )
+        word_count = new_draft.word_count or len(new_draft.content)
+        saved = await draft_repo.create(
+            organization_id=job_row.organization_id,
+            project_id=job_row.project_id,
+            chapter_id=chapter.id,
+            scene_id=scene.id,
+            version_type="rewrite",
+            content=new_draft.content,
+            word_count=word_count,
+            status="draft",
+            parent_version_id=latest_draft.id,
+            created_by=job_row.user_id,
+        )
+        scene.status = "drafted"
+
+        # 把本次涉及的 issues 标 fixed（不删除，保留可审计的修复历史）
+        for issue in issues:
+            issue.status = "fixed"
+
+        await _settle_job_usage(session, job_row, amount=job_row.reserved_quota)
+
+        return {
+            "scene_id": scene.id,
+            "draft_id": saved.id,
+            "parent_version_id": latest_draft.id,
+            "word_count": word_count,
+            "fixed_issue_count": len(issues),
+        }
+
+
 ALL_ACTIVITIES = [
     mark_job_status,
     generate_book_spec,
@@ -939,5 +1129,7 @@ ALL_ACTIVITIES = [
     generate_chapter_scene_cards,
     write_scene_drafts,
     run_scene_writing,
+    audit_scene,
+    rewrite_scene,
     run_full_novel_pipeline,
 ]

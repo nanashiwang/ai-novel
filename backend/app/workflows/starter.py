@@ -120,6 +120,12 @@ class WorkflowStarter:
     def start_write_scene(self, job: dict) -> str:
         return self._fire_and_forget("WriteSceneWorkflow", job, "write-scene")
 
+    def start_audit_scene(self, job: dict) -> str:
+        return self._fire_and_forget("AuditSceneWorkflow", job, "audit-scene")
+
+    def start_rewrite_scene(self, job: dict) -> str:
+        return self._fire_and_forget("RewriteSceneWorkflow", job, "rewrite-scene")
+
     def is_mock_workflow(self, workflow_id: str | None) -> bool:
         return bool(workflow_id and workflow_id.startswith("mock-"))
 
@@ -138,6 +144,12 @@ class WorkflowStarter:
     def run_local_write_scene(self, job_id: str) -> None:
         self._run_local("write_scene", job_id)
 
+    def run_local_audit_scene(self, job_id: str) -> None:
+        self._run_local("audit_scene", job_id)
+
+    def run_local_rewrite_scene(self, job_id: str) -> None:
+        self._run_local("rewrite_scene", job_id)
+
     def _run_local(self, job_type: str, job_id: str) -> None:
         try:
             loop = asyncio.get_running_loop()
@@ -149,10 +161,12 @@ class WorkflowStarter:
 
     async def _execute_local(self, job_type: str, job_id: str) -> None:
         from app.workflows.activities import (  # noqa: PLC0415
+            audit_scene,
             generate_book_spec,
             generate_chapter_outline,
             generate_chapter_scene_cards,
             mark_job_status,
+            rewrite_scene,
             run_full_novel_pipeline,
             run_scene_writing,
         )
@@ -165,6 +179,10 @@ class WorkflowStarter:
                 result = await generate_chapter_outline({"id": job_id})
             elif job_type == "generate_scene_plan":
                 result = await generate_chapter_scene_cards({"id": job_id})
+            elif job_type == "audit_scene":
+                result = await audit_scene({"id": job_id})
+            elif job_type == "rewrite_scene":
+                result = await rewrite_scene({"id": job_id})
             elif job_type == "full_novel":
                 result = await run_full_novel_pipeline({"id": job_id})
             else:

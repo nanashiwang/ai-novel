@@ -49,6 +49,15 @@ class GenerateScenePlanRequest(APIModel):
     force_regenerate: bool = False
 
 
+class AuditSceneRequest(APIModel):
+    estimate_words: int = Field(default=500, ge=1, le=5000)
+
+
+class RewriteSceneRequest(APIModel):
+    target_words: int = Field(default=1200, ge=300, le=10000)
+    estimate_words: int = Field(default=2000, ge=1, le=20000)
+
+
 class BibleSpecResponse(APIModel):
     id: str
     premise: str
@@ -356,6 +365,61 @@ async def write_scene(
         project_id=project_id,
         scene_id=scene_id,
         target_words=payload.target_words,
+    )
+    await db.refresh(job)
+    response = GenerationJobResponse.model_validate(job)
+    await db.commit()
+    return response
+
+
+@router.post(
+    "/{project_id}/scenes/{scene_id}/audit",
+    response_model=GenerationJobResponse,
+    status_code=202,
+)
+async def audit_scene(
+    project_id: str,
+    scene_id: str,
+    payload: AuditSceneRequest,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    job = await generation_service.create_audit_scene_job(
+        db,
+        user,
+        tenant,
+        project_id=project_id,
+        scene_id=scene_id,
+        estimate_words=payload.estimate_words,
+    )
+    await db.refresh(job)
+    response = GenerationJobResponse.model_validate(job)
+    await db.commit()
+    return response
+
+
+@router.post(
+    "/{project_id}/scenes/{scene_id}/rewrite",
+    response_model=GenerationJobResponse,
+    status_code=202,
+)
+async def rewrite_scene(
+    project_id: str,
+    scene_id: str,
+    payload: RewriteSceneRequest,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    job = await generation_service.create_rewrite_scene_job(
+        db,
+        user,
+        tenant,
+        project_id=project_id,
+        scene_id=scene_id,
+        target_words=payload.target_words,
+        estimate_words=payload.estimate_words,
     )
     await db.refresh(job)
     response = GenerationJobResponse.model_validate(job)

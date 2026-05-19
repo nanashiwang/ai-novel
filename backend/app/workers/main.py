@@ -14,10 +14,12 @@ import sys
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.workflows.activities import ALL_ACTIVITIES
+from app.workflows.audit_scene import AuditSceneWorkflow
 from app.workflows.generate_bible import GenerateBibleWorkflow
 from app.workflows.generate_full_novel import GenerateFullNovelWorkflow
 from app.workflows.generate_outline import GenerateOutlineWorkflow
 from app.workflows.generate_scene_plan import GenerateScenePlanWorkflow
+from app.workflows.rewrite_scene import RewriteSceneWorkflow
 from app.workflows.write_scene import WriteSceneWorkflow
 
 _logger = logging.getLogger(__name__)
@@ -44,10 +46,12 @@ async def main() -> None:
         client,
         task_queue="novelflow-generation",
         workflows=[
+            AuditSceneWorkflow,
             GenerateBibleWorkflow,
             GenerateFullNovelWorkflow,
             GenerateOutlineWorkflow,
             GenerateScenePlanWorkflow,
+            RewriteSceneWorkflow,
             WriteSceneWorkflow,
         ],
         activities=ALL_ACTIVITIES,
