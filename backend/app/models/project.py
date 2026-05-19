@@ -1,4 +1,4 @@
-from sqlalchemy import JSON, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -27,6 +27,13 @@ class Project(Base, TenantMixin, TimestampMixin):
 
 class NovelSpec(Base, TenantMixin, TimestampMixin):
     __tablename__ = "novel_specs"
+    # 每个 (organization, project) 至多一个 NovelSpec：避免并发 generate_bible
+    # 在 race 下创建多条记录，导致后续 get_by 抛 MultipleResultsFound。
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "project_id", name="uq_novel_specs_org_project"
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     project_id: Mapped[str] = mapped_column(
