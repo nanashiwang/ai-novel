@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import CurrentUserDep, DbDep, TenantDep
+from app.core.config import get_settings
 from app.core.exceptions import NotFoundError
 from app.core.permissions import require_permission
 from app.repositories import (
@@ -18,6 +19,7 @@ from app.repositories import (
 )
 from app.schemas.common import APIModel
 from app.services.exporter import exporter_service
+from app.services.storage import get_storage
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["project-extra"])
 
@@ -231,8 +233,11 @@ async def create_export(
     """同步生成 Markdown / TXT 导出。
 
     Sprint 5-B：CPU-bound 任务，不调 LLM、无 quota；同步返回 201 + 导出
-    元数据。前端通过 file_url（指向下面的 download 端点）拉取文件流。
-    docx/epub/pdf 等格式留待 Sprint 6 接 MinIO 时再加。
+    元数据。前端通过 file_url 拉取文件。
+    Sprint 6 引入 storage 抽象：当 settings.minio_enabled=true 时上传到
+    MinIO 并把 file_url 设为预签名 URL；否则继续把 content 存到
+    ExportFile.content（db 模式），file_url 指向下面的 download endpoint。
+    docx/epub/pdf 等格式留待真实部署时再加。
     """
     require_permission(user, "export:create", tenant)
     export_type = (payload.export_type or "markdown").lower().strip()
@@ -251,19 +256,51 @@ async def create_export(
         export_format=export_type,  # type: ignore[arg-type]
     )
 
+    # 先 create db 行拿到 export_id（key 含此 id）
     exp = await ExportFileRepository(db).create(
         organization_id=tenant.organization_id,
         project_id=project_id,
         export_type=export_type,
-        file_url="",  # 占位，下面设置成 download endpoint
+        file_url="",
         status="ready",
         created_by=user.id,
-        content=content,
+        content="",
         file_size=file_size,
     )
-    # file_url 指向 download endpoint；Sprint 6 接 MinIO 时改为预签名 URL
-    exp.file_url = f"/api/v1/projects/{project_id}/exports/{exp.id}/download"
+
+    storage = get_storage()
+    settings = get_settings()
+    suffix_by_type = {"markdown": "md", "txt": "txt"}
+    mime_by_type = {"markdown": "text/markdown", "txt": "text/plain"}
+    suffix = suffix_by_type.get(export_type, "txt")
+    mime = mime_by_type.get(export_type, "application/octet-stream")
+    object_key = (
+        f"{tenant.organization_id}/{project_id}/{exp.id}.{suffix}"
+    )
+
+    if settings.minio_enabled:
+        # MinIO 模式：上传到对象存储，file_url 用预签名 URL，content 字段留空
+        await storage.put(
+            object_key,
+            content.encode("utf-8"),
+            content_type=f"{mime}; charset=utf-8",
+        )
+        signed = await storage.sign_url(
+            object_key,
+            filename=f"{project_id}-{exp.id}.{suffix}",
+            content_type=f"{mime}; charset=utf-8",
+        )
+        exp.file_url = signed or ""
+    else:
+        # db 模式：content 直接落 ExportFile.content，file_url 指向 download endpoint
+        exp.content = content
+        exp.file_url = f"/api/v1/projects/{project_id}/exports/{exp.id}/download"
+
     await db.commit()
+    # Prometheus 埋点：导出成功（按 export_type）
+    from app.core.metrics import EXPORTS_CREATED  # noqa: PLC0415
+
+    EXPORTS_CREATED.labels(export_type=export_type).inc()
     return exp
 
 

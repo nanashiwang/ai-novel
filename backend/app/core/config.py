@@ -53,6 +53,18 @@ class Settings(BaseSettings):
     rate_limit_register: str = "5/minute"
     rate_limit_default: str = "120/minute"
 
+    # 对象存储（MinIO / S3-compatible）
+    # 默认 enabled=false：导出文件直接存 ExportFile.content（db）。
+    # enabled=true 时通过 storage abstraction 上传到 MinIO，file_url 改为
+    # 预签名下载 URL（默认 1h 有效）。
+    minio_enabled: bool = False
+    minio_endpoint: str = "localhost:9000"
+    minio_access_key: str = "minioadmin"
+    minio_secret_key: str = "minioadmin"
+    minio_bucket: str = "novelflow-exports"
+    minio_secure: bool = False  # http vs https
+    minio_presigned_ttl_seconds: int = 3600
+
     @property
     def cors_origin_list(self) -> list[str]:
         raw = self.cors_origins.strip().strip("'").strip('"')
