@@ -41,6 +41,7 @@ import { SceneEditor } from "@/components/ui/scene-editor";
 import {
   chaptersApi,
   charactersApi,
+  continuityIssuesApi,
   exportsApi,
   jobsApi,
   projectsApi,
@@ -781,6 +782,28 @@ function labelForVersion(versions: DraftVersion[], versionId: string): string {
   return `第 ${versions.length - idx} 版`;
 }
 
+function severityTone(severity: string): "rose" | "amber" | "slate" {
+  switch (severity) {
+    case "high":
+      return "rose";
+    case "medium":
+      return "amber";
+    default:
+      return "slate";
+  }
+}
+
+function severityClass(severity: string): string {
+  switch (severity) {
+    case "high":
+      return "border-rose-200 bg-rose-50/40";
+    case "medium":
+      return "border-amber-200 bg-amber-50/40";
+    default:
+      return "border-slate-200";
+  }
+}
+
 /**
  * Editor + dirty 检测 + 保存按钮 + 自动保存（debounce 15s）的子组件。
  *
@@ -915,7 +938,7 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
       const active = list.find(
         (j) =>
           j.project_id === projectId &&
-          j.job_type === "write_scene" &&
+          ["write_scene", "audit_scene", "rewrite_scene"].includes(j.job_type) &&
           (j.status === "queued" || j.status === "running"),
       );
       return active ? 1500 : false;
@@ -1017,6 +1040,78 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
       toast.error(e instanceof ApiError ? e.message : "删除失败");
     },
   });
+
+  // 审稿 / 重写：本 scene 的 ContinuityIssue 列表
+  const issuesKey = useScopedKey("project", projectId, "continuity-issues");
+  const { data: allIssues = [] } = useQuery({
+    queryKey: issuesKey,
+    queryFn: () => continuityIssuesApi.list(projectId),
+    enabled: !!activeScene,
+  });
+  const sceneIssues = allIssues.filter((i) => i.scene_id === activeScene?.id);
+  const sceneOpenIssues = sceneIssues.filter((i) => i.status === "open");
+
+  const audit = useMutation({
+    mutationFn: () => {
+      if (!activeScene) {
+        return Promise.reject(new Error("no_active_scene"));
+      }
+      return projectsApi.auditScene(projectId, activeScene.id, {
+        estimate_words: 500,
+      });
+    },
+    onSuccess: () => {
+      toast.success("已提交审稿任务");
+      queryClient.invalidateQueries({ queryKey: jobsKey });
+      queryClient.invalidateQueries({ queryKey: issuesKey });
+    },
+    onError: (e: unknown) => {
+      toast.error(e instanceof ApiError ? e.message : "审稿提交失败");
+    },
+  });
+
+  const rewrite = useMutation({
+    mutationFn: () => {
+      if (!activeScene) {
+        return Promise.reject(new Error("no_active_scene"));
+      }
+      return projectsApi.rewriteScene(projectId, activeScene.id, {
+        target_words: 1200,
+        estimate_words: 2000,
+      });
+    },
+    onSuccess: () => {
+      toast.success("已提交重写任务");
+      queryClient.invalidateQueries({ queryKey: jobsKey });
+      queryClient.invalidateQueries({ queryKey: issuesKey });
+      queryClient.invalidateQueries({ queryKey: scenesKey });
+      queryClient.invalidateQueries({ queryKey: versionsKey });
+      setDisplayedVersionId(null);
+    },
+    onError: (e: unknown) => {
+      toast.error(e instanceof ApiError ? e.message : "重写提交失败");
+    },
+  });
+
+  // audit/rewrite 任务"正在进行"判断（基于 job.input_payload.scene_id）
+  const latestAuditJob = jobs.find(
+    (j) =>
+      j.project_id === projectId &&
+      j.job_type === "audit_scene" &&
+      (j.input_payload as { scene_id?: string } | null | undefined)?.scene_id ===
+        activeScene?.id,
+  );
+  const isAuditing =
+    latestAuditJob?.status === "queued" || latestAuditJob?.status === "running";
+  const latestRewriteJob = jobs.find(
+    (j) =>
+      j.project_id === projectId &&
+      j.job_type === "rewrite_scene" &&
+      (j.input_payload as { scene_id?: string } | null | undefined)?.scene_id ===
+        activeScene?.id,
+  );
+  const isRewriting =
+    latestRewriteJob?.status === "queued" || latestRewriteJob?.status === "running";
 
   return (
     <div className="space-y-4">
@@ -1181,6 +1276,98 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
                 onAutoSave={(content) => autoSave.mutate(content)}
               />
             )}
+            {/* Sprint 5-A：审稿与重写面板。仅当 scene 已有 draft 且非对比模式时显示 */}
+            {activeScene && displayedVersion && !isComparing ? (
+              <div className="mt-4 space-y-3 border-t border-slate-100 pt-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="font-bold text-slate-950">审稿 & 问题</p>
+                    <p className="text-xs text-slate-500">
+                      {sceneOpenIssues.length > 0
+                        ? `当前发现 ${sceneOpenIssues.length} 个待修复问题`
+                        : "当前未发现连续性问题"}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="secondary"
+                      onClick={() => audit.mutate()}
+                      disabled={audit.isPending || isAuditing || !isShowingLatest}
+                      title={
+                        !isShowingLatest
+                          ? "请先切回最新版本再审稿"
+                          : "对最新 draft 触发连续性审稿"
+                      }
+                    >
+                      {isAuditing ? (
+                        <RefreshCw className="size-4 animate-spin" />
+                      ) : (
+                        <CheckCircle2 className="size-4" />
+                      )}
+                      审稿
+                    </Button>
+                    <Button
+                      onClick={() => rewrite.mutate()}
+                      disabled={
+                        rewrite.isPending ||
+                        isRewriting ||
+                        !isShowingLatest ||
+                        sceneOpenIssues.length === 0
+                      }
+                      title={
+                        sceneOpenIssues.length === 0
+                          ? "无待修复问题"
+                          : "基于当前问题列表重写正文"
+                      }
+                    >
+                      {isRewriting ? (
+                        <RefreshCw className="size-4 animate-spin" />
+                      ) : (
+                        <Wand2 className="size-4" />
+                      )}
+                      重写并修复
+                    </Button>
+                  </div>
+                </div>
+                {sceneIssues.length === 0 ? (
+                  <p className="text-sm text-slate-500">
+                    点击「审稿」让 ContextBuilder 把当前 draft + 全局上下文
+                    送给模型，发现的问题会落到 continuity_issues 表。
+                  </p>
+                ) : (
+                  <ul className="space-y-2">
+                    {sceneIssues.map((issue) => (
+                      <li
+                        key={issue.id}
+                        className={`rounded-xl border p-3 text-xs ${
+                          issue.status === "fixed"
+                            ? "border-emerald-200 bg-emerald-50/40"
+                            : severityClass(issue.severity)
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge tone={severityTone(issue.severity)}>
+                            {issue.severity}
+                          </Badge>
+                          <Badge tone="slate">{issue.issue_type}</Badge>
+                          <Badge tone={issue.status === "fixed" ? "green" : "amber"}>
+                            {issue.status}
+                          </Badge>
+                        </div>
+                        <p className="mt-2 font-semibold text-slate-950">
+                          {issue.description}
+                        </p>
+                        {issue.suggested_fix ? (
+                          <p className="mt-1 text-slate-600">
+                            建议：{issue.suggested_fix}
+                          </p>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ) : null}
           </CardContent>
         </Card>
         <Card>

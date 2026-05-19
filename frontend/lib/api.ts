@@ -167,6 +167,34 @@ export type WriteScenePayload = {
   target_words?: number;
 };
 
+export type AuditScenePayload = {
+  estimate_words?: number;
+};
+
+export type RewriteScenePayload = {
+  target_words?: number;
+  estimate_words?: number;
+};
+
+// 与 backend/app/models/continuity_issue.py 对齐
+export type ContinuityIssue = {
+  id: string;
+  organization_id: string;
+  project_id: string;
+  chapter_id: string | null;
+  scene_id: string | null;
+  issue_type: string;
+  severity: string;
+  description: string;
+  suggested_fix: string;
+  status: string;
+};
+
+export const continuityIssuesApi = {
+  list: (projectId: string) =>
+    http.get<ContinuityIssue[]>(`/projects/${projectId}/continuity-issues`),
+};
+
 export const projectsApi = {
   list: () => http.get<Project[]>("/projects"),
   get: (id: string) => http.get<Project>(`/projects/${id}`),
@@ -193,6 +221,24 @@ export const projectsApi = {
   ) =>
     http.post<GenerationJob>(
       `/projects/${projectId}/scenes/${sceneId}/write`,
+      payload,
+    ),
+  auditScene: (
+    projectId: string,
+    sceneId: string,
+    payload: AuditScenePayload = {},
+  ) =>
+    http.post<GenerationJob>(
+      `/projects/${projectId}/scenes/${sceneId}/audit`,
+      payload,
+    ),
+  rewriteScene: (
+    projectId: string,
+    sceneId: string,
+    payload: RewriteScenePayload = {},
+  ) =>
+    http.post<GenerationJob>(
+      `/projects/${projectId}/scenes/${sceneId}/rewrite`,
       payload,
     ),
   generateFullNovel: (id: string, estimate_words: number) =>
