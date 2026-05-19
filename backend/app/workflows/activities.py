@@ -37,6 +37,7 @@ from app.repositories import (
 from app.services.novel_planner.service import novel_planner_service
 from app.services.quota.service import quota_service
 from app.services.writer.service import writer_service
+from app.services.context_builder.service import context_builder
 
 _logger = logging.getLogger(__name__)
 
@@ -494,11 +495,12 @@ async def _plan_and_persist_scenes_for_chapter(
     chapter: Chapter,
     scenes_per_chapter: int,
     expected_words: int,
-) -> int:
+) -> list[Scene]:
     """单章 scene cards 规划 + 落库的共享流程。
 
     被 generate_scene_cards（项目级循环）和 generate_chapter_scene_cards
-    （单章模式）两个 activity 复用，避免重复代码。返回写入的 scene 数量。
+    （单章模式）两个 activity 复用。返回写入的 Scene ORM 对象列表，调用方
+    可以基于它做 memory 写入等后处理。
     """
     contract = await novel_planner_service.plan_scenes(
         session,
@@ -512,9 +514,9 @@ async def _plan_and_persist_scenes_for_chapter(
         expected_words=expected_words,
     )
     scene_repo = SceneRepository(session)
-    created = 0
+    created: list[Scene] = []
     for item in contract.scenes[:scenes_per_chapter]:
-        await scene_repo.create(
+        row = await scene_repo.create(
             organization_id=job.organization_id,
             project_id=job.project_id,
             chapter_id=chapter.id,
@@ -531,7 +533,7 @@ async def _plan_and_persist_scenes_for_chapter(
             hook=item.hook,
             status="planned",
         )
-        created += 1
+        created.append(row)
     return created
 
 
@@ -570,7 +572,7 @@ async def generate_scene_cards(job: dict[str, Any]) -> dict[str, Any]:
         expected_words = max(600, estimate_words // max(1, len(chapters) * scenes_per_chapter))
         created = 0
         for chapter in chapters:
-            created += await _plan_and_persist_scenes_for_chapter(
+            new_scenes = await _plan_and_persist_scenes_for_chapter(
                 session,
                 job=job_row,
                 project=project,
@@ -579,6 +581,7 @@ async def generate_scene_cards(job: dict[str, Any]) -> dict[str, Any]:
                 scenes_per_chapter=scenes_per_chapter,
                 expected_words=expected_words,
             )
+            created += len(new_scenes)
         project.status = "scenes_planned"
         return {"scene_count": created, "reused": False}
 
@@ -625,7 +628,7 @@ async def generate_chapter_scene_cards(job: dict[str, Any]) -> dict[str, Any]:
 
         scenes_per_chapter = max(1, min(_payload_int(payload, "scenes_per_chapter", 3), 8))
         expected_words = max(600, _payload_int(payload, "expected_words", 1500))
-        created = await _plan_and_persist_scenes_for_chapter(
+        new_scenes = await _plan_and_persist_scenes_for_chapter(
             session,
             job=job_row,
             project=project,
@@ -634,9 +637,18 @@ async def generate_chapter_scene_cards(job: dict[str, Any]) -> dict[str, Any]:
             scenes_per_chapter=scenes_per_chapter,
             expected_words=expected_words,
         )
+        # 每个新 scene 写一条 memory_entry 摘要，给 ContextBuilder.recent_summary 喂料
+        for scene in new_scenes:
+            await context_builder.record_scene_memory(
+                session,
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                scene=scene,
+                chapter=chapter,
+            )
         await _settle_job_usage(session, job_row, amount=job_row.reserved_quota)
         return {
-            "scene_count": created,
+            "scene_count": len(new_scenes),
             "chapter_id": chapter.id,
             "reused": False,
         }
