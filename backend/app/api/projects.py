@@ -35,6 +35,13 @@ class GenerateBibleRequest(APIModel):
     force_regenerate: bool = False
 
 
+class GenerateOutlineRequest(APIModel):
+    # None → 由 activity 回落到 project.target_chapter_count 或 6
+    target_chapters: int | None = Field(default=None, ge=1, le=12)
+    estimate_words: int = Field(default=3000, ge=1, le=20000)
+    force_regenerate: bool = False
+
+
 class BibleSpecResponse(APIModel):
     id: str
     premise: str
@@ -214,6 +221,33 @@ async def generate_bible(
         project_id=project_id,
         estimate_words=payload.estimate_words,
         topic=payload.topic,
+        force_regenerate=payload.force_regenerate,
+    )
+    await db.refresh(job)
+    response = GenerationJobResponse.model_validate(job)
+    await db.commit()
+    return response
+
+
+@router.post(
+    "/{project_id}/outline/generate",
+    response_model=GenerationJobResponse,
+    status_code=202,
+)
+async def generate_outline(
+    project_id: str,
+    payload: GenerateOutlineRequest,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    job = await generation_service.create_outline_job(
+        db,
+        user,
+        tenant,
+        project_id=project_id,
+        target_chapters=payload.target_chapters,
+        estimate_words=payload.estimate_words,
         force_regenerate=payload.force_regenerate,
     )
     await db.refresh(job)
