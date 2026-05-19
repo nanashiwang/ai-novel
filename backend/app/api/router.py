@@ -14,7 +14,7 @@ from app.api import (
     scenes,
     world_items,
 )
-from app.api.admin import content_reviews, logs, plans, settings, users
+from app.api.admin import content_reviews, logs, metrics, plans, settings, users
 from app.api.admin import jobs as admin_jobs
 from app.api.admin import organizations as admin_orgs
 
@@ -40,3 +40,4 @@ api_router.include_router(admin_jobs.router)
 api_router.include_router(logs.router)
 api_router.include_router(content_reviews.router)
 api_router.include_router(settings.router)
+api_router.include_router(metrics.router)

@@ -41,6 +41,7 @@ from app.services.quota.service import quota_service
 from app.services.rewriter.service import rewriter_service
 from app.services.writer.service import writer_service
 from app.services.context_builder.service import context_builder
+from app.core.metrics import JOBS_CREATED
 
 _logger = logging.getLogger(__name__)
 
@@ -354,6 +355,10 @@ async def mark_job_status(
         if status in {"failed", "cancelled"}:
             released = await _release_job_reservations(session, job)
             project_reverted = await _revert_project_status_on_failure(session, job)
+        # 终态埋点：jobs_created_total{job_type, status} += 1
+        # 只在 succeeded/failed/cancelled 终态计数，避免 queued→running 双重计数
+        if status in {"succeeded", "failed", "cancelled"}:
+            JOBS_CREATED.labels(job_type=job.job_type, status=status).inc()
         return {
             "updated": True,
             "status": status,

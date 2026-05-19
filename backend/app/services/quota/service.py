@@ -206,6 +206,11 @@ class QuotaService:
         reservation.status = "consumed"
         reservation.consumed_amount = used
         await session.flush()
+        # Prometheus 埋点：实际消耗的额度（commit 路径）
+        if used > 0:
+            from app.core.metrics import QUOTA_CONSUMED  # noqa: PLC0415
+
+            QUOTA_CONSUMED.labels(quota_key=reservation.quota_key).inc(used)
         return reservation
 
     async def release_quota(

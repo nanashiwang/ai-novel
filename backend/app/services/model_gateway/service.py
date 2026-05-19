@@ -320,6 +320,13 @@ class ModelGateway:
             1,
             _estimate_tokens(response_text or json.dumps(response_json or {}, ensure_ascii=False)),
         )
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        # Prometheus 埋点：模型调用延迟（按 task_type / 成功状态）
+        from app.core.metrics import MODEL_CALL_LATENCY  # noqa: PLC0415
+
+        MODEL_CALL_LATENCY.labels(task_type=task_type, status="success").observe(
+            latency_ms
+        )
         call = ModelCall(
             id=new_id("model_call"),
             organization_id=organization_id,
@@ -335,7 +342,7 @@ class ModelGateway:
             response_json=response_json,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
-            latency_ms=int((time.perf_counter() - started) * 1000),
+            latency_ms=latency_ms,
             status="success",
         )
         session.add(call)
