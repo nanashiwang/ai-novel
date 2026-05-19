@@ -1,7 +1,14 @@
 FROM node:22-alpine AS deps
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
+# 国内网络从 registry.npmjs.org 拉包易 ECONNRESET，统一走 npmmirror；
+# 同时把 fetch retry / timeout 调大，避免一次抖动失败整次 build
+RUN npm config set registry https://registry.npmmirror.com \
+    && npm config set fetch-retries 5 \
+    && npm config set fetch-retry-mintimeout 20000 \
+    && npm config set fetch-retry-maxtimeout 120000 \
+    && npm config set fetch-timeout 600000 \
+    && npm ci --no-audit --no-fund --prefer-offline
 
 FROM node:22-alpine AS builder
 WORKDIR /app
