@@ -255,6 +255,36 @@ async def _release_job_reservations(session: AsyncSession, job: GenerationJob) -
     return len(reservations)
 
 
+# job_type → 失败/取消时项目应回滚到的状态。
+# 只有把 project.status 推到"过渡态"的 job 类型需要登记；不影响 project.status
+# 的 job 类型（如 scene_write）不出现在此映射中。
+_JOB_FAILURE_PROJECT_STATUS: dict[str, tuple[set[str], str]] = {
+    # bible 生成失败：若项目仍卡在 bible_generating 过渡态，回退到 created
+    "generate_bible": ({"bible_generating"}, "created"),
+}
+
+
+async def _revert_project_status_on_failure(
+    session: AsyncSession, job: GenerationJob
+) -> bool:
+    """失败/取消时回滚 project.status，避免项目永久卡在过渡态。
+
+    幂等：仅当 project.status 仍处于已登记的过渡态集合内才回滚；
+    若项目已被其他流程推进或回滚，保持不动。返回是否实际回滚。
+    """
+    mapping = _JOB_FAILURE_PROJECT_STATUS.get(job.job_type)
+    if not mapping or not job.project_id:
+        return False
+    transitional_states, target = mapping
+    project = await ProjectRepository(session).get(
+        job.project_id, organization_id=job.organization_id
+    )
+    if not project or project.status not in transitional_states:
+        return False
+    project.status = target
+    return True
+
+
 @activity.defn(name="mark_job_status")
 async def mark_job_status(
     job_id: str,
@@ -264,8 +294,11 @@ async def mark_job_status(
 ) -> dict[str, Any]:
     """更新 generation_jobs 的状态、时间戳，可选 error_message/output_payload。
 
-    当 status 为 failed/cancelled 时，自动释放 job 名下仍处于 reserved 状态
-    的额度预留，防止失败任务导致租户额度被永久"幽灵预留"。
+    当 status 为 failed/cancelled 时，自动：
+    1. 释放 job 名下仍处于 reserved 状态的额度预留（防止额度被幽灵预留）；
+    2. 把 project.status 从 job 启动时设置的过渡态回滚（防止前端永久卡在
+       "圣经生成中" 等中间态，影响重试入口）。
+    两项操作都是幂等的。
     """
 
     async def handler(session):
@@ -285,9 +318,16 @@ async def mark_job_status(
         if output_payload is not None:
             job.output_payload = output_payload
         released = 0
+        project_reverted = False
         if status in {"failed", "cancelled"}:
             released = await _release_job_reservations(session, job)
-        return {"updated": True, "status": status, "released_reservations": released}
+            project_reverted = await _revert_project_status_on_failure(session, job)
+        return {
+            "updated": True,
+            "status": status,
+            "released_reservations": released,
+            "project_status_reverted": project_reverted,
+        }
 
     return await _with_session(handler)
 
