@@ -120,8 +120,11 @@ export function ProjectListPage() {
               header: "操作",
               render: (row) => (
                 <div className="flex gap-2">
+                  <Link href={`/studio/projects/${row.id}`}>
+                    <Button size="sm">总览</Button>
+                  </Link>
                   <Link href={`/studio/projects/${row.id}/write`}>
-                    <Button size="sm" variant="secondary">
+                    <Button size="sm" variant="ghost">
                       写作
                     </Button>
                   </Link>
