@@ -3,9 +3,10 @@ from __future__ import annotations
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chapter import Chapter
-from app.models.project import NovelSpec
+from app.models.project import NovelSpec, Project
 from app.models.scene import Scene
 from app.schemas.story_generation import SceneDraftContract
+from app.services.context_builder.service import context_builder
 from app.services.model_gateway.service import model_gateway
 from app.services.prompt_manager.service import prompt_manager
 
@@ -45,36 +46,35 @@ class WriterService:
         organization_id: str,
         project_id: str,
         job_id: str,
+        project: Project,
         spec: NovelSpec,
         chapter: Chapter,
         scene: Scene,
         previous_scene_excerpt: str = "",
         target_words: int = 1200,
     ) -> SceneDraftContract:
+        """生成单场景正文草稿。
+
+        Sprint 4：通过 ContextBuilder.build_for_scene_writing 组装上下文，
+        替代之前的字符串拼接。ContextBuilder 输出已经按 7 段优先级+token
+        budget 处理，writer 只需追加"任务指令"段。
+        """
         prompt = prompt_manager.load(_PROMPT_WRITE_SCENE, version=_PROMPT_VERSION)
+        ctx = await context_builder.build_for_scene_writing(
+            session,
+            project=project,
+            spec=spec,
+            chapter=chapter,
+            scene=scene,
+            previous_excerpt=previous_scene_excerpt,
+        )
         user_prompt = (
-            "请根据故事圣经、章节大纲和 scene card 写出一个完整场景正文。\n"
-            f"故事圣经：{spec.premise}\n"
-            f"主题：{spec.theme}\n"
-            f"类型/语气：{spec.genre} / {spec.tone}\n"
-            f"叙事视角：{spec.narrative_pov}\n"
-            f"风格约束：{spec.style_guide}\n"
-            f"硬约束：{spec.constraints}\n"
-            f"章节：第 {chapter.chapter_index} 章《{chapter.title}》\n"
-            f"章节摘要：{chapter.summary}\n"
-            f"章节目标：{chapter.goal}\n"
-            f"章节冲突：{chapter.conflict}\n"
-            f"场景：{scene.title}\n"
-            f"地点/时间：{scene.location} / {scene.time_marker}\n"
-            f"人物：{scene.characters}\n"
-            f"场景目标：{scene.goal}\n"
-            f"微冲突：{scene.conflict}\n"
-            f"情绪变化：{scene.emotion_start} -> {scene.emotion_end}\n"
-            f"揭示：{scene.reveal}\n"
-            f"结尾钩子：{scene.hook}\n"
-            f"上一场景结尾片段：{previous_scene_excerpt}\n"
-            f"目标字数：{target_words}\n"
-            "要求：正文有画面、有动作、有对话，避免总结式大纲；只返回 JSON。"
+            ctx.to_prompt()
+            + "\n\n## 任务指令\n"
+            + f"请根据以上上下文写出场景 #{scene.scene_index} 的完整正文，"
+            + f"目标字数约 {target_words} 字。\n"
+            + "要求：正文有画面、有动作、有对话，避免总结式大纲；"
+            + "只返回 JSON，字段必须可直接落库。"
         )
         raw = await model_gateway.generate_json(
             session,
@@ -87,7 +87,15 @@ class WriterService:
             schema=SceneDraftContract.model_json_schema(),
             prompt_key=_PROMPT_WRITE_SCENE,
             prompt_version=_PROMPT_VERSION,
-            metadata={"scene_id": scene.id, "chapter_id": chapter.id},
+            metadata={
+                "scene_id": scene.id,
+                "chapter_id": chapter.id,
+                # 把 ContextBuilder 的诊断指标记到 metadata，便于运维侧观察预算分配
+                "context_total_tokens": ctx.total_tokens,
+                "context_truncated_segments": [
+                    s.label for s in ctx.segments if s.truncated
+                ],
+            },
         )
         draft = SceneDraftContract.model_validate(
             {**raw, "scene_id": raw.get("scene_id") or scene.id}

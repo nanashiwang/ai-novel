@@ -722,6 +722,7 @@ async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
                 organization_id=job_row.organization_id,
                 project_id=job_row.project_id,
                 job_id=job_row.id,
+                project=project,
                 spec=spec,
                 chapter=chapter,
                 scene=scene,
@@ -758,7 +759,17 @@ async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
 
 @activity.defn(name="run_scene_writing")
 async def run_scene_writing(job: dict[str, Any]) -> dict[str, Any]:
-    """单 scene 写作 activity。"""
+    """单 scene 写作 activity。
+
+    Sprint 4 升级：
+    - scene 状态机：planned/drafted → writing → drafted，让前端轮询期间能
+      看到中间态（mock 跑得快几乎看不到，真实 provider 时持续到模型返回）。
+    - DraftVersion 父链：把上一个 draft 作为 parent_version_id，构成版本链，
+      未来在 UI 上可显示历史变迁。
+    - 上一场景结尾片段：从同章前一个 scene 的最新 draft 取最后 800 字作为
+      previous_excerpt 传给 writer，提高跨场景连贯性。
+    - 独立 quota 结算：与 generate_chapter_scene_cards 对齐。
+    """
     async with _activity_session() as session:
         job_row = await _load_job(session, job["id"])
         payload = job_row.input_payload or {}
@@ -778,18 +789,29 @@ async def run_scene_writing(job: dict[str, Any]) -> dict[str, Any]:
         )
         if not chapter:
             raise NotFoundError("chapter_not_found")
+
+        # 状态机：先置 "writing"，让轮询前端能看到中间态
+        scene.status = "writing"
+        await session.flush()
+
         target_words = _payload_int(payload, "target_words", 1200)
+        previous_excerpt = await _previous_scene_excerpt(session, scene)
         draft = await writer_service.write_scene_draft(
             session,
             organization_id=job_row.organization_id,
             project_id=job_row.project_id,
             job_id=job_row.id,
+            project=project,
             spec=spec,
             chapter=chapter,
             scene=scene,
+            previous_scene_excerpt=previous_excerpt,
             target_words=target_words,
         )
         word_count = draft.word_count or len(draft.content)
+
+        # 版本链：把本 scene 的最新 draft 作为父版本
+        parent_version_id = await _latest_draft_id(session, scene)
         saved = await DraftVersionRepository(session).create(
             organization_id=job_row.organization_id,
             project_id=job_row.project_id,
@@ -799,13 +821,72 @@ async def run_scene_writing(job: dict[str, Any]) -> dict[str, Any]:
             content=draft.content,
             word_count=word_count,
             status="draft",
-            parent_version_id=None,
+            parent_version_id=parent_version_id,
             created_by=job_row.user_id,
         )
         scene.status = "drafted"
-        result = {"scene_id": scene.id, "draft_id": saved.id, "word_count": word_count}
+
+        # 与 generate_chapter_scene_cards 对称：单 scene 写作自身结算 quota
+        await _settle_job_usage(session, job_row, amount=job_row.reserved_quota)
+
+        result = {
+            "scene_id": scene.id,
+            "draft_id": saved.id,
+            "word_count": word_count,
+            "parent_version_id": parent_version_id,
+        }
         job_row.output_payload = result
         return result
+
+
+async def _previous_scene_excerpt(session: AsyncSession, scene: Scene) -> str:
+    """取同章前一个 scene 的最新 draft 末尾 800 字。
+
+    没有前一场景或前一场景没有 draft 时返回空字符串。失败不会阻断主流程。
+    """
+    if scene.scene_index <= 1:
+        return ""
+    scene_repo = SceneRepository(session)
+    siblings = list(
+        await scene_repo.list(
+            organization_id=scene.organization_id,
+            project_id=scene.project_id,
+            chapter_id=scene.chapter_id,
+        )
+    )
+    prev = next(
+        (s for s in siblings if s.scene_index == scene.scene_index - 1), None
+    )
+    if not prev:
+        return ""
+    draft_repo = DraftVersionRepository(session)
+    drafts = list(
+        await draft_repo.list(
+            organization_id=scene.organization_id,
+            project_id=scene.project_id,
+            scene_id=prev.id,
+            version_type="draft",
+        )
+    )
+    if not drafts:
+        return ""
+    # base list 默认按 created_at desc 排序，第 0 个就是最新
+    return drafts[0].content[-800:]
+
+
+async def _latest_draft_id(session: AsyncSession, scene: Scene) -> str | None:
+    """取该 scene 的最新 draft id，用作新版本的 parent_version_id。"""
+    repo = DraftVersionRepository(session)
+    drafts = list(
+        await repo.list(
+            organization_id=scene.organization_id,
+            project_id=scene.project_id,
+            scene_id=scene.id,
+            version_type="draft",
+            limit=1,
+        )
+    )
+    return drafts[0].id if drafts else None
 
 
 @activity.defn(name="run_full_novel_pipeline")
