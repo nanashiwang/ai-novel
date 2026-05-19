@@ -47,3 +47,6 @@ class NovelSpec(Base, TenantMixin, TimestampMixin):
     narrative_pov: Mapped[str] = mapped_column(String(200), default="")
     style_guide: Mapped[str] = mapped_column(Text, default="")
     constraints: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # 连续性规则：StoryBibleContract.continuity_rules 的结构化副本。
+    # 之前被折叠进 constraints 字符串列表，导致 ContextBuilder 无法精确还原。
+    continuity_rules: Mapped[list[str]] = mapped_column(JSON, default=list)

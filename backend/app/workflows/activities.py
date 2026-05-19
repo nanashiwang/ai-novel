@@ -92,14 +92,19 @@ async def _load_spec(session: AsyncSession, job: GenerationJob) -> NovelSpec:
 
 
 def _contract_constraints(bible) -> list[str]:
-    constraints = list(bible.constraints or [])
-    constraints.extend(f"世界规则：{item}" for item in bible.world_rules or [])
-    constraints.extend(f"连续性规则：{item}" for item in bible.continuity_rules or [])
-    if bible.main_characters:
-        names = [item.name for item in bible.main_characters if item.name]
-        if names:
-            constraints.append("主要人物：" + "、".join(names))
-    return constraints
+    """保留 StoryBibleContract.constraints 原值。
+
+    历史上这里还会把 world_rules / continuity_rules / main_characters 折叠
+    成中文字符串塞进 constraints。问题是这些信息其他地方已有结构化存储：
+    - world_rules → world_items 表
+    - continuity_rules → NovelSpec.continuity_rules（独立 JSON 列）
+    - main_characters → characters 表
+
+    折叠后 ContextBuilder 想精确读取某条规则需要做字符串解析，可靠性差。
+    现在只透传 constraints 本身；其他字段由 generate_book_spec 各自写入
+    对应表/列。
+    """
+    return list(bible.constraints or [])
 
 
 def _payload_int(payload: dict[str, Any], key: str, default: int) -> int:
@@ -390,6 +395,7 @@ async def generate_book_spec(job: dict[str, Any]) -> dict[str, Any]:
             "narrative_pov": bible.narrative_pov,
             "style_guide": bible.style_guide,
             "constraints": _contract_constraints(bible),
+            "continuity_rules": list(bible.continuity_rules or []),
         }
         if existing:
             for key, value in values.items():

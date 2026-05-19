@@ -45,6 +45,7 @@ class BibleSpecResponse(APIModel):
     narrative_pov: str
     style_guide: str
     constraints: list[str]
+    continuity_rules: list[str] = []
 
 
 class BibleCharacterResponse(APIModel):
