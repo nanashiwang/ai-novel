@@ -20,6 +20,20 @@ from app.services.model_gateway.providers import AnthropicMessagesProvider, Open
 from app.services.system_settings import ModelGatewayConfig, system_settings_service
 
 
+def _estimate_tokens(text: str) -> int:
+    """粗略 token 估算：CJK 字符 1 char/token，其他 1 token/4 char。
+
+    项目以中文长篇小说为主，统一 `len // 4` 的英文比例会显著低估输入 tokens、
+    高估剩余预算。Sprint 1 阶段先用启发式区分 CJK/non-CJK，真实计量交由
+    provider 的 usage 字段（接入真实 provider 后切换）。
+    """
+    if not text:
+        return 0
+    cjk = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
+    other = len(text) - cjk
+    return max(1, cjk + other // 4)
+
+
 class ModelProvider(Protocol):
     async def complete_json(
         self,
@@ -246,8 +260,12 @@ class ModelGateway:
         response_text: str | None,
         started: float,
     ) -> None:
-        input_tokens = max(1, (len(system_prompt) + len(user_prompt)) // 4)
-        output_tokens = max(1, len(response_text or json.dumps(response_json or {})) // 4)
+        input_tokens = _estimate_tokens(system_prompt) + _estimate_tokens(user_prompt)
+        input_tokens = max(1, input_tokens)
+        output_tokens = max(
+            1,
+            _estimate_tokens(response_text or json.dumps(response_json or {}, ensure_ascii=False)),
+        )
         call = ModelCall(
             id=new_id("model_call"),
             organization_id=organization_id,
