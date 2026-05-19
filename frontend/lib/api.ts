@@ -339,6 +339,16 @@ export type DraftVersion = {
   created_by: string;
 };
 
+export type DraftVersionCreate = {
+  chapter_id?: string | null;
+  scene_id?: string | null;
+  version_type?: string;
+  content?: string;
+  word_count?: number;
+  status?: string;
+  parent_version_id?: string | null;
+};
+
 export const versionsApi = {
   // 按 scene_id 过滤；不传时返回项目全部 draft_versions。
   // base list 默认按 created_at desc 排序，所以第一个是最新。
@@ -346,6 +356,8 @@ export const versionsApi = {
     http.get<DraftVersion[]>(`/projects/${projectId}/versions`, params),
   get: (projectId: string, versionId: string) =>
     http.get<DraftVersion>(`/projects/${projectId}/versions/${versionId}`),
+  create: (projectId: string, payload: DraftVersionCreate) =>
+    http.post<DraftVersion>(`/projects/${projectId}/versions`, payload),
 };
 export const worldItemsApi = {
   list: (projectId: string) =>

@@ -34,6 +34,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/data-table";
 import { ProgressBar } from "@/components/ui/progress";
+import { SceneEditor } from "@/components/ui/scene-editor";
 import {
   chaptersApi,
   charactersApi,
@@ -49,6 +50,7 @@ import type {
   BibleCharacter,
   BiblePlotThread,
   BibleWorldItem,
+  DraftVersion,
   GenerationJob,
 } from "@/lib/api";
 import { ApiError } from "@/lib/http";
@@ -709,6 +711,49 @@ export function OutlinePage({ projectId }: { projectId: string }) {
 }
 
 // =========== 写作工作台 ===========
+
+/**
+ * Editor + dirty 检测 + 保存按钮的子组件。
+ *
+ * 父组件用 `key={version.id}` 控制 remount，避免在 useEffect 中直接 setState
+ * 同步 props → state（React 19 的 set-state-in-effect 反模式）。
+ */
+function SceneEditorCard({
+  version,
+  editable,
+  isSaving,
+  onSave,
+}: {
+  version: DraftVersion;
+  editable: boolean;
+  isSaving: boolean;
+  onSave: (content: string) => void;
+}) {
+  const [content, setContent] = useState(version.content);
+  const isDirty = content !== version.content;
+  return (
+    <>
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex items-center gap-2 text-xs text-slate-500">
+          {isDirty ? <Badge tone="violet">未保存</Badge> : null}
+          {!editable ? <Badge tone="amber">预览历史版本</Badge> : null}
+        </div>
+        {editable ? (
+          <Button
+            variant="secondary"
+            onClick={() => onSave(content)}
+            disabled={!isDirty || isSaving}
+          >
+            <FileArchive className="size-4" />
+            保存版本
+          </Button>
+        ) : null}
+      </div>
+      <SceneEditor content={content} onChange={setContent} editable={editable} />
+    </>
+  );
+}
+
 export function WritingWorkspacePage({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
   const chaptersKey = useScopedKey("project", projectId, "chapters");
@@ -750,7 +795,18 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
     queryFn: () => versionsApi.list(projectId, { scene_id: activeScene?.id }),
     enabled: !!activeScene,
   });
-  const latestDraft = versions[0];
+  const latestDraft: DraftVersion | undefined = versions[0];
+
+  // 显示的版本：默认最新；如果切换到了某历史版本，记录其 id。当 scene 改变
+  // 或 versions 列表变化导致该 id 失效时，displayedVersion 自动 fallback
+  // 到 latestDraft，无需用 useEffect 重置 displayedVersionId。
+  const [displayedVersionId, setDisplayedVersionId] = useState<string | null>(null);
+  const displayedVersion =
+    (displayedVersionId
+      ? versions.find((v) => v.id === displayedVersionId)
+      : undefined) ?? latestDraft;
+  const isShowingLatest =
+    !displayedVersion || displayedVersion.id === latestDraft?.id;
 
   // 当前 scene 的 write_scene 任务（按 input_payload.scene_id 过滤）
   const { data: jobs = [] } = useQuery({
@@ -791,9 +847,35 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
       queryClient.invalidateQueries({ queryKey: jobsKey });
       queryClient.invalidateQueries({ queryKey: scenesKey });
       queryClient.invalidateQueries({ queryKey: versionsKey });
+      setDisplayedVersionId(null);
     },
     onError: (e: unknown) => {
       toast.error(e instanceof ApiError ? e.message : "提交失败");
+    },
+  });
+
+  const saveVersion = useMutation({
+    mutationFn: (content: string) => {
+      if (!activeScene || !activeChapter) {
+        return Promise.reject(new Error("no_active_scene"));
+      }
+      return versionsApi.create(projectId, {
+        chapter_id: activeChapter.id,
+        scene_id: activeScene.id,
+        version_type: "user",
+        content,
+        word_count: content.length,
+        status: "draft",
+        parent_version_id: displayedVersion?.id ?? null,
+      });
+    },
+    onSuccess: () => {
+      toast.success("已保存为新版本");
+      queryClient.invalidateQueries({ queryKey: versionsKey });
+      setDisplayedVersionId(null);
+    },
+    onError: (e: unknown) => {
+      toast.error(e instanceof ApiError ? e.message : "保存失败");
     },
   });
 
@@ -804,7 +886,7 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
         <div>
           <h1 className="text-2xl font-black text-slate-950">写作工作台</h1>
           <p className="mt-1 text-sm text-slate-500">
-            最小生成单位：scene。Sprint 4 已接入 ContextBuilder + draft 版本链。
+            Sprint 4：ContextBuilder + draft 版本链 + Tiptap 编辑器。
           </p>
         </div>
         <Button
@@ -835,6 +917,7 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
                     onClick={() => {
                       setActiveChapterId(chapter.id);
                       setActiveSceneId(null);
+                      setDisplayedVersionId(null);
                     }}
                     className={`w-full rounded-xl border p-3 text-left text-sm ${
                       activeChapter?.id === chapter.id
@@ -852,7 +935,10 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
                         <button
                           key={scene.id}
                           type="button"
-                          onClick={() => setActiveSceneId(scene.id)}
+                          onClick={() => {
+                            setActiveSceneId(scene.id);
+                            setDisplayedVersionId(null);
+                          }}
                           className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left text-xs ${
                             activeScene?.id === scene.id
                               ? "border-indigo-300 bg-indigo-50"
@@ -890,7 +976,7 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
               {activeScene ? (
                 <Badge tone={latestDraft ? "blue" : "slate"}>
                   {latestDraft
-                    ? `第 ${versions.length} 版 · ${latestDraft.word_count} 字`
+                    ? `第 ${versions.length} 版 · ${displayedVersion?.word_count ?? 0} 字`
                     : "未生成"}
                 </Badge>
               ) : null}
@@ -901,7 +987,7 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
               <p className="py-12 text-center text-sm text-slate-500">
                 从左侧选择一个场景开始写作。
               </p>
-            ) : !latestDraft ? (
+            ) : !displayedVersion ? (
               <div className="space-y-3">
                 <p className="text-sm text-slate-500">
                   此场景还没有 draft。点击右上「生成当前场景」，ContextBuilder
@@ -918,46 +1004,75 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
                 </div>
               </div>
             ) : (
-              <pre className="max-h-[480px] overflow-y-auto whitespace-pre-wrap rounded-2xl bg-slate-50 p-4 text-sm leading-7 text-slate-800">
-                {latestDraft.content}
-              </pre>
+              <SceneEditorCard
+                key={displayedVersion.id}
+                version={displayedVersion}
+                editable={isShowingLatest}
+                isSaving={saveVersion.isPending}
+                onSave={(content) => saveVersion.mutate(content)}
+              />
             )}
           </CardContent>
         </Card>
         <Card>
-          <CardHeader>
-            <CardTitle>Context / Job</CardTitle>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle>版本历史</CardTitle>
+            <Badge tone="slate">{versions.length}</Badge>
           </CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            <div>
-              <p className="font-bold text-slate-950">ContextBuilder v1</p>
-              <p className="text-xs text-slate-500">
-                合并 bible / chapter / scene / 角色 / 世界规则 / plot
-                / 最近摘要后送给 ModelGateway。
-              </p>
-            </div>
+          <CardContent className="space-y-2 text-sm">
+            {versions.length === 0 ? (
+              <p className="text-xs text-slate-500">尚无版本。</p>
+            ) : (
+              <>
+                {versions.map((v, idx) => {
+                  const isActive = displayedVersion?.id === v.id;
+                  return (
+                    <button
+                      key={v.id}
+                      type="button"
+                      onClick={() =>
+                        setDisplayedVersionId(
+                          v.id === latestDraft?.id ? null : v.id,
+                        )
+                      }
+                      className={`w-full rounded-xl border p-3 text-left text-xs ${
+                        isActive
+                          ? "border-indigo-300 bg-indigo-50"
+                          : "border-slate-200 hover:bg-slate-50"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-bold text-slate-950">
+                          第 {versions.length - idx} 版
+                        </span>
+                        <Badge tone={v.version_type === "user" ? "violet" : "blue"}>
+                          {v.version_type}
+                        </Badge>
+                      </div>
+                      <p className="mt-1 text-slate-500">
+                        {v.word_count} 字 · {v.status}
+                      </p>
+                    </button>
+                  );
+                })}
+                {!isShowingLatest ? (
+                  <Button
+                    variant="ghost"
+                    onClick={() => setDisplayedVersionId(null)}
+                    className="w-full"
+                  >
+                    返回最新版本
+                  </Button>
+                ) : null}
+              </>
+            )}
             {latestSceneJob ? (
-              <div className="space-y-1">
+              <div className="pt-2 text-xs text-slate-500">
                 <p className="font-bold text-slate-950">最近任务</p>
-                <p className="text-xs text-slate-500">
-                  类型：{latestSceneJob.job_type}
+                <p>
+                  额度：{latestSceneJob.consumed_quota}/{latestSceneJob.reserved_quota}
                 </p>
-                <p className="text-xs text-slate-500">
-                  额度：{latestSceneJob.consumed_quota}/
-                  {latestSceneJob.reserved_quota}
-                </p>
-                <p className="text-xs text-slate-500">
-                  Workflow：{latestSceneJob.workflow_id ?? "—"}
-                </p>
-              </div>
-            ) : null}
-            {versions.length > 1 ? (
-              <div>
-                <p className="font-bold text-slate-950">版本链</p>
-                <p className="text-xs text-slate-500">
-                  共 {versions.length} 个 draft，当前显示最新。版本面板将在
-                  Phase B 接入。
-                </p>
+                <p>Workflow：{latestSceneJob.workflow_id ?? "—"}</p>
               </div>
             ) : null}
           </CardContent>
