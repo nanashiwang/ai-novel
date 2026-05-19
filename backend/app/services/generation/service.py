@@ -152,6 +152,7 @@ class GenerationService:
         )
         if not project:
             raise NotFoundError("project_not_found")
+        ensure_same_tenant(project.organization_id, tenant)
 
         job = await GenerationJobRepository(session).create(
             organization_id=tenant.organization_id,
