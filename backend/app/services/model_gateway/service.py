@@ -130,12 +130,19 @@ class _RealProviderPlaceholder:
 
 
 class ModelGateway:
+    # system_settings 缓存 TTL（秒）。过短会让密集生成场景每次都查库；过长则
+    # 管理员通过 admin API 修改设置后的生效延迟变长。admin 修改路径会调用
+    # configure() 立即覆盖缓存时间戳，30 秒上限只影响"绕过 admin API 直接
+    # 改 system_settings 表"的边界场景。
+    _SETTINGS_CACHE_TTL_SECONDS = 30.0
+
     def __init__(self) -> None:
         self.settings = get_settings()
         self._default_model = self.settings.default_model
         self._provider: ModelProvider = (
             _MockProvider() if self.settings.model_gateway_mode == "mock" else _RealProviderPlaceholder()
         )
+        self._settings_cache_at: float = 0.0  # monotonic 时间；0 = 强制首次刷新
 
     def set_provider(self, provider: ModelProvider) -> None:
         """部署时注入真实 provider。"""
@@ -145,22 +152,30 @@ class ModelGateway:
         self._default_model = config.default_model
         if config.mode != "real":
             self._provider = _MockProvider()
-            return
-        if config.provider == "openai" and config.openai_api_key:
+        elif config.provider == "openai" and config.openai_api_key:
             self._provider = OpenAIChatProvider(
                 api_key=config.openai_api_key,
                 base_url=config.openai_base_url,
             )
-            return
-        if config.provider == "anthropic" and config.anthropic_api_key:
+        elif config.provider == "anthropic" and config.anthropic_api_key:
             self._provider = AnthropicMessagesProvider(
                 api_key=config.anthropic_api_key,
                 base_url=config.anthropic_base_url,
             )
-            return
-        self._provider = _RealProviderPlaceholder()
+        else:
+            self._provider = _RealProviderPlaceholder()
+        # admin 改设置或启动注入后视为缓存已是最新，避免下一次生成立刻又查库。
+        self._settings_cache_at = time.monotonic()
 
-    async def refresh_from_settings(self, session: AsyncSession) -> None:
+    def invalidate_settings_cache(self) -> None:
+        """让下一次 refresh_from_settings 强制查库。"""
+        self._settings_cache_at = 0.0
+
+    async def refresh_from_settings(self, session: AsyncSession, *, force: bool = False) -> None:
+        if not force:
+            elapsed = time.monotonic() - self._settings_cache_at
+            if elapsed < self._SETTINGS_CACHE_TTL_SECONDS:
+                return
         config = await system_settings_service.get_model_config(session)
         self.configure(config)
 

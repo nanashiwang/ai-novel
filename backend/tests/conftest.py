@@ -55,3 +55,21 @@ async def client(db_engine) -> AsyncIterator[AsyncClient]:
         yield ac
 
     app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_model_gateway():
+    """每个测试前后重置 ModelGateway 状态。
+
+    ModelGateway 是模块级单例，admin settings 测试会调用 configure() 注入
+    真实 OpenAI provider；同进程后续测试（如 generate_bible_flow）会沿用
+    这个 provider，对空的内存 sqlite 报 401。
+    通过失效 settings 缓存让每个测试的首次 generate 强制查库回到 mock。
+    """
+    from app.services.model_gateway.service import _MockProvider, model_gateway
+
+    model_gateway._provider = _MockProvider()
+    model_gateway.invalidate_settings_cache()
+    yield
+    model_gateway._provider = _MockProvider()
+    model_gateway.invalidate_settings_cache()
