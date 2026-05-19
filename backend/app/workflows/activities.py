@@ -203,7 +203,12 @@ async def _sync_bible_plot_threads(session: AsyncSession, job: GenerationJob, bi
 
 async def _settle_job_usage(session: AsyncSession, job: GenerationJob, amount: int) -> None:
     tenant = type("Tenant", (), {"organization_id": job.organization_id})()
-    result = await session.execute(select(QuotaReservation).where(QuotaReservation.job_id == job.id))
+    result = await session.execute(
+        select(QuotaReservation).where(
+            QuotaReservation.organization_id == job.organization_id,
+            QuotaReservation.job_id == job.id,
+        )
+    )
     reservations = list(result.scalars().all())
     for reservation in reservations:
         await quota_service.commit_quota(
