@@ -429,7 +429,12 @@ async def generate_book_spec(job: dict[str, Any]) -> dict[str, Any]:
 
 @activity.defn(name="generate_chapter_outline")
 async def generate_chapter_outline(job: dict[str, Any]) -> dict[str, Any]:
-    """按 book spec 生成章节规划，并落到 chapters。"""
+    """按 book spec 生成章节规划，并落到 chapters。
+
+    独立 workflow 调用时负责结算 quota；full_novel pipeline 中也调用本 activity，
+    但 generate_book_spec 已经在 happy path 一次性结算了整 job 的 quota，再次
+    settle 由 quota_service.commit_quota 的 `status != 'reserved'` 守卫保证幂等。
+    """
     async with _activity_session() as session:
         job_row = await _load_job(session, job["id"])
         project = await _load_project(session, job_row)
@@ -445,6 +450,7 @@ async def generate_chapter_outline(job: dict[str, Any]) -> dict[str, Any]:
         )
         if existing and not payload.get("force_regenerate_outline"):
             project.status = "outlined"
+            await _settle_job_usage(session, job_row, amount=0)
             return {"chapter_count": len(existing), "reused": True}
 
         requested = payload.get("target_chapters") or project.target_chapter_count or 6
@@ -475,6 +481,7 @@ async def generate_chapter_outline(job: dict[str, Any]) -> dict[str, Any]:
             created += 1
         project.target_chapter_count = project.target_chapter_count or created
         project.status = "outlined"
+        await _settle_job_usage(session, job_row, amount=job_row.reserved_quota)
         return {"chapter_count": created, "reused": False}
 
 
