@@ -59,6 +59,14 @@ class BaseRepository(Generic[ModelT]):
         return result.scalar_one_or_none()
 
     async def get_by(self, **filters: Any) -> ModelT | None:
+        # 防御性检查：如果模型携带 organization_id（属于多租户表），
+        # 必须显式传入 organization_id，避免跨租户数据泄露。
+        # 平台级实体（如 users）不受此约束。
+        if hasattr(self.model, "organization_id") and "organization_id" not in filters:
+            raise ValueError(
+                f"{self.model.__name__}.get_by() requires organization_id "
+                "for tenant-scoped models"
+            )
         stmt = select(self.model)
         for key, value in filters.items():
             stmt = stmt.where(getattr(self.model, key) == value)
