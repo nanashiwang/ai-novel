@@ -4,12 +4,14 @@ from decimal import Decimal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.deps import CurrentUserDep, DbDep
 from app.core.permissions import require_permission, require_platform_admin
 from app.models.common import new_id
+from app.models.organization import Organization
 from app.models.plan import Plan, PlanFeature
+from app.repositories import AuditLogRepository
 from app.schemas.common import APIModel
 
 router = APIRouter(prefix="/admin/plans", tags=["admin-plans"])
@@ -32,6 +34,7 @@ class AdminPlanResponse(APIModel):
     price_yearly: float | None = None
     currency: str
     status: str
+    organization_count: int = 0
     features: list[AdminPlanFeatureResponse]
 
 
@@ -81,6 +84,9 @@ async def _plan_to_response(db: DbDep, plan: Plan) -> AdminPlanResponse:
         .order_by(PlanFeature.feature_key.asc())
     )
     features = list(result.scalars().all())
+    # 该 plan 当前被多少组织引用（plan_code 而非 id）
+    count_stmt = select(func.count(Organization.id)).where(Organization.plan_code == plan.code)
+    org_count = (await db.execute(count_stmt)).scalar_one() or 0
     return AdminPlanResponse(
         id=plan.id,
         code=plan.code,
@@ -90,6 +96,7 @@ async def _plan_to_response(db: DbDep, plan: Plan) -> AdminPlanResponse:
         price_yearly=float(plan.price_yearly) if plan.price_yearly is not None else None,
         currency=plan.currency,
         status=plan.status,
+        organization_count=int(org_count),
         features=[
             AdminPlanFeatureResponse(
                 id=feature.id,
@@ -193,4 +200,47 @@ async def _replace_features(
             )
         )
     await db.flush()
+
+
+@router.delete("/{plan_id}", status_code=204)
+async def delete_admin_plan(
+    plan_id: str,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    """删除套餐。
+
+    引用保护：若仍有 organization 引用此 plan_code，返回 409 plan_in_use，
+    避免运营误删导致组织额度初始化时找不到 limit_value 全部 402。
+    """
+    require_permission(user, "admin:plan:update")
+    plan = await db.get(Plan, plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="plan_not_found")
+
+    count_stmt = select(func.count(Organization.id)).where(Organization.plan_code == plan.code)
+    org_count = int((await db.execute(count_stmt)).scalar_one() or 0)
+    if org_count > 0:
+        raise HTTPException(
+            status_code=409,
+            detail="plan_in_use",
+        )
+
+    # 先删 features，再删 plan（避免外键残留）
+    features = await db.execute(select(PlanFeature).where(PlanFeature.plan_id == plan_id))
+    for feature in features.scalars().all():
+        await db.delete(feature)
+    await db.flush()
+
+    await AuditLogRepository(db).create(
+        organization_id=user.preferred_organization_id or "platform",
+        actor_user_id=user.id,
+        action="plan.delete",
+        target_type="plan",
+        target_id=plan_id,
+        before_data={"code": plan.code, "name": plan.name, "status": plan.status},
+        after_data=None,
+    )
+    await db.delete(plan)
+    await db.commit()
 

@@ -114,6 +114,16 @@ ERROR_CODES: frozenset[str] = frozenset(
         "export_type_not_supported",
         "job_not_retryable",
         "unknown_job_type",
+        # 套餐 / 组织管理
+        "plan_not_found",
+        "plan_inactive",
+        "plan_in_use",
+        "duplicate_feature_key",
+        # 用户管理
+        "user_not_found",
+        "email_already_registered",
+        "cannot_modify_self",
+        "invalid_role",
     }
 )
 
