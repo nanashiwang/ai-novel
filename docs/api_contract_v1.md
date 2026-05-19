@@ -110,14 +110,14 @@
 | DELETE | `/{project_id}` | ✅ | 1 |
 | GET | `/{project_id}/bible` | ✅ | 1 |
 | POST | `/{project_id}/bible/generate` | ✅ | 1 |
-| POST | `/{project_id}/outline/generate` | 🟡 | **2** |
-| POST | `/{project_id}/scenes/generate` | 🟡 | 3 |
+| POST | `/{project_id}/outline/generate` | ✅ | 2 |
+| POST | `/{project_id}/chapters/{chapter_id}/scenes/generate` | ✅ | **3** |
 | POST | `/{project_id}/scenes/{scene_id}/write` | ✅ | 1 / 升级 4 |
 | POST | `/{project_id}/audit` | 🟡 | 5 |
 | POST | `/{project_id}/generate-full-novel` | ✅ | 1 |
 | POST | `/{project_id}/exports` | ✅ | 1（占位） / 升级 5 |
 
-**Sprint 2 关键新增**：`POST /{project_id}/outline/generate`。请求/响应在第 3 节定义。
+**Sprint 3 关键决策**：scene-plan 是**章节级**而非项目级（`POST /projects/{pid}/chapters/{cid}/scenes/generate`），用户可逐章生成 scene cards 而不影响项目级状态机。项目级"为整本一次性拆 scenes"仍由 full_novel pipeline 处理。
 
 ### 2.4 项目子资源
 
@@ -213,8 +213,8 @@
 | 值 | Sprint | 启动器 | 说明 |
 |---|---|---|---|
 | `generate_bible` | ✅ 1 | `start_generate_bible` | StoryBible 闭环 |
-| `generate_outline` | 🟡 **2** | `start_generate_outline` | Outline 闭环 |
-| `generate_scene_plan` | 🟡 3 | `start_generate_scene_plan` | ScenePlan 闭环 |
+| `generate_outline` | ✅ 2 | `start_generate_outline` | Outline 闭环 |
+| `generate_scene_plan` | ✅ 3 | `start_generate_scene_plan` | 单章 scene cards 拆分 |
 | `write_scene` | ✅ 1（升级 4） | `start_write_scene` | 单场景写作 |
 | `audit_scene` | 🟡 5 | `start_audit_scene` | 单场景审稿 |
 | `rewrite_scene` | 🟡 5 | `start_rewrite_scene` | 单场景重写 |
@@ -274,12 +274,14 @@ created ──→ bible_generating ──→ bible_ready ──→ outline_gener
 | `created` | ✅ 1 | api/projects.create_project | — |
 | `bible_generating` | ✅ 1 | service.create_bible_job | `created` |
 | `bible_ready` | ✅ 1 | activities.generate_book_spec | — |
-| `outline_generating` | 🟡 **2** | service.create_outline_job | `bible_ready` |
+| `outline_generating` | ✅ 2 | service.create_outline_job | `bible_ready` |
 | `outlined` | ✅ 1（已存在但未必走得到） | activities.generate_chapter_outline | — |
-| `scenes_planning` | 🟡 3 | service.create_scene_plan_job | `outlined` |
-| `scenes_planned` | ✅ 1 | activities.generate_scene_cards | — |
+| `scenes_planning` | 🟡 仅在 full_novel pipeline 内部使用；**单章 generate_scene_plan 不动 project.status** | — | — |
+| `scenes_planned` | ✅ 1（full_novel pipeline 内）| activities.generate_scene_cards | — |
 | `drafting` | ✅ 1 | activities.write_scene_drafts | `scenes_planned` |
 | `completed` | 🟡 4+ | TBD（全部 scene drafted 后） | — |
+
+**Sprint 3 决策记录**：`generate_scene_plan` 是**章节级**任务，单次调用只影响该章的 scenes 行，不应把整个项目的 status 推到 `scenes_planning` 或 `scenes_planned`。因此 `_JOB_FAILURE_PROJECT_STATUS` 不登记 `generate_scene_plan`，单章失败不回滚 project.status。完整推进项目级状态由 full_novel pipeline 或未来 Sprint 5+ 的"全章 scene_plan 完成"扫描负责。
 
 **注册表同步**：每新增过渡态必须同步在 `app/workflows/activities.py::_JOB_FAILURE_PROJECT_STATUS` 注册回滚映射；新增 job_type 影响 project.status 时同步登记。
 
@@ -329,6 +331,7 @@ created ──→ bible_generating ──→ bible_ready ──→ outline_gener
 | code | 含义 |
 |---|---|
 | `scene_id_required` | run_scene_writing 缺少 scene_id payload |
+| `chapter_id_required` | generate_chapter_scene_cards 缺少 chapter_id payload |
 
 **新增规则**：所有新 error code 必须先登记到本表与 `app/contracts.py::ERROR_CODES`，命名必须 snake_case，资源不存在统一用 `<resource>_not_found`。`tests/test_contract_consistency.py` 会扫描代码字面量，未登记的值在 CI 中会失败。
 
