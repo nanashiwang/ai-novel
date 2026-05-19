@@ -278,7 +278,7 @@ async def write_scene(
     user: CurrentUserDep,
     db: DbDep,
 ):
-    job = await generation_service.create_scene_write_job(
+    job = await generation_service.create_write_scene_job(
         db,
         user,
         tenant,

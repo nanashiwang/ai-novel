@@ -122,7 +122,7 @@ class WorkflowStarter:
         self._run_local("generate_bible", job_id)
 
     def run_local_write_scene(self, job_id: str) -> None:
-        self._run_local("scene_write", job_id)
+        self._run_local("write_scene", job_id)
 
     def _run_local(self, job_type: str, job_id: str) -> None:
         try:

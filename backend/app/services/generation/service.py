@@ -134,7 +134,7 @@ class GenerationService:
             )
         return job
 
-    async def create_scene_write_job(
+    async def create_write_scene_job(
         self,
         session: AsyncSession,
         user: CurrentUser,
@@ -158,7 +158,7 @@ class GenerationService:
             organization_id=tenant.organization_id,
             user_id=user.id,
             project_id=project_id,
-            job_type="scene_write",
+            job_type="write_scene",
             status="queued",
             priority=PLAN_QUEUE.get(tenant.plan_code, "queue_standard"),
             plan_code=tenant.plan_code,
@@ -177,7 +177,7 @@ class GenerationService:
         await session.flush()
         if workflow_starter.is_mock_workflow(job.workflow_id):
             session.sync_session.info.setdefault("after_commit_tasks", []).append(
-                ("scene_write", job.id)
+                ("write_scene", job.id)
             )
         return job
 

@@ -39,7 +39,7 @@ def _run_after_commit_tasks(session) -> None:
             workflow_starter.run_local_generate_bible(job_id)
         elif task_type == "full_novel":
             workflow_starter.run_local_generate_full_novel(job_id)
-        elif task_type == "scene_write":
+        elif task_type == "write_scene":
             workflow_starter.run_local_write_scene(job_id)
 
 

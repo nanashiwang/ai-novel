@@ -284,7 +284,7 @@ async def _release_job_reservations(session: AsyncSession, job: GenerationJob) -
 
 # job_type → 失败/取消时项目应回滚到的状态。
 # 只有把 project.status 推到"过渡态"的 job 类型需要登记；不影响 project.status
-# 的 job 类型（如 scene_write）不出现在此映射中。
+# 的 job 类型（如 write_scene）不出现在此映射中。
 _JOB_FAILURE_PROJECT_STATUS: dict[str, tuple[set[str], str]] = {
     # bible 生成失败：若项目仍卡在 bible_generating 过渡态，回退到 created
     "generate_bible": ({"bible_generating"}, "created"),
