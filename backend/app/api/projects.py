@@ -285,5 +285,7 @@ async def write_scene(
         scene_id=scene_id,
         target_words=payload.target_words,
     )
+    await db.refresh(job)
+    response = GenerationJobResponse.model_validate(job)
     await db.commit()
-    return job
+    return response
