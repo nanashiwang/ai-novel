@@ -5,6 +5,13 @@
 
 设计：starter 不直接 await client 启动结果，使用 fire-and-forget，
 workflow_id 立即返回；任务状态由 worker 异步回写 generation_jobs。
+
+可靠性约定：
+1. asyncio.create_task() 返回的 task 必须被 starter 实例持有，
+   否则 CPython GC 可能中途回收任务（Python 官方文档警告）。
+2. 若 Temporal 启动失败（连接超时、提交报错），starter 会调用
+   mark_job_status 把对应 generation_jobs 标记为 failed，避免 db 显示
+   queued/running 但实际无人执行；mark_job_status 同时释放预留额度。
 """
 from __future__ import annotations
 
@@ -21,6 +28,13 @@ class WorkflowStarter:
     def __init__(self) -> None:
         self.settings = get_settings()
         self._client = None
+        # 持有 fire-and-forget task 引用，防止被 GC 中途回收。
+        # task 完成后通过 add_done_callback 自动 discard。
+        self._pending_tasks: set[asyncio.Task[Any]] = set()
+
+    def _track_task(self, task: asyncio.Task[Any]) -> None:
+        self._pending_tasks.add(task)
+        task.add_done_callback(self._pending_tasks.discard)
 
     async def _get_client(self):
         if self._client is not None:
@@ -39,10 +53,28 @@ class WorkflowStarter:
             _logger.exception("failed_to_connect_temporal")
             return None
 
-    async def _start(self, workflow_name: str, args: list[Any], workflow_id: str) -> str:
+    async def _mark_job_failed(self, job_id: str, reason: str) -> None:
+        """启动 workflow 失败时把 job 标记 failed，触发 quota 释放。"""
+        try:
+            from app.workflows.activities import mark_job_status  # noqa: PLC0415
+
+            await mark_job_status(job_id, "failed", reason)
+        except Exception:  # noqa: BLE001
+            _logger.exception(
+                "mark_job_failed_fallback_failed", extra={"job_id": job_id}
+            )
+
+    async def _start(
+        self,
+        workflow_name: str,
+        args: list[Any],
+        workflow_id: str,
+        job_id: str,
+    ) -> None:
         client = await self._get_client()
         if not client:
-            return f"mock-{workflow_id}"
+            await self._mark_job_failed(job_id, "temporal_unavailable")
+            return
         try:
             await client.start_workflow(
                 workflow_name,
@@ -50,10 +82,12 @@ class WorkflowStarter:
                 id=workflow_id,
                 task_queue="novelflow-generation",
             )
-            return workflow_id
         except Exception:  # noqa: BLE001
-            _logger.exception("failed_to_start_workflow", extra={"workflow": workflow_name})
-            return f"mock-{workflow_id}"
+            _logger.exception(
+                "failed_to_start_workflow",
+                extra={"workflow": workflow_name, "job_id": job_id},
+            )
+            await self._mark_job_failed(job_id, "failed_to_start_workflow")
 
     def _fire_and_forget(self, workflow_name: str, job: dict, prefix: str) -> str:
         workflow_id = f"{prefix}-{job['id']}"
@@ -61,7 +95,10 @@ class WorkflowStarter:
             return f"mock-{workflow_id}"
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(self._start(workflow_name, [job], workflow_id))
+            task = loop.create_task(
+                self._start(workflow_name, [job], workflow_id, job["id"])
+            )
+            self._track_task(task)
             return workflow_id
         except RuntimeError:
             return f"mock-{workflow_id}"
@@ -93,7 +130,8 @@ class WorkflowStarter:
         except RuntimeError:
             _logger.warning("local_workflow_skipped_no_event_loop", extra={"job_id": job_id})
             return
-        loop.create_task(self._execute_local(job_type, job_id))
+        task = loop.create_task(self._execute_local(job_type, job_id))
+        self._track_task(task)
 
     async def _execute_local(self, job_type: str, job_id: str) -> None:
         from app.workflows.activities import (  # noqa: PLC0415
