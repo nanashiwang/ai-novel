@@ -33,7 +33,6 @@ import { Badge, StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/data-table";
-import { EditorMock } from "@/components/ui/editor-mock";
 import { ProgressBar } from "@/components/ui/progress";
 import {
   chaptersApi,
@@ -42,6 +41,7 @@ import {
   jobsApi,
   projectsApi,
   scenesApi,
+  versionsApi,
   worldItemsApi,
 } from "@/lib/api";
 import type {
@@ -710,18 +710,113 @@ export function OutlinePage({ projectId }: { projectId: string }) {
 
 // =========== 写作工作台 ===========
 export function WritingWorkspacePage({ projectId }: { projectId: string }) {
+  const queryClient = useQueryClient();
+  const chaptersKey = useScopedKey("project", projectId, "chapters");
+  const jobsKey = useScopedKey("jobs");
+
+  const { data: chapters = [] } = useQuery({
+    queryKey: chaptersKey,
+    queryFn: () => chaptersApi.list(projectId),
+  });
+
+  const [activeChapterId, setActiveChapterId] = useState<string | null>(null);
+  const activeChapter =
+    chapters.find((c) => c.id === activeChapterId) ?? chapters[0];
+
+  const scenesKey = useScopedKey(
+    "project",
+    projectId,
+    "scenes",
+    activeChapter?.id,
+  );
+  const { data: scenes = [] } = useQuery({
+    queryKey: scenesKey,
+    queryFn: () => scenesApi.list(projectId, activeChapter?.id),
+    enabled: !!activeChapter,
+  });
+
+  const [activeSceneId, setActiveSceneId] = useState<string | null>(null);
+  const activeScene = scenes.find((s) => s.id === activeSceneId) ?? scenes[0];
+
+  // 当前 scene 的 draft_versions（base list 默认按 created_at desc）
+  const versionsKey = useScopedKey(
+    "project",
+    projectId,
+    "versions",
+    activeScene?.id,
+  );
+  const { data: versions = [] } = useQuery({
+    queryKey: versionsKey,
+    queryFn: () => versionsApi.list(projectId, { scene_id: activeScene?.id }),
+    enabled: !!activeScene,
+  });
+  const latestDraft = versions[0];
+
+  // 当前 scene 的 write_scene 任务（按 input_payload.scene_id 过滤）
+  const { data: jobs = [] } = useQuery({
+    queryKey: jobsKey,
+    queryFn: () => jobsApi.list() as Promise<GenerationJob[]>,
+    refetchInterval: (query) => {
+      const list = (query.state.data as GenerationJob[] | undefined) ?? [];
+      const active = list.find(
+        (j) =>
+          j.project_id === projectId &&
+          j.job_type === "write_scene" &&
+          (j.status === "queued" || j.status === "running"),
+      );
+      return active ? 1500 : false;
+    },
+  });
+  const latestSceneJob = jobs.find(
+    (j) =>
+      j.project_id === projectId &&
+      j.job_type === "write_scene" &&
+      (j.input_payload as { scene_id?: string } | null | undefined)?.scene_id ===
+        activeScene?.id,
+  );
+  const isWriting =
+    latestSceneJob?.status === "queued" || latestSceneJob?.status === "running";
+
+  const write = useMutation({
+    mutationFn: () => {
+      if (!activeScene) {
+        return Promise.reject(new Error("no_active_scene"));
+      }
+      return projectsApi.writeScene(projectId, activeScene.id, {
+        target_words: 1200,
+      });
+    },
+    onSuccess: () => {
+      toast.success("已提交场景写作任务");
+      queryClient.invalidateQueries({ queryKey: jobsKey });
+      queryClient.invalidateQueries({ queryKey: scenesKey });
+      queryClient.invalidateQueries({ queryKey: versionsKey });
+    },
+    onError: (e: unknown) => {
+      toast.error(e instanceof ApiError ? e.message : "提交失败");
+    },
+  });
+
   return (
     <div className="space-y-4">
+      <ProjectHeader projectId={projectId} />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <p className="text-sm text-slate-500">工作台 / 项目 / {projectId} / 写作</p>
           <h1 className="text-2xl font-black text-slate-950">写作工作台</h1>
           <p className="mt-1 text-sm text-slate-500">
-            最小生成单位：scene。从大纲页选择章节场景再进入此页。
+            最小生成单位：scene。Sprint 4 已接入 ContextBuilder + draft 版本链。
           </p>
         </div>
-        <Button onClick={() => toast.info("scene 生成接口待对接")}>
-          <Sparkles className="size-4" /> 生成当前场景
+        <Button
+          onClick={() => write.mutate()}
+          disabled={write.isPending || isWriting || !activeScene}
+        >
+          {isWriting ? (
+            <RefreshCw className="size-4 animate-spin" />
+          ) : (
+            <Sparkles className="size-4" />
+          )}
+          {latestDraft ? "重新生成场景" : "生成当前场景"}
         </Button>
       </div>
       <div className="grid min-h-[420px] gap-4 xl:grid-cols-[280px_minmax(520px,1fr)_340px]">
@@ -729,21 +824,142 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
           <CardHeader>
             <CardTitle>章节 / 场景</CardTitle>
           </CardHeader>
-          <CardContent>
-            <p className="text-sm text-slate-500">
-              选择章节后会列出场景。当前展示固定占位，等接入 scenes API 后会自动加载。
-            </p>
+          <CardContent className="space-y-2">
+            {chapters.length === 0 ? (
+              <p className="text-sm text-slate-500">尚未生成章节大纲。</p>
+            ) : (
+              chapters.map((chapter) => (
+                <div key={chapter.id} className="space-y-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveChapterId(chapter.id);
+                      setActiveSceneId(null);
+                    }}
+                    className={`w-full rounded-xl border p-3 text-left text-sm ${
+                      activeChapter?.id === chapter.id
+                        ? "border-indigo-300 bg-indigo-50"
+                        : "border-slate-200"
+                    }`}
+                  >
+                    <p className="font-bold text-slate-950">
+                      第 {chapter.chapter_index} 章 · {chapter.title}
+                    </p>
+                  </button>
+                  {activeChapter?.id === chapter.id && scenes.length > 0 ? (
+                    <div className="space-y-1 pl-3">
+                      {scenes.map((scene) => (
+                        <button
+                          key={scene.id}
+                          type="button"
+                          onClick={() => setActiveSceneId(scene.id)}
+                          className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left text-xs ${
+                            activeScene?.id === scene.id
+                              ? "border-indigo-300 bg-indigo-50"
+                              : "border-slate-100"
+                          }`}
+                        >
+                          <span className="truncate">
+                            场景 {scene.scene_index} · {scene.title}
+                          </span>
+                          <StatusBadge status={scene.status as never} />
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ))
+            )}
           </CardContent>
         </Card>
-        <EditorMock />
         <Card>
-          <CardHeader>
-            <CardTitle>Context Builder</CardTitle>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <div>
+              <CardTitle>{activeScene ? activeScene.title : "未选择场景"}</CardTitle>
+              {activeScene ? (
+                <p className="mt-1 text-xs text-slate-500">
+                  {activeScene.location} · {activeScene.time_marker} ·{" "}
+                  {activeScene.characters?.join(", ") || "—"}
+                </p>
+              ) : null}
+            </div>
+            <div className="flex items-center gap-2">
+              {latestSceneJob ? (
+                <StatusBadge status={latestSceneJob.status as never} />
+              ) : null}
+              {activeScene ? (
+                <Badge tone={latestDraft ? "blue" : "slate"}>
+                  {latestDraft
+                    ? `第 ${versions.length} 版 · ${latestDraft.word_count} 字`
+                    : "未生成"}
+                </Badge>
+              ) : null}
+            </div>
           </CardHeader>
           <CardContent>
-            <p className="text-sm text-slate-500">
-              会合并 Story Bible、人物状态、世界观召回、前文摘要交给 ModelGateway。
-            </p>
+            {!activeScene ? (
+              <p className="py-12 text-center text-sm text-slate-500">
+                从左侧选择一个场景开始写作。
+              </p>
+            ) : !latestDraft ? (
+              <div className="space-y-3">
+                <p className="text-sm text-slate-500">
+                  此场景还没有 draft。点击右上「生成当前场景」，ContextBuilder
+                  会装配 7 段优先级上下文交给模型。
+                </p>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <BibleBlock title="场景目标" text={activeScene.goal || "—"} />
+                  <BibleBlock title="微冲突" text={activeScene.conflict || "—"} />
+                  <BibleBlock
+                    title="情绪变化"
+                    text={`${activeScene.emotion_start} → ${activeScene.emotion_end}`}
+                  />
+                  <BibleBlock title="钩子" text={activeScene.hook || "—"} />
+                </div>
+              </div>
+            ) : (
+              <pre className="max-h-[480px] overflow-y-auto whitespace-pre-wrap rounded-2xl bg-slate-50 p-4 text-sm leading-7 text-slate-800">
+                {latestDraft.content}
+              </pre>
+            )}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Context / Job</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <div>
+              <p className="font-bold text-slate-950">ContextBuilder v1</p>
+              <p className="text-xs text-slate-500">
+                合并 bible / chapter / scene / 角色 / 世界规则 / plot
+                / 最近摘要后送给 ModelGateway。
+              </p>
+            </div>
+            {latestSceneJob ? (
+              <div className="space-y-1">
+                <p className="font-bold text-slate-950">最近任务</p>
+                <p className="text-xs text-slate-500">
+                  类型：{latestSceneJob.job_type}
+                </p>
+                <p className="text-xs text-slate-500">
+                  额度：{latestSceneJob.consumed_quota}/
+                  {latestSceneJob.reserved_quota}
+                </p>
+                <p className="text-xs text-slate-500">
+                  Workflow：{latestSceneJob.workflow_id ?? "—"}
+                </p>
+              </div>
+            ) : null}
+            {versions.length > 1 ? (
+              <div>
+                <p className="font-bold text-slate-950">版本链</p>
+                <p className="text-xs text-slate-500">
+                  共 {versions.length} 个 draft，当前显示最新。版本面板将在
+                  Phase B 接入。
+                </p>
+              </div>
+            ) : null}
           </CardContent>
         </Card>
       </div>

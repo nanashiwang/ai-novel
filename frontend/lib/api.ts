@@ -163,6 +163,10 @@ export type GenerateScenePlanPayload = {
   force_regenerate?: boolean;
 };
 
+export type WriteScenePayload = {
+  target_words?: number;
+};
+
 export const projectsApi = {
   list: () => http.get<Project[]>("/projects"),
   get: (id: string) => http.get<Project>(`/projects/${id}`),
@@ -180,6 +184,15 @@ export const projectsApi = {
   ) =>
     http.post<GenerationJob>(
       `/projects/${projectId}/chapters/${chapterId}/scenes/generate`,
+      payload,
+    ),
+  writeScene: (
+    projectId: string,
+    sceneId: string,
+    payload: WriteScenePayload = {},
+  ) =>
+    http.post<GenerationJob>(
+      `/projects/${projectId}/scenes/${sceneId}/write`,
       payload,
     ),
   generateFullNovel: (id: string, estimate_words: number) =>
@@ -309,6 +322,30 @@ export const chaptersApi = {
 export const scenesApi = {
   list: (projectId: string, chapterId?: string) =>
     http.get<Scene[]>(`/projects/${projectId}/scenes`, { chapter_id: chapterId }),
+};
+
+// 与 backend/app/api/project_extra.py::DraftVersionResponse 对齐
+export type DraftVersion = {
+  id: string;
+  organization_id: string;
+  project_id: string;
+  chapter_id: string | null;
+  scene_id: string | null;
+  version_type: string;
+  content: string;
+  word_count: number;
+  status: string;
+  parent_version_id: string | null;
+  created_by: string;
+};
+
+export const versionsApi = {
+  // 按 scene_id 过滤；不传时返回项目全部 draft_versions。
+  // base list 默认按 created_at desc 排序，所以第一个是最新。
+  list: (projectId: string, params: { scene_id?: string; chapter_id?: string } = {}) =>
+    http.get<DraftVersion[]>(`/projects/${projectId}/versions`, params),
+  get: (projectId: string, versionId: string) =>
+    http.get<DraftVersion>(`/projects/${projectId}/versions/${versionId}`),
 };
 export const worldItemsApi = {
   list: (projectId: string) =>
