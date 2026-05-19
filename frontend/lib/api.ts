@@ -220,6 +220,9 @@ export type GenerationJob = {
   // 用户提交时的原始参数；前端通过 input_payload.chapter_id 等
   // 在 jobs 列表里精确匹配某章/某 scene 的任务。
   input_payload?: Record<string, unknown> | null;
+  // activity 写入的执行结果；scene_writing 任务会包含 context_summary 等
+  // ContextBuilder Inspector 所需信息。
+  output_payload?: Record<string, unknown> | null;
 };
 
 export const jobsApi = {
@@ -358,6 +361,8 @@ export const versionsApi = {
     http.get<DraftVersion>(`/projects/${projectId}/versions/${versionId}`),
   create: (projectId: string, payload: DraftVersionCreate) =>
     http.post<DraftVersion>(`/projects/${projectId}/versions`, payload),
+  delete: (projectId: string, versionId: string) =>
+    http.delete<void>(`/projects/${projectId}/versions/${versionId}`),
 };
 export const worldItemsApi = {
   list: (projectId: string) =>

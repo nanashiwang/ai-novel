@@ -27,6 +27,9 @@ class GenerationJobResponse(APIModel):
     # 前端用于按章节区分 scene_plan 任务等场景。仅含用户输入字段，
     # 不包含敏感配置。
     input_payload: dict[str, Any] | None = None
+    # activity 执行后写回的结果（scene_id / draft_id / context_summary 等）。
+    # 用于 Sprint 4-B2 的 ContextBuilder Inspector 等"看任务做了什么"的视图。
+    output_payload: dict[str, Any] | None = None
 
 
 class ModelCallResponse(APIModel):

@@ -14,17 +14,19 @@ import {
   CheckCircle2,
   Download,
   FileArchive,
+  GitCompare,
   Layers3,
   Network,
   RefreshCw,
   Sparkles,
   TimerReset,
+  Trash2,
   Users,
   Wand2,
   XCircle,
 } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { ProjectHeader } from "./project-frame";
@@ -34,6 +36,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/data-table";
 import { ProgressBar } from "@/components/ui/progress";
+import { DiffView } from "@/components/ui/diff-view";
 import { SceneEditor } from "@/components/ui/scene-editor";
 import {
   chaptersApi,
@@ -713,7 +716,73 @@ export function OutlinePage({ projectId }: { projectId: string }) {
 // =========== 写作工作台 ===========
 
 /**
- * Editor + dirty 检测 + 保存按钮的子组件。
+ * ContextBuilder Inspector 显示的单段摘要结构。
+ * 与 backend/app/workflows/activities.py::run_scene_writing 返回的
+ * output_payload.context_summary 对齐。
+ */
+type ContextSummaryEntry = {
+  label: string;
+  trusted: boolean;
+  token_budget: number;
+  estimated_tokens: number;
+  truncated: boolean;
+  preview: string;
+};
+
+function ContextInspector({
+  summary,
+}: {
+  summary?: {
+    context_summary?: ContextSummaryEntry[];
+    context_total_tokens?: number;
+  } | null;
+}) {
+  const segments = summary?.context_summary ?? [];
+  if (segments.length === 0) return null;
+  return (
+    <div className="space-y-2 border-t border-slate-100 pt-3 text-xs text-slate-500">
+      <div className="flex items-center justify-between">
+        <p className="font-bold text-slate-950">ContextBuilder Inspector</p>
+        <span className="text-xs">
+          总 tokens：{summary?.context_total_tokens ?? 0}
+        </span>
+      </div>
+      {segments.map((seg) => (
+        <details key={seg.label} className="rounded-md border border-slate-100">
+          <summary className="cursor-pointer px-2 py-1">
+            <span className="font-mono text-slate-700">{seg.label}</span>
+            <span className="ml-2 text-slate-400">
+              {seg.estimated_tokens}/{seg.token_budget}t
+            </span>
+            {!seg.trusted ? (
+              <Badge tone="amber" className="ml-2">
+                untrusted
+              </Badge>
+            ) : null}
+            {seg.truncated ? (
+              <Badge tone="rose" className="ml-2">
+                truncated
+              </Badge>
+            ) : null}
+          </summary>
+          <pre className="m-0 whitespace-pre-wrap px-2 pb-2 text-xs text-slate-500">
+            {seg.preview}
+            {seg.truncated ? "…" : ""}
+          </pre>
+        </details>
+      ))}
+    </div>
+  );
+}
+
+function labelForVersion(versions: DraftVersion[], versionId: string): string {
+  const idx = versions.findIndex((v) => v.id === versionId);
+  if (idx < 0) return "未知版本";
+  return `第 ${versions.length - idx} 版`;
+}
+
+/**
+ * Editor + dirty 检测 + 保存按钮 + 自动保存（debounce 15s）的子组件。
  *
  * 父组件用 `key={version.id}` 控制 remount，避免在 useEffect 中直接 setState
  * 同步 props → state（React 19 的 set-state-in-effect 反模式）。
@@ -723,20 +792,42 @@ function SceneEditorCard({
   editable,
   isSaving,
   onSave,
+  onAutoSave,
 }: {
   version: DraftVersion;
   editable: boolean;
   isSaving: boolean;
   onSave: (content: string) => void;
+  onAutoSave?: (content: string) => void;
 }) {
   const [content, setContent] = useState(version.content);
   const isDirty = content !== version.content;
+
+  // 用 ref 持有最新 onAutoSave 引用，避免 useCallback 链反复重置 debounce timer。
+  // ref 赋值在 useEffect 内完成以符合 React 19 的 refs-in-render 规则。
+  const autoSaveRef = useRef(onAutoSave);
+  useEffect(() => {
+    autoSaveRef.current = onAutoSave;
+  }, [onAutoSave]);
+
+  // 自动保存：editable 且 dirty 时启动 15s debounce；任意编辑动作都会重置 timer。
+  useEffect(() => {
+    if (!editable || !isDirty) return;
+    const timer = setTimeout(() => {
+      autoSaveRef.current?.(content);
+    }, 15_000);
+    return () => clearTimeout(timer);
+  }, [content, editable, isDirty]);
+
   return (
     <>
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2 text-xs text-slate-500">
           {isDirty ? <Badge tone="violet">未保存</Badge> : null}
           {!editable ? <Badge tone="amber">预览历史版本</Badge> : null}
+          {editable && isDirty && onAutoSave ? (
+            <span className="text-xs text-slate-400">15s 后自动保存</span>
+          ) : null}
         </div>
         {editable ? (
           <Button
@@ -807,6 +898,13 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
       : undefined) ?? latestDraft;
   const isShowingLatest =
     !displayedVersion || displayedVersion.id === latestDraft?.id;
+
+  // 对比模式：与当前 displayedVersion 对比的另一个版本 id。null = 普通编辑模式。
+  const [compareWithId, setCompareWithId] = useState<string | null>(null);
+  const compareWithVersion = compareWithId
+    ? versions.find((v) => v.id === compareWithId)
+    : undefined;
+  const isComparing = !!compareWithVersion;
 
   // 当前 scene 的 write_scene 任务（按 input_payload.scene_id 过滤）
   const { data: jobs = [] } = useQuery({
@@ -879,6 +977,47 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
     },
   });
 
+  const autoSave = useMutation({
+    // autosave 默默成功；与手动保存的差别：不弹 toast、version_type=autosave。
+    mutationFn: (content: string) => {
+      if (!activeScene || !activeChapter) {
+        return Promise.reject(new Error("no_active_scene"));
+      }
+      return versionsApi.create(projectId, {
+        chapter_id: activeChapter.id,
+        scene_id: activeScene.id,
+        version_type: "autosave",
+        content,
+        word_count: content.length,
+        status: "draft",
+        parent_version_id: displayedVersion?.id ?? null,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: versionsKey });
+      setDisplayedVersionId(null);
+    },
+    onError: (e: unknown) => {
+      // autosave 失败不打断用户，仅 console.warn
+      console.warn("autosave failed", e);
+    },
+  });
+
+  const deleteVersion = useMutation({
+    mutationFn: (versionId: string) => versionsApi.delete(projectId, versionId),
+    onSuccess: (_, versionId) => {
+      toast.success("已删除该版本");
+      // 若当前预览的就是被删的版本，自动回到最新版
+      if (displayedVersionId === versionId) {
+        setDisplayedVersionId(null);
+      }
+      queryClient.invalidateQueries({ queryKey: versionsKey });
+    },
+    onError: (e: unknown) => {
+      toast.error(e instanceof ApiError ? e.message : "删除失败");
+    },
+  });
+
   return (
     <div className="space-y-4">
       <ProjectHeader projectId={projectId} />
@@ -918,6 +1057,7 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
                       setActiveChapterId(chapter.id);
                       setActiveSceneId(null);
                       setDisplayedVersionId(null);
+                      setCompareWithId(null);
                     }}
                     className={`w-full rounded-xl border p-3 text-left text-sm ${
                       activeChapter?.id === chapter.id
@@ -938,6 +1078,7 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
                           onClick={() => {
                             setActiveSceneId(scene.id);
                             setDisplayedVersionId(null);
+                            setCompareWithId(null);
                           }}
                           className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left text-xs ${
                             activeScene?.id === scene.id
@@ -1003,6 +1144,33 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
                   <BibleBlock title="钩子" text={activeScene.hook || "—"} />
                 </div>
               </div>
+            ) : isComparing && compareWithVersion ? (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-xs text-slate-500">
+                    对比：
+                    <span className="font-bold text-slate-700">
+                      {labelForVersion(versions, compareWithVersion.id)}
+                    </span>
+                    {" → "}
+                    <span className="font-bold text-slate-950">
+                      {labelForVersion(versions, displayedVersion.id)}
+                    </span>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    onClick={() => setCompareWithId(null)}
+                  >
+                    退出对比
+                  </Button>
+                </div>
+                <DiffView
+                  oldContent={compareWithVersion.content}
+                  newContent={displayedVersion.content}
+                  oldLabel={labelForVersion(versions, compareWithVersion.id)}
+                  newLabel={labelForVersion(versions, displayedVersion.id)}
+                />
+              </div>
             ) : (
               <SceneEditorCard
                 key={displayedVersion.id}
@@ -1010,6 +1178,7 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
                 editable={isShowingLatest}
                 isSaving={saveVersion.isPending}
                 onSave={(content) => saveVersion.mutate(content)}
+                onAutoSave={(content) => autoSave.mutate(content)}
               />
             )}
           </CardContent>
@@ -1026,33 +1195,67 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
               <>
                 {versions.map((v, idx) => {
                   const isActive = displayedVersion?.id === v.id;
+                  const isLatest = v.id === latestDraft?.id;
                   return (
-                    <button
+                    <div
                       key={v.id}
-                      type="button"
-                      onClick={() =>
-                        setDisplayedVersionId(
-                          v.id === latestDraft?.id ? null : v.id,
-                        )
-                      }
-                      className={`w-full rounded-xl border p-3 text-left text-xs ${
+                      className={`group relative rounded-xl border ${
                         isActive
                           ? "border-indigo-300 bg-indigo-50"
                           : "border-slate-200 hover:bg-slate-50"
                       }`}
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-bold text-slate-950">
-                          第 {versions.length - idx} 版
-                        </span>
-                        <Badge tone={v.version_type === "user" ? "violet" : "blue"}>
-                          {v.version_type}
-                        </Badge>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setDisplayedVersionId(isLatest ? null : v.id)
+                        }
+                        className="w-full p-3 text-left text-xs"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-bold text-slate-950">
+                            第 {versions.length - idx} 版
+                          </span>
+                          <Badge tone={v.version_type === "user" ? "violet" : "blue"}>
+                            {v.version_type}
+                          </Badge>
+                        </div>
+                        <p className="mt-1 text-slate-500">
+                          {v.word_count} 字 · {v.status}
+                        </p>
+                      </button>
+                      <div className="absolute right-2 top-2 flex gap-1">
+                        {!isActive ? (
+                          <button
+                            type="button"
+                            aria-label="与当前版本对比"
+                            onClick={() => setCompareWithId(v.id)}
+                            disabled={!displayedVersion}
+                            className="rounded-md p-1 text-slate-400 opacity-0 transition group-hover:opacity-100 hover:bg-indigo-50 hover:text-indigo-600"
+                          >
+                            <GitCompare className="size-3.5" />
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          aria-label="删除版本"
+                          onClick={() => {
+                            // 简单二次确认；如果业务要更严肃可改 dialog
+                            if (
+                              window.confirm(
+                                `确定删除第 ${versions.length - idx} 版？此操作不可恢复。`,
+                              )
+                            ) {
+                              deleteVersion.mutate(v.id);
+                            }
+                          }}
+                          disabled={deleteVersion.isPending}
+                          className="rounded-md p-1 text-slate-400 opacity-0 transition group-hover:opacity-100 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-30"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
                       </div>
-                      <p className="mt-1 text-slate-500">
-                        {v.word_count} 字 · {v.status}
-                      </p>
-                    </button>
+                    </div>
                   );
                 })}
                 {!isShowingLatest ? (
@@ -1075,6 +1278,14 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
                 <p>Workflow：{latestSceneJob.workflow_id ?? "—"}</p>
               </div>
             ) : null}
+            <ContextInspector
+              summary={
+                (latestSceneJob?.output_payload as
+                  | { context_summary?: ContextSummaryEntry[]; context_total_tokens?: number }
+                  | null
+                  | undefined)
+              }
+            />
           </CardContent>
         </Card>
       </div>

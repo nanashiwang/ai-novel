@@ -170,6 +170,28 @@ async def get_version(
     return version
 
 
+@router.delete("/versions/{version_id}", status_code=204)
+async def delete_version(
+    project_id: str,
+    version_id: str,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    """删除单个 draft_version。
+
+    场景：用户拒绝 AI 重生成的草稿、清理 autosave 噪音。
+    多租户隔离：通过 organization_id 与 project_id 双重校验。
+    """
+    require_permission(user, "scene:write", tenant)
+    repo = DraftVersionRepository(db)
+    version = await repo.get(version_id, organization_id=tenant.organization_id)
+    if not version or version.project_id != project_id:
+        raise NotFoundError("version_not_found")
+    await repo.delete(version_id, organization_id=tenant.organization_id)
+    await db.commit()
+
+
 # --- Exports ---
 class ExportRequest(APIModel):
     export_type: str  # markdown / txt / docx / epub / pdf

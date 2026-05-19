@@ -829,11 +829,38 @@ async def run_scene_writing(job: dict[str, Any]) -> dict[str, Any]:
         # 与 generate_chapter_scene_cards 对称：单 scene 写作自身结算 quota
         await _settle_job_usage(session, job_row, amount=job_row.reserved_quota)
 
+        # ContextBuilder Inspector：把本次喂给模型的上下文摘要存到 output_payload。
+        # 这里二次 build 一份相同上下文（纯 db 查询，~10ms），代价是避免侵入
+        # writer 的返回类型与现有调用方。前端从 jobs API 直接读 output_payload。
+        ctx_inspector = await context_builder.build_for_scene_writing(
+            session,
+            project=project,
+            spec=spec,
+            chapter=chapter,
+            scene=scene,
+            previous_excerpt=previous_excerpt,
+        )
+        context_summary = [
+            {
+                "label": seg.label,
+                "trusted": seg.trusted,
+                "token_budget": seg.token_budget,
+                "estimated_tokens": seg.estimated_tokens,
+                "truncated": seg.truncated,
+                # 限定预览长度，避免 output_payload 撑大
+                "preview": seg.content[:240],
+            }
+            for seg in ctx_inspector.segments
+            if seg.content
+        ]
+
         result = {
             "scene_id": scene.id,
             "draft_id": saved.id,
             "word_count": word_count,
             "parent_version_id": parent_version_id,
+            "context_summary": context_summary,
+            "context_total_tokens": ctx_inspector.total_tokens,
         }
         job_row.output_payload = result
         return result
