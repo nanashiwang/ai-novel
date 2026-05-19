@@ -89,8 +89,16 @@ def _contract_constraints(bible) -> list[str]:
 
 
 def _payload_int(payload: dict[str, Any], key: str, default: int) -> int:
+    """从 payload 取 int 字段，None/缺失/无法转换时回落到 default。
+
+    与 `payload.get(key) or default` 不同：用户显式传入 0 时返回 0，而不会
+    被 falsy 判定替换成 default。
+    """
+    value = payload.get(key)
+    if value is None:
+        return default
     try:
-        return int(payload.get(key) or default)
+        return int(value)
     except (TypeError, ValueError):
         return default
 
