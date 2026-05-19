@@ -137,6 +137,32 @@ export type GenerateOutlinePayload = {
   force_regenerate?: boolean;
 };
 
+// 与 backend/app/schemas/story_generation.py::ScenePlanItem 对齐
+export type Scene = {
+  id: string;
+  project_id: string;
+  chapter_id: string;
+  scene_index: number;
+  title: string;
+  time_marker: string;
+  location: string;
+  characters: string[];
+  goal: string;
+  conflict: string;
+  emotion_start: string;
+  emotion_end: string;
+  reveal: string;
+  hook: string;
+  status: string;
+};
+
+export type GenerateScenePlanPayload = {
+  scenes_per_chapter?: number;
+  expected_words?: number;
+  estimate_words?: number;
+  force_regenerate?: boolean;
+};
+
 export const projectsApi = {
   list: () => http.get<Project[]>("/projects"),
   get: (id: string) => http.get<Project>(`/projects/${id}`),
@@ -147,6 +173,15 @@ export const projectsApi = {
     http.post<GenerationJob>(`/projects/${id}/bible/generate`, payload),
   generateOutline: (id: string, payload: GenerateOutlinePayload = {}) =>
     http.post<GenerationJob>(`/projects/${id}/outline/generate`, payload),
+  generateScenePlan: (
+    projectId: string,
+    chapterId: string,
+    payload: GenerateScenePlanPayload = {},
+  ) =>
+    http.post<GenerationJob>(
+      `/projects/${projectId}/chapters/${chapterId}/scenes/generate`,
+      payload,
+    ),
   generateFullNovel: (id: string, estimate_words: number) =>
     http.post<GenerationJob>(`/projects/${id}/generate-full-novel`, { estimate_words }),
 };
@@ -169,6 +204,9 @@ export type GenerationJob = {
   finished_at: string | null;
   created_at: string;
   updated_at: string;
+  // 用户提交时的原始参数；前端通过 input_payload.chapter_id 等
+  // 在 jobs 列表里精确匹配某章/某 scene 的任务。
+  input_payload?: Record<string, unknown> | null;
 };
 
 export const jobsApi = {
@@ -270,7 +308,7 @@ export const chaptersApi = {
 };
 export const scenesApi = {
   list: (projectId: string, chapterId?: string) =>
-    http.get<unknown[]>(`/projects/${projectId}/scenes`, { chapter_id: chapterId }),
+    http.get<Scene[]>(`/projects/${projectId}/scenes`, { chapter_id: chapterId }),
 };
 export const worldItemsApi = {
   list: (projectId: string) =>

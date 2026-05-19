@@ -64,15 +64,6 @@ type Character = {
   secret: string;
 };
 
-type Scene = {
-  id: string;
-  scene_index: number;
-  title: string;
-  location: string;
-  goal: string;
-  status: string;
-};
-
 type WorldItem = {
   id: string;
   type: string;
@@ -488,13 +479,20 @@ export function OutlinePage({ projectId }: { projectId: string }) {
     queryFn: () => jobsApi.list() as Promise<GenerationJob[]>,
     refetchInterval: (query) => {
       const list = (query.state.data as GenerationJob[] | undefined) ?? [];
-      const latest = list.find(
-        (j) => j.project_id === projectId && j.job_type === "generate_outline",
+      const projectActive = list.find(
+        (j) =>
+          j.project_id === projectId &&
+          (j.job_type === "generate_outline" || j.job_type === "generate_scene_plan") &&
+          (j.status === "queued" || j.status === "running"),
       );
-      const waitingForJob = latest?.status === "queued" || latest?.status === "running";
       const waitingForChapters =
-        latest?.status === "succeeded" && chapters.length === 0;
-      return waitingForJob || waitingForChapters ? 1500 : false;
+        list.some(
+          (j) =>
+            j.project_id === projectId &&
+            j.job_type === "generate_outline" &&
+            j.status === "succeeded",
+        ) && chapters.length === 0;
+      return projectActive || waitingForChapters ? 1500 : false;
     },
   });
   const latestJob = jobs.find(
@@ -522,10 +520,44 @@ export function OutlinePage({ projectId }: { projectId: string }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const active = chapters.find((c) => c.id === activeId) ?? chapters[0];
 
+  // 当前激活章节的 scene_plan 任务（按 input_payload.chapter_id 精确匹配）
+  const latestSceneJob = jobs.find(
+    (j) =>
+      j.project_id === projectId &&
+      j.job_type === "generate_scene_plan" &&
+      (j.input_payload as { chapter_id?: string } | null | undefined)?.chapter_id ===
+        active?.id,
+  );
+  const isGeneratingScenes =
+    latestSceneJob?.status === "queued" || latestSceneJob?.status === "running";
+
+  const scenesKey = useScopedKey("project", projectId, "scenes", active?.id);
   const { data: scenes = [] } = useQuery({
-    queryKey: useScopedKey("project", projectId, "scenes", active?.id),
-    queryFn: () => scenesApi.list(projectId, active?.id) as Promise<Scene[]>,
+    queryKey: scenesKey,
+    queryFn: () => scenesApi.list(projectId, active?.id),
     enabled: !!active,
+  });
+
+  const generateScenes = useMutation({
+    mutationFn: () => {
+      if (!active) {
+        return Promise.reject(new Error("no_active_chapter"));
+      }
+      return projectsApi.generateScenePlan(projectId, active.id, {
+        scenes_per_chapter: 3,
+        expected_words: 1500,
+        estimate_words: 2000,
+        force_regenerate: scenes.length > 0,
+      });
+    },
+    onSuccess: () => {
+      toast.success("已提交场景计划生成任务");
+      queryClient.invalidateQueries({ queryKey: scenesKey });
+      queryClient.invalidateQueries({ queryKey: jobsKey });
+    },
+    onError: (e: unknown) => {
+      toast.error(e instanceof ApiError ? e.message : "提交失败");
+    },
   });
 
   return (
@@ -647,11 +679,25 @@ export function OutlinePage({ projectId }: { projectId: string }) {
                 <div>
                   <p className="font-bold text-slate-950">下一步</p>
                   <p className="text-sm text-slate-500">
-                    场景生成会创建 generation_job 并预留额度。
+                    场景生成会创建 generation_job 并预留额度（Sprint 3 闭环）。
                   </p>
+                  {latestSceneJob ? (
+                    <p className="mt-1 text-xs text-slate-500">
+                      最近任务：{latestSceneJob.status} · 额度{" "}
+                      {latestSceneJob.consumed_quota}/{latestSceneJob.reserved_quota}
+                    </p>
+                  ) : null}
                 </div>
-                <Button onClick={() => toast.info("场景生成接口待接入")}>
-                  <Wand2 className="size-4" /> 生成场景正文
+                <Button
+                  onClick={() => generateScenes.mutate()}
+                  disabled={generateScenes.isPending || isGeneratingScenes || !active}
+                >
+                  {isGeneratingScenes ? (
+                    <RefreshCw className="size-4 animate-spin" />
+                  ) : (
+                    <Wand2 className="size-4" />
+                  )}
+                  {scenes.length > 0 ? "重新生成场景计划" : "生成场景计划"}
                 </Button>
               </div>
             </CardContent>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from .common import APIModel
 
@@ -22,6 +23,10 @@ class GenerationJobResponse(APIModel):
     finished_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    # 用户提交时的参数（chapter_id / topic / scenes_per_chapter 等），
+    # 前端用于按章节区分 scene_plan 任务等场景。仅含用户输入字段，
+    # 不包含敏感配置。
+    input_payload: dict[str, Any] | None = None
 
 
 class ModelCallResponse(APIModel):
