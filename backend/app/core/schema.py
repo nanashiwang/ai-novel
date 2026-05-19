@@ -93,6 +93,32 @@ _POSTGRES_SCHEMA_FIXES = [
     ),
     "ALTER TABLE export_files ADD COLUMN IF NOT EXISTS content TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE export_files ADD COLUMN IF NOT EXISTS file_size INTEGER NOT NULL DEFAULT 0",
+    (
+        "ALTER TABLE export_files ADD COLUMN IF NOT EXISTS "
+        "updated_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+    ),
+    "ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS event_metadata JSONB",
+    """
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'usage_events'
+          AND column_name = 'metadata'
+      ) THEN
+        EXECUTE 'UPDATE usage_events SET event_metadata = metadata WHERE event_metadata IS NULL';
+      END IF;
+    END $$;
+    """,
+    (
+        "ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS "
+        "updated_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+    ),
+    (
+        "ALTER TABLE admin_audit_logs ADD COLUMN IF NOT EXISTS "
+        "updated_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+    ),
     "ALTER TABLE generation_jobs ADD COLUMN IF NOT EXISTS dedupe_key TEXT",
     (
         "CREATE INDEX IF NOT EXISTS ix_generation_jobs_dedupe "

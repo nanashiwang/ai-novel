@@ -349,8 +349,9 @@ CREATE TABLE IF NOT EXISTS usage_events (
   event_type TEXT NOT NULL,
   amount INTEGER NOT NULL,
   unit TEXT NOT NULL,
-  metadata JSONB,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  event_metadata JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS model_calls (
@@ -415,7 +416,8 @@ CREATE TABLE IF NOT EXISTS export_files (
   created_by TEXT NOT NULL REFERENCES users(id),
   content TEXT NOT NULL DEFAULT '',
   file_size INTEGER NOT NULL DEFAULT 0,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS admin_audit_logs (
@@ -429,7 +431,8 @@ CREATE TABLE IF NOT EXISTS admin_audit_logs (
   after_data JSONB,
   ip_address TEXT,
   user_agent TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS organization_invitations (
