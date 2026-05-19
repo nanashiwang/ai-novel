@@ -10,6 +10,7 @@ from fastapi import APIRouter, Cookie, HTTPException, Request, Response, status
 
 from app.api.deps import CurrentUserDep, DbDep, TenantDep
 from app.core.config import get_settings
+from app.core.logging import logger
 from app.core.rate_limit import limiter
 from app.schemas.auth import (
     CurrentUserResponse,
@@ -74,8 +75,13 @@ async def register(
                 user_email=token_pair.user.email,
                 token=payload.invitation_token,
             )
-    except Exception:  # noqa: BLE001 — 邀请处理失败不阻断注册
-        pass
+    except Exception:  # noqa: BLE001 — 邀请处理失败不阻断注册，但需可观测
+        logger.exception(
+            "invitation_consume_failed",
+            user_id=token_pair.user.id,
+            user_email=token_pair.user.email,
+            has_token=bool(payload.invitation_token),
+        )
     await db.commit()
     _set_refresh_cookie(response, token_pair)
     return TokenResponse(
