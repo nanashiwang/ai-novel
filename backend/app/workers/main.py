@@ -14,6 +14,7 @@ import sys
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.workflows.activities import ALL_ACTIVITIES
+from app.workflows.generate_bible import GenerateBibleWorkflow
 from app.workflows.generate_full_novel import GenerateFullNovelWorkflow
 from app.workflows.write_scene import WriteSceneWorkflow
 
@@ -40,7 +41,7 @@ async def main() -> None:
     worker = Worker(
         client,
         task_queue="novelflow-generation",
-        workflows=[GenerateFullNovelWorkflow, WriteSceneWorkflow],
+        workflows=[GenerateBibleWorkflow, GenerateFullNovelWorkflow, WriteSceneWorkflow],
         activities=ALL_ACTIVITIES,
     )
     _logger.info("temporal_worker_started", extra={"task_queue": "novelflow-generation"})

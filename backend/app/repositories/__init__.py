@@ -19,6 +19,7 @@ from app.models.memory import MemoryEntry
 from app.models.model_call import ModelCall
 from app.models.organization import Organization, OrganizationMember
 from app.models.plan import Plan, PlanFeature
+from app.models.plot_thread import PlotThread
 from app.models.project import NovelSpec, Project
 from app.models.quota import QuotaBalance, QuotaReservation
 from app.models.scene import Scene
@@ -62,6 +63,11 @@ class PlanFeatureRepository(BaseRepository[PlanFeature]):
 class ProjectRepository(BaseRepository[Project]):
     model = Project
     id_prefix = "project"
+
+
+class PlotThreadRepository(BaseRepository[PlotThread]):
+    model = PlotThread
+    id_prefix = "thread"
 
 
 class NovelSpecRepository(BaseRepository[NovelSpec]):
@@ -185,6 +191,7 @@ __all__ = [
     "OrganizationRepository",
     "PlanFeatureRepository",
     "PlanRepository",
+    "PlotThreadRepository",
     "ProjectRepository",
     "QuotaBalanceRepository",
     "QuotaReservationRepository",

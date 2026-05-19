@@ -62,13 +62,70 @@ export type ProjectCreate = {
   style?: string;
 };
 
+export type BibleSpec = {
+  id: string;
+  premise: string;
+  theme: string;
+  genre: string;
+  tone: string;
+  target_reader: string;
+  narrative_pov: string;
+  style_guide: string;
+  constraints: string[];
+};
+
+export type BibleCharacter = {
+  id: string;
+  name: string;
+  role: string;
+  description: string;
+  motivation: string;
+  arc: string;
+};
+
+export type BibleWorldItem = {
+  id: string;
+  type: string;
+  name: string;
+  description: string;
+  importance: string;
+  is_hard_rule: boolean;
+};
+
+export type BiblePlotThread = {
+  id: string;
+  title: string;
+  thread_type: string;
+  description: string;
+  status: string;
+};
+
+export type Bible = {
+  project_id: string;
+  project_status: string;
+  spec: BibleSpec | null;
+  characters: BibleCharacter[];
+  world_items: BibleWorldItem[];
+  plot_threads: BiblePlotThread[];
+  latest_job: GenerationJob | null;
+};
+
+export type GenerateBiblePayload = {
+  estimate_words?: number;
+  topic?: string;
+  force_regenerate?: boolean;
+};
+
 export const projectsApi = {
   list: () => http.get<Project[]>("/projects"),
   get: (id: string) => http.get<Project>(`/projects/${id}`),
   create: (payload: ProjectCreate) => http.post<Project>("/projects", payload),
   delete: (id: string) => http.delete<void>(`/projects/${id}`),
+  getBible: (id: string) => http.get<Bible>(`/projects/${id}/bible`),
+  generateBible: (id: string, payload: GenerateBiblePayload) =>
+    http.post<GenerationJob>(`/projects/${id}/bible/generate`, payload),
   generateFullNovel: (id: string, estimate_words: number) =>
-    http.post(`/projects/${id}/generate-full-novel`, { estimate_words }),
+    http.post<GenerationJob>(`/projects/${id}/generate-full-novel`, { estimate_words }),
 };
 
 // ----- Generation Jobs -----

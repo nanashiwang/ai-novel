@@ -26,8 +26,18 @@ import {
 export const studioNav = [
   { label: "工作台", href: "/studio", icon: Home },
   { label: "项目", href: "/studio/projects", icon: BriefcaseBusiness },
-  { label: "写作", href: "/studio/projects/demo-project/write", icon: PenLine },
-  { label: "任务", href: "/studio/projects/demo-project/jobs", icon: ListTree },
+  {
+    label: "写作",
+    href: "/studio/projects/demo-project/write",
+    icon: PenLine,
+    activePatterns: [/^\/studio\/projects\/[^/]+\/write(?:\/.*)?$/],
+  },
+  {
+    label: "任务",
+    href: "/studio/projects/demo-project/jobs",
+    icon: ListTree,
+    activePatterns: [/^\/studio\/projects\/[^/]+\/jobs(?:\/.*)?$/],
+  },
   { label: "用量 / 套餐", href: "/studio/usage", icon: WalletCards },
   { label: "账号", href: "/studio/account", icon: Users },
 ];

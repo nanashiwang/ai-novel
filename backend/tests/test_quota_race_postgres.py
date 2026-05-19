@@ -13,7 +13,9 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.core.exceptions import QuotaInsufficient
 from app.core.tenancy import TenantContext
 from app.models.common import new_id
+from app.models.generation_job import GenerationJob
 from app.models.organization import Organization, OrganizationMember
+from app.models.project import Project
 from app.models.quota import QuotaBalance
 from app.models.user import User
 from app.services.quota.service import quota_service
@@ -29,6 +31,7 @@ async def test_reserve_quota_under_real_concurrency(pg_engine):
     async with Session() as session:
         admin = User(id="user_x", email="x@example.com", password_hash="x", display_name="x")
         session.add(admin)
+        await session.flush()
         org = Organization(
             id="org_x",
             name="x",
@@ -37,8 +40,34 @@ async def test_reserve_quota_under_real_concurrency(pg_engine):
             plan_code="Pro",
         )
         session.add(org)
+        await session.flush()
         session.add(
             OrganizationMember(id=new_id("mem"), organization_id=org.id, user_id=admin.id, role="owner")
+        )
+        project = Project(
+            id="project_x",
+            organization_id=org.id,
+            created_by=admin.id,
+            title="x",
+        )
+        session.add(project)
+        await session.flush()
+        session.add_all(
+            [
+                GenerationJob(
+                    id=f"job_{index}",
+                    organization_id=org.id,
+                    user_id=admin.id,
+                    project_id=project.id,
+                    job_type="quota_test",
+                    status="queued",
+                    priority="queue_pro",
+                    plan_code="Pro",
+                    reserved_quota=0,
+                    consumed_quota=0,
+                )
+                for index in range(20)
+            ]
         )
         now = datetime.now(timezone.utc)
         session.add(

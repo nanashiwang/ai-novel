@@ -10,6 +10,7 @@ from .memory import MemoryEntry
 from .model_call import ModelCall
 from .organization import Organization, OrganizationMember
 from .plan import Plan, PlanFeature
+from .plot_thread import PlotThread
 from .project import NovelSpec, Project
 from .quota import QuotaBalance, QuotaReservation
 from .scene import Scene
@@ -34,6 +35,7 @@ __all__ = [
     "OrganizationMember",
     "Plan",
     "PlanFeature",
+    "PlotThread",
     "Project",
     "QuotaBalance",
     "QuotaReservation",

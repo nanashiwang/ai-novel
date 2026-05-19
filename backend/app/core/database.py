@@ -35,7 +35,9 @@ def _run_after_commit_tasks(session) -> None:
     from app.workflows.starter import workflow_starter  # noqa: PLC0415
 
     for task_type, job_id in tasks:
-        if task_type == "full_novel":
+        if task_type == "generate_bible":
+            workflow_starter.run_local_generate_bible(job_id)
+        elif task_type == "full_novel":
             workflow_starter.run_local_generate_full_novel(job_id)
         elif task_type == "scene_write":
             workflow_starter.run_local_write_scene(job_id)

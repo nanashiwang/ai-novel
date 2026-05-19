@@ -53,6 +53,36 @@ class _MockProvider:
         schema: dict[str, Any],
         temperature: float,
     ) -> dict[str, Any]:
+        if "StoryBibleContract" in str(schema) or "main_characters" in schema.get("properties", {}):
+            return {
+                "premise": "一名创作者在失控的记忆城市中追查真相。",
+                "theme": "记忆、选择与自我救赎",
+                "genre": "悬疑幻想",
+                "tone": "冷峻、克制、逐步升温",
+                "target_reader": "中文长篇类型小说读者",
+                "narrative_pov": "第三人称有限视角",
+                "style_guide": "画面清晰，冲突明确，每章保留悬念钩子。",
+                "constraints": ["保持世界规则前后一致", "避免无铺垫反转"],
+                "world_rules": ["记忆可以被交易，但会留下情绪残影", "城市档案馆记录每一次被篡改的过去"],
+                "main_characters": [
+                    {
+                        "name": "林澈",
+                        "role": "protagonist",
+                        "description": "失去部分记忆的档案修复师。",
+                        "motivation": "找回妹妹失踪当晚的真相。",
+                        "arc": "从逃避过去到主动承担真相代价。",
+                    },
+                    {
+                        "name": "沈砚",
+                        "role": "antagonist",
+                        "description": "掌控地下记忆交易的前调查员。",
+                        "motivation": "用篡改记忆阻止更大的灾难。",
+                        "arc": "从秩序维护者滑向控制一切的人。",
+                    },
+                ],
+                "continuity_rules": ["林澈不能直接想起核心真相", "记忆交易必须付出等价情绪代价"],
+                "plot_threads": ["妹妹失踪案", "地下记忆交易网络", "档案馆隐藏的城市原罪"],
+            }
         return {
             "mock": True,
             "model": model,

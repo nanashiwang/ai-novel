@@ -19,6 +19,7 @@ export function StudioSidebar() {
   const { user } = useAuth();
   const adminVisible = isPlatformAdmin(user);
   const activeHref = findActiveNavHref(pathname, studioNav);
+  const currentProjectId = pathname.match(/^\/studio\/projects\/([^/]+)/)?.[1];
 
   const { data: quotas } = useQuery({
     queryKey: useScopedKey("quotas"),
@@ -51,10 +52,14 @@ export function StudioSidebar() {
         {studioNav.map((item) => {
           const active = activeHref === item.href;
           const Icon = item.icon;
+          const href =
+            currentProjectId && item.href.includes("/demo-project/")
+              ? item.href.replace("demo-project", currentProjectId)
+              : item.href;
           return (
             <Link
               key={item.href}
-              href={item.href}
+              href={href}
               className={cn(
                 "flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-semibold text-slate-200 transition hover:bg-white/10",
                 active && "bg-indigo-500/80 text-white shadow-lg shadow-indigo-950/30",

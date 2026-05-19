@@ -27,6 +27,7 @@ class StoryBibleContract(APIModel):
     world_rules: list[str] = Field(default_factory=list)
     main_characters: list[CharacterSeed] = Field(default_factory=list)
     continuity_rules: list[str] = Field(default_factory=list)
+    plot_threads: list[str] = Field(default_factory=list)
 
 
 class ChapterPlanItem(APIModel):

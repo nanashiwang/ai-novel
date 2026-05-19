@@ -23,6 +23,59 @@ PLAN_QUEUE = {
 
 
 class GenerationService:
+    async def create_bible_job(
+        self,
+        session: AsyncSession,
+        user: CurrentUser,
+        tenant: TenantContext,
+        *,
+        project_id: str,
+        estimate_words: int = 2000,
+        topic: str = "",
+        force_regenerate: bool = False,
+    ) -> GenerationJob:
+        require_permission(user, "generation_job:create", tenant)
+
+        project = await ProjectRepository(session).get(
+            project_id, organization_id=tenant.organization_id
+        )
+        if not project:
+            raise NotFoundError("project_not_found")
+        ensure_same_tenant(project.organization_id, tenant)
+
+        estimate_words = max(1, estimate_words)
+        job = await GenerationJobRepository(session).create(
+            organization_id=tenant.organization_id,
+            user_id=user.id,
+            project_id=project_id,
+            job_type="generate_bible",
+            status="queued",
+            priority=PLAN_QUEUE.get(tenant.plan_code, "queue_standard"),
+            plan_code=tenant.plan_code,
+            reserved_quota=estimate_words,
+            consumed_quota=0,
+            input_payload={
+                "estimate_words": estimate_words,
+                "topic": topic,
+                "force_regenerate_spec": force_regenerate,
+            },
+        )
+        await quota_service.reserve_quota(
+            session,
+            tenant,
+            job_id=job.id,
+            quota_key="monthly_generated_words",
+            amount=estimate_words,
+        )
+        project.status = "bible_generating"
+        job.workflow_id = workflow_starter.start_generate_bible({"id": job.id})
+        await session.flush()
+        if workflow_starter.is_mock_workflow(job.workflow_id):
+            session.sync_session.info.setdefault("after_commit_tasks", []).append(
+                ("generate_bible", job.id)
+            )
+        return job
+
     async def create_full_novel_job(
         self,
         session: AsyncSession,

@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
@@ -21,6 +22,18 @@ from app.models.plan import Plan, PlanFeature
 from app.models.quota import QuotaBalance, QuotaReservation
 from app.models.usage import UsageEvent
 from app.repositories import QuotaBalanceRepository, QuotaReservationRepository
+
+_SQLITE_QUOTA_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _sqlite_quota_lock(session: AsyncSession, organization_id: str) -> asyncio.Lock | None:
+    bind = session.get_bind()
+    if bind.dialect.name != "sqlite":
+        return None
+    key = organization_id
+    if key not in _SQLITE_QUOTA_LOCKS:
+        _SQLITE_QUOTA_LOCKS[key] = asyncio.Lock()
+    return _SQLITE_QUOTA_LOCKS[key]
 
 
 async def _resolve_plan_limit(
@@ -52,6 +65,33 @@ class QuotaService:
         return list(rows)
 
     async def reserve_quota(
+        self,
+        session: AsyncSession,
+        tenant: TenantContext,
+        *,
+        job_id: str,
+        quota_key: str,
+        amount: int,
+    ) -> QuotaReservation:
+        lock = _sqlite_quota_lock(session, tenant.organization_id)
+        if lock:
+            async with lock:
+                return await self._reserve_quota_locked(
+                    session,
+                    tenant,
+                    job_id=job_id,
+                    quota_key=quota_key,
+                    amount=amount,
+                )
+        return await self._reserve_quota_locked(
+            session,
+            tenant,
+            job_id=job_id,
+            quota_key=quota_key,
+            amount=amount,
+        )
+
+    async def _reserve_quota_locked(
         self,
         session: AsyncSession,
         tenant: TenantContext,
@@ -122,6 +162,30 @@ class QuotaService:
         reservation_id: str,
         actual_used: int | None = None,
     ) -> QuotaReservation | None:
+        lock = _sqlite_quota_lock(session, tenant.organization_id)
+        if lock:
+            async with lock:
+                return await self._commit_quota_locked(
+                    session,
+                    tenant,
+                    reservation_id=reservation_id,
+                    actual_used=actual_used,
+                )
+        return await self._commit_quota_locked(
+            session,
+            tenant,
+            reservation_id=reservation_id,
+            actual_used=actual_used,
+        )
+
+    async def _commit_quota_locked(
+        self,
+        session: AsyncSession,
+        tenant: TenantContext,
+        *,
+        reservation_id: str,
+        actual_used: int | None = None,
+    ) -> QuotaReservation | None:
         reservation = await QuotaReservationRepository(session).get(
             reservation_id, organization_id=tenant.organization_id
         )
@@ -145,6 +209,27 @@ class QuotaService:
         return reservation
 
     async def release_quota(
+        self,
+        session: AsyncSession,
+        tenant: TenantContext,
+        *,
+        reservation_id: str,
+    ) -> QuotaReservation | None:
+        lock = _sqlite_quota_lock(session, tenant.organization_id)
+        if lock:
+            async with lock:
+                return await self._release_quota_locked(
+                    session,
+                    tenant,
+                    reservation_id=reservation_id,
+                )
+        return await self._release_quota_locked(
+            session,
+            tenant,
+            reservation_id=reservation_id,
+        )
+
+    async def _release_quota_locked(
         self,
         session: AsyncSession,
         tenant: TenantContext,

@@ -8,6 +8,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio import activity
 
@@ -16,17 +17,23 @@ from app.core.exceptions import NotFoundError
 from app.models.chapter import Chapter
 from app.models.draft_version import DraftVersion
 from app.models.generation_job import GenerationJob
+from app.models.quota import QuotaReservation
 from app.models.project import NovelSpec, Project
 from app.models.scene import Scene
 from app.repositories import (
     ChapterRepository,
+    CharacterRepository,
     DraftVersionRepository,
     GenerationJobRepository,
     NovelSpecRepository,
+    PlotThreadRepository,
     ProjectRepository,
+    UsageEventRepository,
+    WorldItemRepository,
     SceneRepository,
 )
 from app.services.novel_planner.service import novel_planner_service
+from app.services.quota.service import quota_service
 from app.services.writer.service import writer_service
 
 _logger = logging.getLogger(__name__)
@@ -88,6 +95,137 @@ def _payload_int(payload: dict[str, Any], key: str, default: int) -> int:
         return default
 
 
+async def _sync_bible_characters(session: AsyncSession, job: GenerationJob, bible) -> int:
+    repo = CharacterRepository(session)
+    count = 0
+    for seed in bible.main_characters or []:
+        name = (seed.name or "").strip()
+        if not name:
+            continue
+        existing = await repo.get_by(
+            organization_id=job.organization_id,
+            project_id=job.project_id,
+            name=name,
+        )
+        values = {
+            "role": seed.role or "supporting",
+            "description": seed.description,
+            "motivation": seed.motivation,
+            "arc": seed.arc,
+        }
+        if existing:
+            for key, value in values.items():
+                setattr(existing, key, value)
+        else:
+            await repo.create(
+                organization_id=job.organization_id,
+                project_id=job.project_id,
+                name=name,
+                **values,
+            )
+        count += 1
+    return count
+
+
+async def _sync_bible_world_items(session: AsyncSession, job: GenerationJob, bible) -> int:
+    repo = WorldItemRepository(session)
+    count = 0
+    for index, rule in enumerate(bible.world_rules or [], start=1):
+        text = str(rule).strip()
+        if not text:
+            continue
+        name = text[:80] or f"世界规则 {index}"
+        existing = await repo.get_by(
+            organization_id=job.organization_id,
+            project_id=job.project_id,
+            name=name,
+        )
+        values = {
+            "type": "rule",
+            "description": text,
+            "rules": {"source": "story_bible"},
+            "related_characters": [],
+            "importance": "high",
+            "is_hard_rule": True,
+        }
+        if existing:
+            for key, value in values.items():
+                setattr(existing, key, value)
+        else:
+            await repo.create(
+                organization_id=job.organization_id,
+                project_id=job.project_id,
+                name=name,
+                **values,
+            )
+        count += 1
+    return count
+
+
+async def _sync_bible_plot_threads(session: AsyncSession, job: GenerationJob, bible) -> int:
+    repo = PlotThreadRepository(session)
+    threads = list(bible.plot_threads or [])
+    if not threads:
+        fallback = bible.theme or bible.premise
+        if fallback:
+            threads = [fallback]
+    count = 0
+    for index, thread in enumerate(threads, start=1):
+        title = str(thread).strip()
+        if not title:
+            continue
+        existing = await repo.get_by(
+            organization_id=job.organization_id,
+            project_id=job.project_id,
+            title=title[:200],
+        )
+        values = {
+            "thread_type": "main" if index == 1 else "subplot",
+            "description": title,
+            "status": "open",
+            "related_characters": [],
+            "opened_at_scene_id": None,
+            "closed_at_scene_id": None,
+        }
+        if existing:
+            for key, value in values.items():
+                setattr(existing, key, value)
+        else:
+            await repo.create(
+                organization_id=job.organization_id,
+                project_id=job.project_id,
+                title=title[:200],
+                **values,
+            )
+        count += 1
+    return count
+
+
+async def _settle_job_usage(session: AsyncSession, job: GenerationJob, amount: int) -> None:
+    tenant = type("Tenant", (), {"organization_id": job.organization_id})()
+    result = await session.execute(select(QuotaReservation).where(QuotaReservation.job_id == job.id))
+    reservations = list(result.scalars().all())
+    for reservation in reservations:
+        await quota_service.commit_quota(
+            session,
+            tenant,
+            reservation_id=reservation.id,
+            actual_used=amount,
+        )
+    if amount > 0:
+        await UsageEventRepository(session).create(
+            organization_id=job.organization_id,
+            user_id=job.user_id,
+            project_id=job.project_id,
+            job_id=job.id,
+            event_type="generated_words",
+            amount=amount,
+            unit="words",
+            event_metadata={"job_type": job.job_type},
+        )
+        job.consumed_quota = amount
+
+
 @activity.defn(name="mark_job_status")
 async def mark_job_status(
     job_id: str,
@@ -138,6 +276,7 @@ async def generate_book_spec(job: dict[str, Any]) -> dict[str, Any]:
             and not payload.get("force_regenerate_spec")
         ):
             project.status = "bible_ready"
+            await _settle_job_usage(session, job_row, amount=0)
             return {"spec_id": existing.id, "reused": True, "premise": existing.premise}
 
         bible = await novel_planner_service.generate_story_bible(
@@ -172,7 +311,18 @@ async def generate_book_spec(job: dict[str, Any]) -> dict[str, Any]:
         project.target_reader = project.target_reader or bible.target_reader
         project.style = project.style or bible.style_guide[:500]
         project.status = "bible_ready"
-        return {"spec_id": spec.id, "reused": False, "premise": spec.premise}
+        character_count = await _sync_bible_characters(session, job_row, bible)
+        world_item_count = await _sync_bible_world_items(session, job_row, bible)
+        plot_thread_count = await _sync_bible_plot_threads(session, job_row, bible)
+        await _settle_job_usage(session, job_row, amount=job_row.reserved_quota)
+        return {
+            "spec_id": spec.id,
+            "reused": False,
+            "premise": spec.premise,
+            "character_count": character_count,
+            "world_item_count": world_item_count,
+            "plot_thread_count": plot_thread_count,
+        }
 
     return await _with_session(handler)
 

@@ -38,9 +38,11 @@ import {
   charactersApi,
   exportsApi,
   jobsApi,
+  projectsApi,
   scenesApi,
   worldItemsApi,
 } from "@/lib/api";
+import type { Bible, BibleCharacter, BiblePlotThread, BibleWorldItem } from "@/lib/api";
 import { ApiError } from "@/lib/http";
 import { formatDateTime } from "@/lib/format";
 import { useScopedKey } from "@/lib/use-scoped-key";
@@ -109,29 +111,207 @@ function BibleBlock({ title, text }: { title: string; text: string }) {
   );
 }
 
+function BibleItem({
+  title,
+  badge,
+  text,
+}: {
+  title: string;
+  badge?: string;
+  text: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+      <div className="flex items-start justify-between gap-3">
+        <p className="font-bold text-slate-950">{title}</p>
+        {badge ? <Badge tone="slate">{badge}</Badge> : null}
+      </div>
+      <p className="mt-2 text-sm leading-6 text-slate-500">{text || "—"}</p>
+    </div>
+  );
+}
+
 // =========== 故事圣经 ===========
 export function BiblePage({ projectId }: { projectId: string }) {
+  const queryClient = useQueryClient();
+  const projectKey = useScopedKey("project", projectId);
+  const bibleKey = useScopedKey("project", projectId, "bible");
+  const charactersKey = useScopedKey("project", projectId, "characters");
+  const worldItemsKey = useScopedKey("project", projectId, "world-items");
+  const jobsKey = useScopedKey("jobs");
+  const { data: bible, isPending } = useQuery({
+    queryKey: bibleKey,
+    queryFn: () => projectsApi.getBible(projectId),
+    refetchInterval: (query) => {
+      const data = query.state.data as Bible | undefined;
+      const latestJob = data?.latest_job;
+      const waitingForJob = latestJob?.status === "queued" || latestJob?.status === "running";
+      const waitingForResult = latestJob?.status === "succeeded" && !data?.spec;
+      return waitingForJob || waitingForResult ? 1500 : false;
+    },
+  });
+  const latestJob = bible?.latest_job;
+  const isGenerating = latestJob?.status === "queued" || latestJob?.status === "running";
+
+  const generate = useMutation({
+    mutationFn: () =>
+      projectsApi.generateBible(projectId, {
+        estimate_words: 2000,
+        force_regenerate: !bible?.spec,
+      }),
+    onSuccess: () => {
+      toast.success("已提交故事圣经生成任务");
+      queryClient.invalidateQueries({ queryKey: bibleKey });
+      queryClient.invalidateQueries({ queryKey: projectKey });
+      queryClient.invalidateQueries({ queryKey: charactersKey });
+      queryClient.invalidateQueries({ queryKey: worldItemsKey });
+      queryClient.invalidateQueries({ queryKey: jobsKey });
+    },
+    onError: (e: unknown) => {
+      toast.error(e instanceof ApiError ? e.message : "提交失败");
+    },
+  });
+
+  const spec = bible?.spec;
+  const characters = bible?.characters ?? [];
+  const worldItems = bible?.world_items ?? [];
+  const plotThreads = bible?.plot_threads ?? [];
+
   return (
     <div className="space-y-6">
       <ProjectHeader projectId={projectId} />
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle>故事圣经 Story Bible</CardTitle>
-          <Badge tone="blue">基于 novel_specs</Badge>
+          <div>
+            <CardTitle>故事圣经 Story Bible</CardTitle>
+            <p className="mt-1 text-sm text-slate-500">生成后会同步写入设定、人物、世界观与主线。</p>
+          </div>
+          <div className="flex items-center gap-2">
+            {latestJob ? <StatusBadge status={latestJob.status as never} /> : null}
+            <Badge tone={spec ? "blue" : "slate"}>{spec ? "已生成" : "未生成"}</Badge>
+          </div>
         </CardHeader>
-        <CardContent>
-          <p className="text-sm text-slate-500">
-            故事圣经会基于项目设定生成；生成 API 完成后将自动展示 Premise / Theme /
-            Tone / Style Guide 等字段。
-          </p>
-          <Button
-            className="mt-4"
-            onClick={() => toast.info("StoryBibleWorkflow 启动接口待对接")}
-          >
-            <Sparkles className="size-4" /> 启动生成
-          </Button>
+        <CardContent className="space-y-5">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-slate-50 p-4">
+            <div>
+              <p className="font-bold text-slate-950">Sprint 1 生成闭环</p>
+              <p className="text-sm text-slate-500">
+                提交任务后会预留额度，调用模型，完成后自动展示结果。
+              </p>
+            </div>
+            <Button onClick={() => generate.mutate()} disabled={generate.isPending || isGenerating}>
+              {isGenerating ? <RefreshCw className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+              {spec ? "重新生成" : "启动生成"}
+            </Button>
+          </div>
+          {latestJob ? (
+            <div className="grid gap-3 md:grid-cols-3">
+              <BibleBlock title="任务类型" text={latestJob.job_type} />
+              <BibleBlock title="额度" text={`${latestJob.consumed_quota}/${latestJob.reserved_quota}`} />
+              <BibleBlock title="Workflow" text={latestJob.workflow_id ?? "—"} />
+            </div>
+          ) : null}
         </CardContent>
       </Card>
+
+      {isPending ? (
+        <Card>
+          <CardContent className="p-12 text-center text-sm text-slate-500">正在读取故事圣经...</CardContent>
+        </Card>
+      ) : !spec ? (
+        <Card>
+          <CardContent className="p-12 text-center">
+            <p className="text-base font-bold text-slate-950">还没有故事圣经</p>
+            <p className="mt-2 text-sm text-slate-500">点击上方按钮后，这里会显示项目核心设定。</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle>核心设定</CardTitle>
+              <Badge tone="violet">{spec.genre || "未分类"}</Badge>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                <BibleBlock title="Premise" text={spec.premise || "—"} />
+                <BibleBlock title="Theme" text={spec.theme || "—"} />
+                <BibleBlock title="Tone" text={spec.tone || "—"} />
+                <BibleBlock title="POV" text={spec.narrative_pov || "—"} />
+              </div>
+              <BibleBlock title="Style Guide" text={spec.style_guide || "—"} />
+              <div className="grid gap-3 md:grid-cols-2">
+                {spec.constraints.map((item) => (
+                  <BibleItem key={item} title="约束 / 规则" text={item} />
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
+            <Card>
+              <CardHeader>
+                <CardTitle>主要人物</CardTitle>
+              </CardHeader>
+              <CardContent className="grid gap-3 md:grid-cols-2">
+                {characters.length === 0 ? (
+                  <p className="text-sm text-slate-500">暂无人物。</p>
+                ) : (
+                  characters.map((character: BibleCharacter) => (
+                    <BibleItem
+                      key={character.id}
+                      title={character.name}
+                      badge={character.role}
+                      text={[character.description, character.motivation, character.arc]
+                        .filter(Boolean)
+                        .join(" / ")}
+                    />
+                  ))
+                )}
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>剧情线</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {plotThreads.length === 0 ? (
+                  <p className="text-sm text-slate-500">暂无剧情线。</p>
+                ) : (
+                  plotThreads.map((thread: BiblePlotThread) => (
+                    <BibleItem
+                      key={thread.id}
+                      title={thread.title}
+                      badge={`${thread.thread_type} · ${thread.status}`}
+                      text={thread.description}
+                    />
+                  ))
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>世界观条目</CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {worldItems.length === 0 ? (
+                <p className="text-sm text-slate-500">暂无世界观条目。</p>
+              ) : (
+                worldItems.map((item: BibleWorldItem) => (
+                  <BibleItem
+                    key={item.id}
+                    title={item.name}
+                    badge={item.is_hard_rule ? "硬规则" : item.importance}
+                    text={item.description}
+                  />
+                ))
+              )}
+            </CardContent>
+          </Card>
+        </>
+      )}
     </div>
   );
 }

@@ -69,6 +69,9 @@ class WorkflowStarter:
     def start_generate_full_novel(self, job: dict) -> str:
         return self._fire_and_forget("GenerateFullNovelWorkflow", job, "generate-full-novel")
 
+    def start_generate_bible(self, job: dict) -> str:
+        return self._fire_and_forget("GenerateBibleWorkflow", job, "generate-bible")
+
     def start_write_scene(self, job: dict) -> str:
         return self._fire_and_forget("WriteSceneWorkflow", job, "write-scene")
 
@@ -77,6 +80,9 @@ class WorkflowStarter:
 
     def run_local_generate_full_novel(self, job_id: str) -> None:
         self._run_local("full_novel", job_id)
+
+    def run_local_generate_bible(self, job_id: str) -> None:
+        self._run_local("generate_bible", job_id)
 
     def run_local_write_scene(self, job_id: str) -> None:
         self._run_local("scene_write", job_id)
@@ -91,6 +97,7 @@ class WorkflowStarter:
 
     async def _execute_local(self, job_type: str, job_id: str) -> None:
         from app.workflows.activities import (  # noqa: PLC0415
+            generate_book_spec,
             mark_job_status,
             run_full_novel_pipeline,
             run_scene_writing,
@@ -98,7 +105,9 @@ class WorkflowStarter:
 
         await mark_job_status(job_id, "running")
         try:
-            if job_type == "full_novel":
+            if job_type == "generate_bible":
+                result = await generate_book_spec({"id": job_id})
+            elif job_type == "full_novel":
                 result = await run_full_novel_pipeline({"id": job_id})
             else:
                 result = await run_scene_writing({"id": job_id})
