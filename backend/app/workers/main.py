@@ -17,6 +17,7 @@ from app.workflows.activities import ALL_ACTIVITIES
 from app.workflows.generate_bible import GenerateBibleWorkflow
 from app.workflows.generate_full_novel import GenerateFullNovelWorkflow
 from app.workflows.generate_outline import GenerateOutlineWorkflow
+from app.workflows.generate_scene_plan import GenerateScenePlanWorkflow
 from app.workflows.write_scene import WriteSceneWorkflow
 
 _logger = logging.getLogger(__name__)
@@ -46,6 +47,7 @@ async def main() -> None:
             GenerateBibleWorkflow,
             GenerateFullNovelWorkflow,
             GenerateOutlineWorkflow,
+            GenerateScenePlanWorkflow,
             WriteSceneWorkflow,
         ],
         activities=ALL_ACTIVITIES,

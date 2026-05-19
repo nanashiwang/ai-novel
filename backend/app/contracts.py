@@ -108,6 +108,7 @@ ERROR_CODES: frozenset[str] = frozenset(
         "amount_must_be_positive",
         # 参数
         "scene_id_required",
+        "chapter_id_required",
     }
 )
 

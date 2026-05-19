@@ -112,6 +112,11 @@ class WorkflowStarter:
     def start_generate_outline(self, job: dict) -> str:
         return self._fire_and_forget("GenerateOutlineWorkflow", job, "generate-outline")
 
+    def start_generate_scene_plan(self, job: dict) -> str:
+        return self._fire_and_forget(
+            "GenerateScenePlanWorkflow", job, "generate-scene-plan"
+        )
+
     def start_write_scene(self, job: dict) -> str:
         return self._fire_and_forget("WriteSceneWorkflow", job, "write-scene")
 
@@ -126,6 +131,9 @@ class WorkflowStarter:
 
     def run_local_generate_outline(self, job_id: str) -> None:
         self._run_local("generate_outline", job_id)
+
+    def run_local_generate_scene_plan(self, job_id: str) -> None:
+        self._run_local("generate_scene_plan", job_id)
 
     def run_local_write_scene(self, job_id: str) -> None:
         self._run_local("write_scene", job_id)
@@ -143,6 +151,7 @@ class WorkflowStarter:
         from app.workflows.activities import (  # noqa: PLC0415
             generate_book_spec,
             generate_chapter_outline,
+            generate_chapter_scene_cards,
             mark_job_status,
             run_full_novel_pipeline,
             run_scene_writing,
@@ -154,6 +163,8 @@ class WorkflowStarter:
                 result = await generate_book_spec({"id": job_id})
             elif job_type == "generate_outline":
                 result = await generate_chapter_outline({"id": job_id})
+            elif job_type == "generate_scene_plan":
+                result = await generate_chapter_scene_cards({"id": job_id})
             elif job_type == "full_novel":
                 result = await run_full_novel_pipeline({"id": job_id})
             else:

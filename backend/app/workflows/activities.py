@@ -485,9 +485,62 @@ async def generate_chapter_outline(job: dict[str, Any]) -> dict[str, Any]:
         return {"chapter_count": created, "reused": False}
 
 
+async def _plan_and_persist_scenes_for_chapter(
+    session: AsyncSession,
+    *,
+    job: GenerationJob,
+    project: Project,
+    spec: NovelSpec,
+    chapter: Chapter,
+    scenes_per_chapter: int,
+    expected_words: int,
+) -> int:
+    """单章 scene cards 规划 + 落库的共享流程。
+
+    被 generate_scene_cards（项目级循环）和 generate_chapter_scene_cards
+    （单章模式）两个 activity 复用，避免重复代码。返回写入的 scene 数量。
+    """
+    contract = await novel_planner_service.plan_scenes(
+        session,
+        organization_id=job.organization_id,
+        project_id=job.project_id,
+        job_id=job.id,
+        project=project,
+        bible=spec,
+        chapter=chapter,
+        scenes_per_chapter=scenes_per_chapter,
+        expected_words=expected_words,
+    )
+    scene_repo = SceneRepository(session)
+    created = 0
+    for item in contract.scenes[:scenes_per_chapter]:
+        await scene_repo.create(
+            organization_id=job.organization_id,
+            project_id=job.project_id,
+            chapter_id=chapter.id,
+            scene_index=item.scene_index,
+            title=item.title,
+            time_marker=item.time_marker,
+            location=item.location,
+            characters=item.characters,
+            goal=item.goal,
+            conflict=item.conflict,
+            emotion_start=item.emotion_start,
+            emotion_end=item.emotion_end,
+            reveal=item.reveal,
+            hook=item.hook,
+            status="planned",
+        )
+        created += 1
+    return created
+
+
 @activity.defn(name="generate_scene_cards")
 async def generate_scene_cards(job: dict[str, Any]) -> dict[str, Any]:
-    """按章节规划拆 scene cards，并落到 scenes。"""
+    """项目级：按所有章节规划拆 scene cards，并落到 scenes。
+
+    用于 full_novel pipeline；单章场景生成请使用 generate_chapter_scene_cards。
+    """
     async with _activity_session() as session:
         job_row = await _load_job(session, job["id"])
         project = await _load_project(session, job_row)
@@ -517,38 +570,76 @@ async def generate_scene_cards(job: dict[str, Any]) -> dict[str, Any]:
         expected_words = max(600, estimate_words // max(1, len(chapters) * scenes_per_chapter))
         created = 0
         for chapter in chapters:
-            contract = await novel_planner_service.plan_scenes(
+            created += await _plan_and_persist_scenes_for_chapter(
                 session,
-                organization_id=job_row.organization_id,
-                project_id=job_row.project_id,
-                job_id=job_row.id,
+                job=job_row,
                 project=project,
-                bible=spec,
+                spec=spec,
                 chapter=chapter,
                 scenes_per_chapter=scenes_per_chapter,
                 expected_words=expected_words,
             )
-            for item in contract.scenes[:scenes_per_chapter]:
-                await scene_repo.create(
-                    organization_id=job_row.organization_id,
-                    project_id=job_row.project_id,
-                    chapter_id=chapter.id,
-                    scene_index=item.scene_index,
-                    title=item.title,
-                    time_marker=item.time_marker,
-                    location=item.location,
-                    characters=item.characters,
-                    goal=item.goal,
-                    conflict=item.conflict,
-                    emotion_start=item.emotion_start,
-                    emotion_end=item.emotion_end,
-                    reveal=item.reveal,
-                    hook=item.hook,
-                    status="planned",
-                )
-                created += 1
         project.status = "scenes_planned"
         return {"scene_count": created, "reused": False}
+
+
+@activity.defn(name="generate_chapter_scene_cards")
+async def generate_chapter_scene_cards(job: dict[str, Any]) -> dict[str, Any]:
+    """章节级：仅为 input_payload.chapter_id 指定的章节生成 scene cards。
+
+    不改变 project.status —— 单章生成属于"局部更新"，不应把整个项目推到
+    scenes_planned；项目级 status 只在 full_novel pipeline 内部推进。
+    """
+    async with _activity_session() as session:
+        job_row = await _load_job(session, job["id"])
+        project = await _load_project(session, job_row)
+        spec = await _load_spec(session, job_row)
+        payload = job_row.input_payload or {}
+
+        chapter_id = payload.get("chapter_id")
+        if not chapter_id:
+            raise NotFoundError("chapter_id_required")
+        chapter = await ChapterRepository(session).get(
+            chapter_id, organization_id=job_row.organization_id
+        )
+        if not chapter or chapter.project_id != project.id:
+            raise NotFoundError("chapter_not_found")
+
+        scene_repo = SceneRepository(session)
+        existing = list(
+            await scene_repo.list(
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                chapter_id=chapter.id,
+                order_by=Scene.scene_index.asc(),
+            )
+        )
+        force = bool(payload.get("force_regenerate_scenes"))
+        if existing and not force:
+            await _settle_job_usage(session, job_row, amount=0)
+            return {
+                "scene_count": len(existing),
+                "chapter_id": chapter.id,
+                "reused": True,
+            }
+
+        scenes_per_chapter = max(1, min(_payload_int(payload, "scenes_per_chapter", 3), 8))
+        expected_words = max(600, _payload_int(payload, "expected_words", 1500))
+        created = await _plan_and_persist_scenes_for_chapter(
+            session,
+            job=job_row,
+            project=project,
+            spec=spec,
+            chapter=chapter,
+            scenes_per_chapter=scenes_per_chapter,
+            expected_words=expected_words,
+        )
+        await _settle_job_usage(session, job_row, amount=job_row.reserved_quota)
+        return {
+            "scene_count": created,
+            "chapter_id": chapter.id,
+            "reused": False,
+        }
 
 
 @activity.defn(name="write_scene_drafts")
@@ -725,6 +816,7 @@ ALL_ACTIVITIES = [
     generate_book_spec,
     generate_chapter_outline,
     generate_scene_cards,
+    generate_chapter_scene_cards,
     write_scene_drafts,
     run_scene_writing,
     run_full_novel_pipeline,
