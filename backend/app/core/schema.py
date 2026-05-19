@@ -16,6 +16,62 @@ logger = logging.getLogger(__name__)
 
 
 _POSTGRES_SCHEMA_FIXES = [
+    """
+    INSERT INTO plans (id, code, name, description, price_monthly, price_yearly, currency, status)
+    VALUES
+      ('plan_free', 'Free', 'Free', '免费体验：故事圣经与短篇生成', 0, NULL, 'CNY', 'active'),
+      ('plan_starter', 'Starter', 'Starter', '适合轻量连载作者', 49, 490, 'CNY', 'active'),
+      ('plan_pro', 'Pro', 'Pro', '长篇小说自动生产与审稿', 129, 1290, 'CNY', 'active'),
+      ('plan_team', 'Team', 'Team', '多人协作、API Key 与高级审核', 399, 3990, 'CNY', 'active'),
+      (
+        'plan_enterprise',
+        'Enterprise',
+        'Enterprise',
+        '专属队列、合同额度和审计导出',
+        0,
+        NULL,
+        'CNY',
+        'active'
+      )
+    ON CONFLICT (code) DO NOTHING
+    """,
+    """
+    WITH seed(code, feature_key, limit_value, limit_unit) AS (
+      VALUES
+        ('Free', 'monthly_generated_words', 50000, 'words'),
+        ('Free', 'monthly_review_count', 10, 'times'),
+        ('Starter', 'monthly_generated_words', 300000, 'words'),
+        ('Starter', 'monthly_review_count', 80, 'times'),
+        ('Pro', 'monthly_generated_words', 1000000, 'words'),
+        ('Pro', 'monthly_review_count', 300, 'times'),
+        ('Pro', 'monthly_rewrite_count', 180, 'times'),
+        ('Team', 'monthly_generated_words', 5000000, 'words'),
+        ('Team', 'monthly_review_count', 1500, 'times'),
+        ('Team', 'api_keys', 10, 'keys'),
+        ('Enterprise', 'monthly_generated_words', 999999999, 'words'),
+        ('Enterprise', 'dedicated_queue', 1, 'boolean')
+    )
+    INSERT INTO plan_features (
+      id, plan_id, feature_key, enabled, limit_value, limit_unit, created_at, updated_at
+    )
+    SELECT
+      'pf_' || lower(seed.code) || '_' || seed.feature_key,
+      plans.id,
+      seed.feature_key,
+      true,
+      seed.limit_value,
+      seed.limit_unit,
+      now(),
+      now()
+    FROM seed
+    JOIN plans ON plans.code = seed.code
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM plan_features existing
+      WHERE existing.plan_id = plans.id
+        AND existing.feature_key = seed.feature_key
+    )
+    """,
     "ALTER TABLE organizations ADD COLUMN IF NOT EXISTS plan_code TEXT NOT NULL DEFAULT 'Free'",
     "CREATE INDEX IF NOT EXISTS ix_organizations_plan_code ON organizations(plan_code)",
     "ALTER TABLE projects ADD COLUMN IF NOT EXISTS current_word_count INTEGER NOT NULL DEFAULT 0",
@@ -30,6 +86,25 @@ _POSTGRES_SCHEMA_FIXES = [
     (
         "ALTER TABLE model_calls ADD COLUMN IF NOT EXISTS "
         "updated_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+    ),
+    (
+        "ALTER TABLE novel_specs ADD COLUMN IF NOT EXISTS "
+        "continuity_rules JSONB NOT NULL DEFAULT '[]'"
+    ),
+    "ALTER TABLE export_files ADD COLUMN IF NOT EXISTS content TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE export_files ADD COLUMN IF NOT EXISTS file_size INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE generation_jobs ADD COLUMN IF NOT EXISTS dedupe_key TEXT",
+    (
+        "CREATE INDEX IF NOT EXISTS ix_generation_jobs_dedupe "
+        "ON generation_jobs(organization_id, dedupe_key, status)"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_jobs_org_project_created "
+        "ON generation_jobs(organization_id, project_id, created_at)"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_jobs_org_status_created "
+        "ON generation_jobs(organization_id, status, created_at)"
     ),
     """
     CREATE TABLE IF NOT EXISTS draft_versions (

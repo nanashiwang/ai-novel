@@ -180,6 +180,7 @@ CREATE TABLE IF NOT EXISTS novel_specs (
   narrative_pov TEXT NOT NULL DEFAULT '',
   style_guide TEXT NOT NULL DEFAULT '',
   constraints JSONB NOT NULL DEFAULT '[]',
+  continuity_rules JSONB NOT NULL DEFAULT '[]',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -302,10 +303,14 @@ CREATE TABLE IF NOT EXISTS generation_jobs (
   workflow_id TEXT,
   started_at TIMESTAMPTZ,
   finished_at TIMESTAMPTZ,
+  dedupe_key TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_generation_jobs_org_status ON generation_jobs(organization_id, status);
+CREATE INDEX IF NOT EXISTS ix_generation_jobs_dedupe ON generation_jobs(organization_id, dedupe_key, status);
+CREATE INDEX IF NOT EXISTS ix_jobs_org_project_created ON generation_jobs(organization_id, project_id, created_at);
+CREATE INDEX IF NOT EXISTS ix_jobs_org_status_created ON generation_jobs(organization_id, status, created_at);
 
 CREATE TABLE IF NOT EXISTS quota_balances (
   id TEXT PRIMARY KEY,
@@ -408,6 +413,8 @@ CREATE TABLE IF NOT EXISTS export_files (
   file_url TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'queued',
   created_by TEXT NOT NULL REFERENCES users(id),
+  content TEXT NOT NULL DEFAULT '',
+  file_size INTEGER NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

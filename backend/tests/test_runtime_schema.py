@@ -1,0 +1,11 @@
+from app.core.schema import _POSTGRES_SCHEMA_FIXES
+
+
+def test_runtime_schema_fixes_include_recent_generation_columns():
+    statements = "\n".join(_POSTGRES_SCHEMA_FIXES)
+
+    assert "generation_jobs ADD COLUMN IF NOT EXISTS dedupe_key" in statements
+    assert "novel_specs ADD COLUMN IF NOT EXISTS continuity_rules" in statements
+    assert "export_files ADD COLUMN IF NOT EXISTS content" in statements
+    assert "export_files ADD COLUMN IF NOT EXISTS file_size" in statements
+    assert "monthly_generated_words" in statements
