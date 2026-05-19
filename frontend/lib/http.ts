@@ -209,3 +209,34 @@ export const http = {
     request<T>(path, { method: "PATCH", body }),
   delete: <T = unknown>(path: string) => request<T>(path, { method: "DELETE" }),
 };
+
+/**
+ * 下载二进制内容（导出文件等）。
+ *
+ * request() 会按 JSON 解析响应体，不适用于流式文件。这里直接走 fetch，
+ * 复用 access_token / X-Organization-Id 注入逻辑，把响应包成 Blob。
+ * 401 时不做静默 refresh —— 导出下载属于辅助操作，让上层失败提示即可。
+ */
+export async function downloadBlob(
+  path: string,
+): Promise<{ blob: Blob; filename: string | null }> {
+  const url = buildApiUrl(path);
+  const headers: Record<string, string> = {};
+  if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
+  const orgId = getOrganizationId();
+  if (orgId) headers["X-Organization-Id"] = orgId;
+
+  const response = await fetch(url.toString(), {
+    method: "GET",
+    headers,
+    credentials: "include",
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, "http_error", "下载失败");
+  }
+  const blob = await response.blob();
+  // 从 Content-Disposition 头里提取 filename（后端用 filename="..."）
+  const cd = response.headers.get("content-disposition") ?? "";
+  const m = /filename="?([^"]+)"?/.exec(cd);
+  return { blob, filename: m ? m[1] : null };
+}

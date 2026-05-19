@@ -110,6 +110,7 @@ ERROR_CODES: frozenset[str] = frozenset(
         # 参数
         "scene_id_required",
         "chapter_id_required",
+        "export_type_not_supported",
     }
 )
 

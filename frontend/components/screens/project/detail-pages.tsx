@@ -87,15 +87,6 @@ type Job = {
   consumed_quota: number;
 };
 
-type ExportFileRow = {
-  id: string;
-  project_id: string;
-  export_type: string;
-  file_url: string;
-  status: string;
-  created_at: string;
-};
-
 function BibleBlock({ title, text }: { title: string; text: string }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -1633,37 +1624,60 @@ export function VersionsPage({ projectId }: { projectId: string }) {
 // =========== 导出 ===========
 export function ExportPage({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
+  const exportsKey = useScopedKey("project", projectId, "exports");
   const { data: files = [] } = useQuery({
-    queryKey: useScopedKey("project", projectId, "exports"),
-    queryFn: () => exportsApi.list(projectId) as Promise<ExportFileRow[]>,
+    queryKey: exportsKey,
+    queryFn: () => exportsApi.list(projectId),
   });
   const create = useMutation({
     mutationFn: (export_type: string) => exportsApi.create(projectId, export_type),
-    onSuccess: () => {
-      toast.success("已创建导出任务");
-      queryClient.invalidateQueries({ queryKey: ["org"] });
+    onSuccess: (created) => {
+      toast.success(
+        `已生成 ${created.export_type.toUpperCase()}（${formatBytes(created.file_size)}）`,
+      );
+      queryClient.invalidateQueries({ queryKey: exportsKey });
     },
     onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "创建失败"),
   });
+  const download = useMutation({
+    mutationFn: (exportId: string) => exportsApi.download(projectId, exportId),
+    onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "下载失败"),
+  });
 
-  const formats = ["markdown", "txt", "docx", "epub", "pdf"];
+  // Sprint 5-B 仅支持 markdown / txt；docx/epub/pdf 由 Sprint 6 接入 MinIO + 真实渲染时启用
+  const formats: { value: string; label: string; supported: boolean }[] = [
+    { value: "markdown", label: "Markdown", supported: true },
+    { value: "txt", label: "TXT", supported: true },
+    { value: "docx", label: "DOCX", supported: false },
+    { value: "epub", label: "EPUB", supported: false },
+    { value: "pdf", label: "PDF", supported: false },
+  ];
 
   return (
     <div className="space-y-6">
       <ProjectHeader projectId={projectId} />
       <div className="grid gap-4 md:grid-cols-5">
         {formats.map((format) => (
-          <Card key={format}>
+          <Card key={format.value}>
             <CardContent className="text-center">
-              <FileArchive className="mx-auto size-9 text-indigo-600" />
-              <h3 className="mt-3 font-black uppercase text-slate-950">{format}</h3>
+              <FileArchive
+                className={`mx-auto size-9 ${
+                  format.supported ? "text-indigo-600" : "text-slate-300"
+                }`}
+              />
+              <h3 className="mt-3 font-black uppercase text-slate-950">
+                {format.label}
+              </h3>
+              {!format.supported ? (
+                <p className="mt-1 text-xs text-slate-400">Sprint 6 接入</p>
+              ) : null}
               <Button
                 className="mt-4 w-full"
                 size="sm"
-                onClick={() => create.mutate(format)}
-                disabled={create.isPending}
+                onClick={() => create.mutate(format.value)}
+                disabled={create.isPending || !format.supported}
               >
-                开始导出
+                {create.isPending ? "生成中..." : "开始导出"}
               </Button>
             </CardContent>
           </Card>
@@ -1694,17 +1708,29 @@ export function ExportPage({ projectId }: { projectId: string }) {
                     />
                   ),
                 },
-                { key: "time", header: "时间", render: (row) => formatDateTime(row.created_at) },
+                {
+                  key: "size",
+                  header: "大小",
+                  render: (row) => formatBytes(row.file_size),
+                },
+                {
+                  key: "time",
+                  header: "时间",
+                  render: (row) => (row.created_at ? formatDateTime(row.created_at) : "—"),
+                },
                 {
                   key: "download",
                   header: "操作",
                   render: (row) =>
-                    row.file_url ? (
-                      <a href={row.file_url} target="_blank" rel="noreferrer">
-                        <Button size="sm" variant="secondary">
-                          <Download className="size-4" /> 下载
-                        </Button>
-                      </a>
+                    row.status === "ready" ? (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => download.mutate(row.id)}
+                        disabled={download.isPending}
+                      >
+                        <Download className="size-4" /> 下载
+                      </Button>
                     ) : null,
                 },
               ]}
@@ -1714,4 +1740,10 @@ export function ExportPage({ projectId }: { projectId: string }) {
       </Card>
     </div>
   );
+}
+
+function formatBytes(size: number): string {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(2)} MB`;
 }

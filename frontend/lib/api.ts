@@ -4,7 +4,7 @@
  * 字段命名与后端 Pydantic schema 保持一致（snake_case）。
  * 上层组件直接使用此处定义的类型即可，无需手动定义 DTO。
  */
-import { http } from "./http";
+import { downloadBlob, http } from "./http";
 
 // ----- Auth -----
 export type CurrentUser = {
@@ -418,11 +418,38 @@ export const memoryApi = {
   list: (projectId: string) =>
     http.get<unknown[]>(`/projects/${projectId}/memory`),
 };
+// 与 backend/app/models/export_file.py + project_extra.ExportResponse 对齐
+export type ExportFile = {
+  id: string;
+  organization_id: string;
+  project_id: string;
+  export_type: string;
+  file_url: string;
+  status: string;
+  created_by: string;
+  file_size: number;
+  created_at?: string;
+};
+
 export const exportsApi = {
   list: (projectId: string) =>
-    http.get<unknown[]>(`/projects/${projectId}/exports`),
+    http.get<ExportFile[]>(`/projects/${projectId}/exports`),
   create: (projectId: string, export_type: string) =>
-    http.post(`/projects/${projectId}/exports`, { export_type }),
+    http.post<ExportFile>(`/projects/${projectId}/exports`, { export_type }),
+  // 触发浏览器下载：拿 Blob → 创建临时 URL → 模拟点击 → 释放
+  download: async (projectId: string, exportId: string) => {
+    const { blob, filename } = await downloadBlob(
+      `/projects/${projectId}/exports/${exportId}/download`,
+    );
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename ?? `${exportId}.bin`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  },
 };
 
 // ----- Admin -----
