@@ -226,6 +226,30 @@ async def _settle_job_usage(session: AsyncSession, job: GenerationJob, amount: i
         job.consumed_quota = amount
 
 
+async def _release_job_reservations(session: AsyncSession, job: GenerationJob) -> int:
+    """释放 job 下仍处于 reserved 状态的额度预留。
+
+    用于失败/取消路径，幂等：已 consumed/released 的预留会被 quota_service
+    内部跳过，不会重复释放。返回实际释放的数量。
+    """
+    tenant = type("Tenant", (), {"organization_id": job.organization_id})()
+    result = await session.execute(
+        select(QuotaReservation).where(
+            QuotaReservation.organization_id == job.organization_id,
+            QuotaReservation.job_id == job.id,
+            QuotaReservation.status == "reserved",
+        )
+    )
+    reservations = list(result.scalars().all())
+    for reservation in reservations:
+        await quota_service.release_quota(
+            session,
+            tenant,
+            reservation_id=reservation.id,
+        )
+    return len(reservations)
+
+
 @activity.defn(name="mark_job_status")
 async def mark_job_status(
     job_id: str,
@@ -233,7 +257,11 @@ async def mark_job_status(
     error_message: str | None = None,
     output_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """更新 generation_jobs 的状态、时间戳，可选 error_message/output_payload。"""
+    """更新 generation_jobs 的状态、时间戳，可选 error_message/output_payload。
+
+    当 status 为 failed/cancelled 时，自动释放 job 名下仍处于 reserved 状态
+    的额度预留，防止失败任务导致租户额度被永久"幽灵预留"。
+    """
 
     async def handler(session):
         repo = GenerationJobRepository(session)
@@ -251,7 +279,10 @@ async def mark_job_status(
             job.error_message = error_message
         if output_payload is not None:
             job.output_payload = output_payload
-        return {"updated": True, "status": status}
+        released = 0
+        if status in {"failed", "cancelled"}:
+            released = await _release_job_reservations(session, job)
+        return {"updated": True, "status": status, "released_reservations": released}
 
     return await _with_session(handler)
 
