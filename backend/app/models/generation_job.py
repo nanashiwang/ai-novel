@@ -29,3 +29,8 @@ class GenerationJob(Base, TenantMixin, TimestampMixin):
     workflow_id: Mapped[Optional[str]] = mapped_column(String(200), index=True)
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # 幂等键：sha256[:32] of (org, project, job_type, target_id, canonical_input)。
+    # service 在创建前查找同 key 且 status in {queued, running} 的活跃 job，
+    # 存在则返回旧 job 避免用户连点产生重复扣费。失败的 job 不参与去重，
+    # 必须走 POST /generation-jobs/{id}/retry 显式触发。
+    dedupe_key: Mapped[Optional[str]] = mapped_column(String(64), index=True)

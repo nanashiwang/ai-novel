@@ -1,6 +1,11 @@
 """生成任务服务（ORM 化）。"""
 from __future__ import annotations
 
+import hashlib
+import json
+from typing import Any
+
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, NotFoundError
@@ -27,6 +32,56 @@ PLAN_QUEUE = {
 }
 
 
+def _compute_dedupe_key(
+    *,
+    organization_id: str,
+    project_id: str,
+    job_type: str,
+    target_id: str = "",
+    canonical_input: dict[str, Any] | None = None,
+) -> str:
+    """计算业务幂等键。
+
+    用 sha256 截 32 字符，对 (organization, project, job_type, target,
+    canonical_input) 做 deterministic 哈希。canonical_input 应只包含影响
+    业务语义的字段（如 topic / target_words / force_regenerate）；retry_of
+    / 时间戳等不应进入。
+    """
+    payload = json.dumps(
+        {
+            "org": organization_id,
+            "project": project_id,
+            "job_type": job_type,
+            "target": target_id or "",
+            "input": canonical_input or {},
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+
+
+async def _find_active_by_dedupe_key(
+    session: AsyncSession,
+    *,
+    organization_id: str,
+    dedupe_key: str,
+) -> GenerationJob | None:
+    """查询同租户下同 dedupe_key 且仍活跃（queued/running）的任务。"""
+    stmt = (
+        select(GenerationJob)
+        .where(
+            GenerationJob.organization_id == organization_id,
+            GenerationJob.dedupe_key == dedupe_key,
+            GenerationJob.status.in_(["queued", "running"]),
+        )
+        .order_by(GenerationJob.created_at.desc())
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
 class GenerationService:
     async def create_bible_job(
         self,
@@ -49,6 +104,23 @@ class GenerationService:
         ensure_same_tenant(project.organization_id, tenant)
 
         estimate_words = max(1, estimate_words)
+        dedupe = _compute_dedupe_key(
+            organization_id=tenant.organization_id,
+            project_id=project_id,
+            job_type="generate_bible",
+            canonical_input={
+                "topic": topic,
+                "force_regenerate_spec": force_regenerate,
+            },
+        )
+        existing = await _find_active_by_dedupe_key(
+            session,
+            organization_id=tenant.organization_id,
+            dedupe_key=dedupe,
+        )
+        if existing is not None:
+            return existing
+
         job = await GenerationJobRepository(session).create(
             organization_id=tenant.organization_id,
             user_id=user.id,
@@ -64,6 +136,7 @@ class GenerationService:
                 "topic": topic,
                 "force_regenerate_spec": force_regenerate,
             },
+            dedupe_key=dedupe,
         )
         await quota_service.reserve_quota(
             session,
@@ -119,6 +192,23 @@ class GenerationService:
             raise NotFoundError("novel_spec_not_found")
 
         estimate_words = max(1, estimate_words)
+        dedupe = _compute_dedupe_key(
+            organization_id=tenant.organization_id,
+            project_id=project_id,
+            job_type="generate_outline",
+            canonical_input={
+                "target_chapters": target_chapters,
+                "force_regenerate_outline": force_regenerate,
+            },
+        )
+        existing = await _find_active_by_dedupe_key(
+            session,
+            organization_id=tenant.organization_id,
+            dedupe_key=dedupe,
+        )
+        if existing is not None:
+            return existing
+
         job = await GenerationJobRepository(session).create(
             organization_id=tenant.organization_id,
             user_id=user.id,
@@ -135,6 +225,7 @@ class GenerationService:
                 # activities.generate_chapter_outline 读的是 force_regenerate_outline
                 "force_regenerate_outline": force_regenerate,
             },
+            dedupe_key=dedupe,
         )
         await quota_service.reserve_quota(
             session,
@@ -198,6 +289,25 @@ class GenerationService:
             raise NotFoundError("chapter_not_found")
 
         estimate_words = max(1, estimate_words)
+        dedupe = _compute_dedupe_key(
+            organization_id=tenant.organization_id,
+            project_id=project_id,
+            job_type="generate_scene_plan",
+            target_id=chapter_id,
+            canonical_input={
+                "scenes_per_chapter": scenes_per_chapter,
+                "expected_words": expected_words,
+                "force_regenerate_scenes": force_regenerate,
+            },
+        )
+        existing = await _find_active_by_dedupe_key(
+            session,
+            organization_id=tenant.organization_id,
+            dedupe_key=dedupe,
+        )
+        if existing is not None:
+            return existing
+
         job = await GenerationJobRepository(session).create(
             organization_id=tenant.organization_id,
             user_id=user.id,
@@ -215,6 +325,7 @@ class GenerationService:
                 "estimate_words": estimate_words,
                 "force_regenerate_scenes": force_regenerate,
             },
+            dedupe_key=dedupe,
         )
         await quota_service.reserve_quota(
             session,
@@ -309,6 +420,21 @@ class GenerationService:
             raise NotFoundError("project_not_found")
         ensure_same_tenant(project.organization_id, tenant)
 
+        dedupe = _compute_dedupe_key(
+            organization_id=tenant.organization_id,
+            project_id=project_id,
+            job_type="write_scene",
+            target_id=scene_id,
+            canonical_input={"target_words": target_words},
+        )
+        existing = await _find_active_by_dedupe_key(
+            session,
+            organization_id=tenant.organization_id,
+            dedupe_key=dedupe,
+        )
+        if existing is not None:
+            return existing
+
         job = await GenerationJobRepository(session).create(
             organization_id=tenant.organization_id,
             user_id=user.id,
@@ -320,6 +446,7 @@ class GenerationService:
             reserved_quota=target_words,
             consumed_quota=0,
             input_payload={"scene_id": scene_id, "target_words": target_words},
+            dedupe_key=dedupe,
         )
         await quota_service.reserve_quota(
             session,
