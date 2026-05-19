@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from typing import Any
 
@@ -39,12 +41,24 @@ from app.services.writer.service import writer_service
 _logger = logging.getLogger(__name__)
 
 
-async def _with_session(handler):
+@asynccontextmanager
+async def _activity_session() -> AsyncIterator[AsyncSession]:
+    """Activity 内的统一 session 边界。
+
+    用法：
+        @activity.defn(name="xxx")
+        async def my_activity(...):
+            async with _activity_session() as session:
+                # 业务逻辑；正常退出 commit，异常退出 rollback。
+                ...
+
+    比之前的 `await _with_session(handler)` 闭包模式少一层嵌套，
+    并且符合 Python 异步上下文的常规直觉。
+    """
     async with AsyncSessionLocal() as session:
         try:
-            result = await handler(session)
+            yield session
             await session.commit()
-            return result
         except Exception:
             await session.rollback()
             raise
@@ -308,8 +322,7 @@ async def mark_job_status(
        "圣经生成中" 等中间态，影响重试入口）。
     两项操作都是幂等的。
     """
-
-    async def handler(session):
+    async with _activity_session() as session:
         repo = GenerationJobRepository(session)
         job = await repo.get(job_id)
         if not job:
@@ -337,14 +350,11 @@ async def mark_job_status(
             "project_status_reverted": project_reverted,
         }
 
-    return await _with_session(handler)
-
 
 @activity.defn(name="generate_book_spec")
 async def generate_book_spec(job: dict[str, Any]) -> dict[str, Any]:
     """生成或补全 book spec，并落到 novel_specs。"""
-
-    async def handler(session: AsyncSession):
+    async with _activity_session() as session:
         job_row = await _load_job(session, job["id"])
         project = await _load_project(session, job_row)
         payload = job_row.input_payload or {}
@@ -408,14 +418,11 @@ async def generate_book_spec(job: dict[str, Any]) -> dict[str, Any]:
             "plot_thread_count": plot_thread_count,
         }
 
-    return await _with_session(handler)
-
 
 @activity.defn(name="generate_chapter_outline")
 async def generate_chapter_outline(job: dict[str, Any]) -> dict[str, Any]:
     """按 book spec 生成章节规划，并落到 chapters。"""
-
-    async def handler(session: AsyncSession):
+    async with _activity_session() as session:
         job_row = await _load_job(session, job["id"])
         project = await _load_project(session, job_row)
         spec = await _load_spec(session, job_row)
@@ -462,14 +469,11 @@ async def generate_chapter_outline(job: dict[str, Any]) -> dict[str, Any]:
         project.status = "outlined"
         return {"chapter_count": created, "reused": False}
 
-    return await _with_session(handler)
-
 
 @activity.defn(name="generate_scene_cards")
 async def generate_scene_cards(job: dict[str, Any]) -> dict[str, Any]:
     """按章节规划拆 scene cards，并落到 scenes。"""
-
-    async def handler(session: AsyncSession):
+    async with _activity_session() as session:
         job_row = await _load_job(session, job["id"])
         project = await _load_project(session, job_row)
         spec = await _load_spec(session, job_row)
@@ -531,14 +535,11 @@ async def generate_scene_cards(job: dict[str, Any]) -> dict[str, Any]:
         project.status = "scenes_planned"
         return {"scene_count": created, "reused": False}
 
-    return await _with_session(handler)
-
 
 @activity.defn(name="write_scene_drafts")
 async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
     """逐场景写正文草稿，并落到 draft_versions。"""
-
-    async def handler(session: AsyncSession):
+    async with _activity_session() as session:
         job_row = await _load_job(session, job["id"])
         project = await _load_project(session, job_row)
         spec = await _load_spec(session, job_row)
@@ -636,14 +637,11 @@ async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
             "word_count": total_words,
         }
 
-    return await _with_session(handler)
-
 
 @activity.defn(name="run_scene_writing")
 async def run_scene_writing(job: dict[str, Any]) -> dict[str, Any]:
     """单 scene 写作 activity。"""
-
-    async def handler(session: AsyncSession):
+    async with _activity_session() as session:
         job_row = await _load_job(session, job["id"])
         payload = job_row.input_payload or {}
         scene_id = payload.get("scene_id")
@@ -690,8 +688,6 @@ async def run_scene_writing(job: dict[str, Any]) -> dict[str, Any]:
         result = {"scene_id": scene.id, "draft_id": saved.id, "word_count": word_count}
         job_row.output_payload = result
         return result
-
-    return await _with_session(handler)
 
 
 @activity.defn(name="run_full_novel_pipeline")
