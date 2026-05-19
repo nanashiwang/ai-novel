@@ -16,6 +16,7 @@ from app.core.logging import configure_logging
 from app.workflows.activities import ALL_ACTIVITIES
 from app.workflows.generate_bible import GenerateBibleWorkflow
 from app.workflows.generate_full_novel import GenerateFullNovelWorkflow
+from app.workflows.generate_outline import GenerateOutlineWorkflow
 from app.workflows.write_scene import WriteSceneWorkflow
 
 _logger = logging.getLogger(__name__)
@@ -41,7 +42,12 @@ async def main() -> None:
     worker = Worker(
         client,
         task_queue="novelflow-generation",
-        workflows=[GenerateBibleWorkflow, GenerateFullNovelWorkflow, WriteSceneWorkflow],
+        workflows=[
+            GenerateBibleWorkflow,
+            GenerateFullNovelWorkflow,
+            GenerateOutlineWorkflow,
+            WriteSceneWorkflow,
+        ],
         activities=ALL_ACTIVITIES,
     )
     _logger.info("temporal_worker_started", extra={"task_queue": "novelflow-generation"})

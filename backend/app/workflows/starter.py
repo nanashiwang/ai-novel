@@ -109,6 +109,9 @@ class WorkflowStarter:
     def start_generate_bible(self, job: dict) -> str:
         return self._fire_and_forget("GenerateBibleWorkflow", job, "generate-bible")
 
+    def start_generate_outline(self, job: dict) -> str:
+        return self._fire_and_forget("GenerateOutlineWorkflow", job, "generate-outline")
+
     def start_write_scene(self, job: dict) -> str:
         return self._fire_and_forget("WriteSceneWorkflow", job, "write-scene")
 
@@ -120,6 +123,9 @@ class WorkflowStarter:
 
     def run_local_generate_bible(self, job_id: str) -> None:
         self._run_local("generate_bible", job_id)
+
+    def run_local_generate_outline(self, job_id: str) -> None:
+        self._run_local("generate_outline", job_id)
 
     def run_local_write_scene(self, job_id: str) -> None:
         self._run_local("write_scene", job_id)
@@ -136,6 +142,7 @@ class WorkflowStarter:
     async def _execute_local(self, job_type: str, job_id: str) -> None:
         from app.workflows.activities import (  # noqa: PLC0415
             generate_book_spec,
+            generate_chapter_outline,
             mark_job_status,
             run_full_novel_pipeline,
             run_scene_writing,
@@ -145,6 +152,8 @@ class WorkflowStarter:
         try:
             if job_type == "generate_bible":
                 result = await generate_book_spec({"id": job_id})
+            elif job_type == "generate_outline":
+                result = await generate_chapter_outline({"id": job_id})
             elif job_type == "full_novel":
                 result = await run_full_novel_pipeline({"id": job_id})
             else:

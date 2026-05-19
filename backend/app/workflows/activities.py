@@ -288,6 +288,8 @@ async def _release_job_reservations(session: AsyncSession, job: GenerationJob) -
 _JOB_FAILURE_PROJECT_STATUS: dict[str, tuple[set[str], str]] = {
     # bible 生成失败：若项目仍卡在 bible_generating 过渡态，回退到 created
     "generate_bible": ({"bible_generating"}, "created"),
+    # outline 生成失败：若项目仍卡在 outline_generating 过渡态，回退到 bible_ready
+    "generate_outline": ({"outline_generating"}, "bible_ready"),
 }
 
 
