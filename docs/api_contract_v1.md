@@ -7,6 +7,10 @@
 **冻结日期**：2026-05-19
 **对应 Sprint 范围**：Sprint 1（已实现）→ Sprint 6（占位路由提前登记）
 **维护原则**：v1 内向后兼容；不兼容变更走 v2 路径，v1/v2 并行至少一个 Sprint 后再下线 v1。
+**代码侧真相源**：`backend/app/contracts.py` 镜像本文档的枚举值集合；
+`backend/tests/test_contract_consistency.py` 通过 lint 自动校验代码中
+所有 `job_type=` / `project.status=` / `raise XxxError(...)` 等字面量
+都已在本文档（与 contracts.py）中登记。**新增枚举值必须同时更新两处**。
 
 ---
 
@@ -211,13 +215,11 @@
 | `generate_bible` | ✅ 1 | `start_generate_bible` | StoryBible 闭环 |
 | `generate_outline` | 🟡 **2** | `start_generate_outline` | Outline 闭环 |
 | `generate_scene_plan` | 🟡 3 | `start_generate_scene_plan` | ScenePlan 闭环 |
-| `write_scene` | 🟡 4（替换 scene_write） | `start_write_scene` | 单场景写作 |
+| `write_scene` | ✅ 1（升级 4） | `start_write_scene` | 单场景写作 |
 | `audit_scene` | 🟡 5 | `start_audit_scene` | 单场景审稿 |
 | `rewrite_scene` | 🟡 5 | `start_rewrite_scene` | 单场景重写 |
 | `export_novel` | 🟡 5 | `start_export_novel` | 导出 |
 | `full_novel` | ✅ 1 | `start_generate_full_novel` | 兼容入口，串联多步 |
-
-**重命名警告**：当前代码使用 `scene_write`（services/generation/service.py:161）。Sprint 4 前必须迁移到 `write_scene`：① 新建 alembic 数据迁移把已有行的 job_type 改名；② 服务层与 frontend 同步切换。迁移期间 backend 应同时识别两个值，前端只发新值。
 
 ### 4.2 `generation_jobs.status`（v1 简化状态机）
 
@@ -311,6 +313,7 @@ created ──→ bible_generating ──→ bible_ready ──→ outline_gener
 | `export_not_found` | exports |
 | `organization_not_found` | organizations |
 | `member_not_found` | organizations |
+| `quota_not_found` | admin/organizations |
 
 #### 额度/付费
 
@@ -319,6 +322,7 @@ created ──→ bible_generating ──→ bible_ready ──→ outline_gener
 | `quota_insufficient` | 402 | 当前周期额度不够本次预留 |
 | `quota_not_in_plan` | 402 | 当前 plan 不开放此 quota_key |
 | `invalid_amount` | 402 | reserve_quota 收到非正数 |
+| `amount_must_be_positive` | 402 | reserve_quota 配套 message |
 
 #### 参数
 
@@ -326,7 +330,7 @@ created ──→ bible_generating ──→ bible_ready ──→ outline_gener
 |---|---|
 | `scene_id_required` | run_scene_writing 缺少 scene_id payload |
 
-**新增规则**：所有新 error code 必须先登记到本表，命名必须 snake_case，资源不存在统一用 `<resource>_not_found`。
+**新增规则**：所有新 error code 必须先登记到本表与 `app/contracts.py::ERROR_CODES`，命名必须 snake_case，资源不存在统一用 `<resource>_not_found`。`tests/test_contract_consistency.py` 会扫描代码字面量，未登记的值在 CI 中会失败。
 
 ---
 
@@ -380,7 +384,7 @@ created ──→ bible_generating ──→ bible_ready ──→ outline_gener
 
 ### 6.3 当前已知的 v2 候选
 
-- `scene_write` → `write_scene`（Sprint 4 前迁移）
+- ~~`scene_write` → `write_scene`（Sprint 4 前迁移）~~ — ✅ 已在 v1 内完成（alembic 0008）
 - job status 细分（多个 failed 子状态）
 - API 响应 envelope（统一包成 `{data, meta}` 形式）
 
@@ -388,9 +392,10 @@ created ──→ bible_generating ──→ bible_ready ──→ outline_gener
 
 ## 7. 变更流程
 
-1. 提 PR 前**先**修改本文档对应章节。
+1. 提 PR 前**先**修改本文档对应章节，再同步 `app/contracts.py`。
 2. PR 标题前缀 `contract:` 或 `contract!:`（破坏性）。
-3. Reviewer 检查代码是否与文档一致。
+3. Reviewer 检查代码是否与文档一致；CI 会跑 `test_contract_consistency.py`
+   自动捕获代码中未登记的字面量。
 4. 合并后通知前端 / Admin / QA 同步。
 
-任何"先写代码再补文档"的变更都视为契约漂移，会在下一个 Sprint 1 类型的 review 中被列为问题。
+任何"先写代码再补文档"的变更都视为契约漂移。Lint 测试是兜底，**不是替代设计沟通**。
