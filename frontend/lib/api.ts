@@ -501,11 +501,31 @@ export type AdminPlanUpsert = {
   features: AdminPlanFeature[];
 };
 
+export type AdminJobsFilter = {
+  organization_id?: string;
+  project_id?: string;
+  job_type?: string;
+  status?: string;
+  limit?: number;
+};
+
+export type AdminModelCallsFilter = {
+  organization_id?: string;
+  project_id?: string;
+  job_id?: string;
+  task_type?: string;
+  limit?: number;
+};
+
 export const adminApi = {
   users: () => http.get<unknown[]>("/admin/users"),
   organizations: () => http.get<unknown[]>("/admin/organizations"),
-  jobs: () => http.get<unknown[]>("/admin/generation-jobs"),
-  modelCalls: () => http.get<unknown[]>("/admin/model-calls"),
+  jobs: (filter: AdminJobsFilter = {}) =>
+    http.get<GenerationJob[]>("/admin/generation-jobs", filter),
+  cancelJob: (jobId: string) =>
+    http.post<GenerationJob>(`/admin/generation-jobs/${jobId}/cancel`),
+  modelCalls: (filter: AdminModelCallsFilter = {}) =>
+    http.get<unknown[]>("/admin/model-calls", filter),
   auditLogs: () => http.get<unknown[]>("/admin/audit-logs"),
   contentReviews: () => http.get<unknown[]>("/admin/content-reviews"),
   plans: () => http.get<AdminPlan[]>("/admin/plans"),

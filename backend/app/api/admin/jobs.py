@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from app.api.deps import CurrentUserDep, DbDep
 from app.core.exceptions import NotFoundError
@@ -12,9 +12,27 @@ router = APIRouter(prefix="/admin/generation-jobs", tags=["admin-generation-jobs
 
 
 @router.get("", response_model=list[GenerationJobResponse])
-async def jobs(user: CurrentUserDep, db: DbDep):
+async def jobs(
+    user: CurrentUserDep,
+    db: DbDep,
+    organization_id: str | None = Query(default=None),
+    project_id: str | None = Query(default=None),
+    job_type: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    limit: int = Query(default=500, ge=1, le=2000),
+):
+    """平台级 generation_jobs 列表。
+
+    支持四类过滤，Admin 控制台据此做"按租户/项目/任务类型/状态"的对账。
+    """
     require_platform_admin(user)
-    rows = await GenerationJobRepository(db).list(limit=500)
+    rows = await GenerationJobRepository(db).list(
+        limit=limit,
+        organization_id=organization_id,
+        project_id=project_id,
+        job_type=job_type,
+        status=status,
+    )
     return rows
 
 
