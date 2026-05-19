@@ -77,7 +77,10 @@ class _MockProvider:
                 "narrative_pov": "第三人称有限视角",
                 "style_guide": "画面清晰,冲突明确,每章保留悬念钩子。",
                 "constraints": ["保持世界规则前后一致", "避免无铺垫反转"],
-                "world_rules": ["记忆可以被交易,但会留下情绪残影", "城市档案馆记录每一次被篡改的过去"],
+                "world_rules": [
+                    "记忆可以被交易,但会留下情绪残影",
+                    "城市档案馆记录每一次被篡改的过去",
+                ],
                 "main_characters": [
                     {
                         "name": "林澈",
@@ -179,7 +182,9 @@ class ModelGateway:
         self.settings = get_settings()
         self._default_model = self.settings.default_model
         self._provider: ModelProvider = (
-            _MockProvider() if self.settings.model_gateway_mode == "mock" else _RealProviderPlaceholder()
+            _MockProvider()
+            if self.settings.model_gateway_mode == "mock"
+            else _RealProviderPlaceholder()
         )
         self._settings_cache_at: float = 0.0  # monotonic 时间；0 = 强制首次刷新
 
@@ -195,11 +200,13 @@ class ModelGateway:
             self._provider = OpenAIChatProvider(
                 api_key=config.openai_api_key,
                 base_url=config.openai_base_url,
+                timeout=self.settings.model_gateway_timeout_seconds,
             )
         elif config.provider == "anthropic" and config.anthropic_api_key:
             self._provider = AnthropicMessagesProvider(
                 api_key=config.anthropic_api_key,
                 base_url=config.anthropic_base_url,
+                timeout=self.settings.model_gateway_timeout_seconds,
             )
         else:
             self._provider = _RealProviderPlaceholder()

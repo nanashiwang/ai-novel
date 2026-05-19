@@ -1,6 +1,5 @@
-from functools import lru_cache
-
 import json
+from functools import lru_cache
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -24,6 +23,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     anthropic_base_url: str = "https://api.anthropic.com/v1"
     default_model: str = "gpt-5.5"
+    model_gateway_timeout_seconds: float = 300.0
 
     # 鉴权与会话
     jwt_secret: str = Field(default="dev-only-change-me", min_length=8)
@@ -85,7 +85,10 @@ class Settings(BaseSettings):
     def _validate_secrets(self) -> "Settings":
         """生产环境必须使用强密钥，且 CORS 不能与 credentials 冲突。"""
         if self.environment in {"production", "prod"}:
-            if self.jwt_secret in {"dev-only-change-me", "please-change-me-in-production-min-32-chars"}:
+            if self.jwt_secret in {
+                "dev-only-change-me",
+                "please-change-me-in-production-min-32-chars",
+            }:
                 raise ValueError("JWT_SECRET 在生产环境必须替换为强随机密钥（≥32 字符）")
             if len(self.jwt_secret) < 32:
                 raise ValueError("JWT_SECRET 在生产环境必须 ≥32 字符")

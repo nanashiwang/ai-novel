@@ -225,6 +225,7 @@ export function AdminUsersPage() {
       adminApi.updateUser(userId, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "audit-logs"] });
       if (detailUserId) {
         queryClient.invalidateQueries({ queryKey: ["admin", "user", detailUserId] });
       }
@@ -235,6 +236,7 @@ export function AdminUsersPage() {
   const resetPwdMutation = useMutation({
     mutationFn: (userId: string) => adminApi.resetUserPassword(userId),
     onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "audit-logs"] });
       window.prompt(
         "已重置密码。请复制临时密码并通过安全渠道告知用户：",
         data.temp_password,
@@ -445,6 +447,7 @@ export function AdminOrganizationsPage() {
       queryClient.invalidateQueries({ queryKey: ["admin", "organizations"] });
       queryClient.invalidateQueries({ queryKey: ["admin", "plans"] });
       queryClient.invalidateQueries({ queryKey: ["admin", "quotas"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "audit-logs"] });
     },
     onError: (err) => {
       toast.error(err instanceof Error ? err.message : "切换套餐失败");
@@ -552,6 +555,7 @@ export function AdminPlansPage() {
       queryClient.invalidateQueries({ queryKey: ["admin", "plans"] });
       queryClient.invalidateQueries({ queryKey: ["admin", "quota-keys"] });
       queryClient.invalidateQueries({ queryKey: ["billing", "plans"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "audit-logs"] });
       setSelectedId(saved.id);
       setDraft({});
       toast.success("套餐已保存");
@@ -566,6 +570,7 @@ export function AdminPlansPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin", "plans"] });
       queryClient.invalidateQueries({ queryKey: ["billing", "plans"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "audit-logs"] });
       setSelectedId("new");
       setDraft({});
       toast.success("套餐已删除");
@@ -982,6 +987,7 @@ export function AdminQuotasPage() {
     }) => adminApi.adjustOrganizationQuota(orgId, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin", "quotas"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "audit-logs"] });
       toast.success("已写入 audit_logs");
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : "调整失败"),
@@ -1387,6 +1393,7 @@ export function AdminSettingsPage() {
       adminApi.updateModelGatewaySettings(payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin", "settings", "model-gateway"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "audit-logs"] });
       setDraft({});
       toast.success("模型配置已保存");
     },

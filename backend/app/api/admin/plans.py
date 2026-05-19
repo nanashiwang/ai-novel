@@ -110,6 +110,36 @@ async def _plan_to_response(db: DbDep, plan: Plan) -> AdminPlanResponse:
     )
 
 
+async def _plan_features_snapshot(db: DbDep, plan_id: str) -> list[dict]:
+    result = await db.execute(
+        select(PlanFeature)
+        .where(PlanFeature.plan_id == plan_id)
+        .order_by(PlanFeature.feature_key.asc())
+    )
+    return [
+        {
+            "feature_key": feature.feature_key,
+            "enabled": feature.enabled,
+            "limit_value": feature.limit_value,
+            "limit_unit": feature.limit_unit,
+        }
+        for feature in result.scalars().all()
+    ]
+
+
+async def _plan_audit_snapshot(db: DbDep, plan: Plan) -> dict:
+    return {
+        "code": plan.code,
+        "name": plan.name,
+        "description": plan.description,
+        "price_monthly": float(plan.price_monthly or 0),
+        "price_yearly": float(plan.price_yearly) if plan.price_yearly is not None else None,
+        "currency": plan.currency,
+        "status": plan.status,
+        "features": await _plan_features_snapshot(db, plan.id),
+    }
+
+
 @router.get("", response_model=list[AdminPlanResponse])
 async def list_admin_plans(user: CurrentUserDep, db: DbDep):
     require_platform_admin(user)
@@ -142,6 +172,16 @@ async def create_admin_plan(
     db.add(plan)
     await db.flush()
     await _replace_features(db, plan.id, payload.features)
+    after = await _plan_audit_snapshot(db, plan)
+    await AuditLogRepository(db).create(
+        organization_id=user.preferred_organization_id or "platform",
+        actor_user_id=user.id,
+        action="plan.create",
+        target_type="plan",
+        target_id=plan.id,
+        before_data=None,
+        after_data=after,
+    )
     await db.commit()
     return await _plan_to_response(db, plan)
 
@@ -162,6 +202,7 @@ async def update_admin_plan(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="plan_code_exists")
 
+    before = await _plan_audit_snapshot(db, plan)
     plan.code = payload.code
     plan.name = payload.name
     plan.description = payload.description
@@ -170,6 +211,16 @@ async def update_admin_plan(
     plan.currency = payload.currency
     plan.status = payload.status
     await _replace_features(db, plan.id, payload.features)
+    after = await _plan_audit_snapshot(db, plan)
+    await AuditLogRepository(db).create(
+        organization_id=user.preferred_organization_id or "platform",
+        actor_user_id=user.id,
+        action="plan.update",
+        target_type="plan",
+        target_id=plan_id,
+        before_data=before,
+        after_data=after,
+    )
     await db.commit()
     return await _plan_to_response(db, plan)
 
@@ -226,6 +277,7 @@ async def delete_admin_plan(
             detail="plan_in_use",
         )
 
+    before = await _plan_audit_snapshot(db, plan)
     # 先删 features，再删 plan（避免外键残留）
     features = await db.execute(select(PlanFeature).where(PlanFeature.plan_id == plan_id))
     for feature in features.scalars().all():
@@ -238,9 +290,8 @@ async def delete_admin_plan(
         action="plan.delete",
         target_type="plan",
         target_id=plan_id,
-        before_data={"code": plan.code, "name": plan.name, "status": plan.status},
+        before_data=before,
         after_data=None,
     )
     await db.delete(plan)
     await db.commit()
-

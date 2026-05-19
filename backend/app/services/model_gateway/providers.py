@@ -9,10 +9,13 @@ OpenAI / Anthropic 都通过 HTTP client 调用，避免强依赖 SDK；
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
 import httpx
+
+_TRANSIENT_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
 
 def _raise_for_status(response: httpx.Response) -> None:
@@ -26,6 +29,32 @@ def _raise_for_status(response: httpx.Response) -> None:
             request=exc.request,
             response=exc.response,
         ) from exc
+
+
+async def _post_json(
+    client: httpx.AsyncClient,
+    path: str,
+    *,
+    payload: dict[str, Any],
+    timeout_seconds: float,
+    attempts: int = 2,
+) -> httpx.Response:
+    last_timeout: httpx.TimeoutException | None = None
+    for attempt in range(max(1, attempts)):
+        try:
+            response = await client.post(path, json=payload)
+        except httpx.TimeoutException as exc:
+            last_timeout = exc
+            if attempt >= attempts - 1:
+                break
+        else:
+            if (
+                response.status_code not in _TRANSIENT_STATUS_CODES
+                or attempt >= attempts - 1
+            ):
+                return response
+        await asyncio.sleep(min(2**attempt, 5))
+    raise TimeoutError(f"model_gateway_timeout_after_{timeout_seconds:g}s") from last_timeout
 
 
 def _parse_json_from_text(text: str) -> dict[str, Any]:
@@ -81,7 +110,7 @@ class OpenAIChatProvider:
         *,
         api_key: str,
         base_url: str = "https://api.openai.com/v1",
-        timeout: float = 60.0,
+        timeout: float = 300.0,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
@@ -107,9 +136,10 @@ class OpenAIChatProvider:
         temperature: float,
     ) -> str:
         async with self._client() as client:
-            response = await client.post(
+            response = await _post_json(
+                client,
                 "/chat/completions",
-                json={
+                payload={
                     "model": model,
                     "messages": [
                         {"role": "system", "content": system_prompt},
@@ -117,6 +147,7 @@ class OpenAIChatProvider:
                     ],
                     "temperature": temperature,
                 },
+                timeout_seconds=self.timeout,
             )
             _raise_for_status(response)
             data = response.json()
@@ -155,7 +186,12 @@ class OpenAIChatProvider:
             payload["response_format"] = {"type": "json_object"}
 
         async with self._client() as client:
-            response = await client.post("/chat/completions", json=payload)
+            response = await _post_json(
+                client,
+                "/chat/completions",
+                payload=payload,
+                timeout_seconds=self.timeout,
+            )
             try:
                 _raise_for_status(response)
             except httpx.HTTPStatusError:
@@ -163,7 +199,12 @@ class OpenAIChatProvider:
                     raise
                 fallback_payload = dict(payload)
                 fallback_payload.pop("response_format", None)
-                response = await client.post("/chat/completions", json=fallback_payload)
+                response = await _post_json(
+                    client,
+                    "/chat/completions",
+                    payload=fallback_payload,
+                    timeout_seconds=self.timeout,
+                )
                 _raise_for_status(response)
             data = response.json()
         return _parse_json_from_text(data["choices"][0]["message"]["content"])
@@ -177,7 +218,7 @@ class AnthropicMessagesProvider:
         *,
         api_key: str,
         base_url: str = "https://api.anthropic.com/v1",
-        timeout: float = 60.0,
+        timeout: float = 300.0,
         max_tokens: int = 4096,
         anthropic_version: str = "2023-06-01",
     ) -> None:
@@ -207,15 +248,17 @@ class AnthropicMessagesProvider:
         temperature: float,
     ) -> str:
         async with self._client() as client:
-            response = await client.post(
+            response = await _post_json(
+                client,
                 "/messages",
-                json={
+                payload={
                     "model": model,
                     "system": system_prompt,
                     "messages": [{"role": "user", "content": user_prompt}],
                     "temperature": temperature,
                     "max_tokens": self.max_tokens,
                 },
+                timeout_seconds=self.timeout,
             )
             _raise_for_status(response)
             data = response.json()

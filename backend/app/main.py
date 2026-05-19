@@ -4,19 +4,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.healthz import router as healthz_router
 from app.api.router import api_router
 from app.core.config import get_settings
+from app.core.database import AsyncSessionLocal
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging
 from app.core.middleware import register_middlewares
 from app.core.rate_limit import register_rate_limit
 from app.core.schema import ensure_runtime_schema
 from app.schemas.common import HealthResponse
+from app.services.auth.service import auth_service
 from app.services.model_gateway.providers import (
     AnthropicMessagesProvider,
     OpenAIChatProvider,
 )
 from app.services.model_gateway.service import model_gateway
-from app.core.database import AsyncSessionLocal
-from app.services.auth.service import auth_service
 
 configure_logging()
 settings = get_settings()
@@ -31,6 +31,7 @@ def _wire_model_provider() -> None:
             OpenAIChatProvider(
                 api_key=settings.openai_api_key,
                 base_url=settings.openai_base_url,
+                timeout=settings.model_gateway_timeout_seconds,
             )
         )
     elif settings.model_gateway_provider == "anthropic" and settings.anthropic_api_key:
@@ -38,6 +39,7 @@ def _wire_model_provider() -> None:
             AnthropicMessagesProvider(
                 api_key=settings.anthropic_api_key,
                 base_url=settings.anthropic_base_url,
+                timeout=settings.model_gateway_timeout_seconds,
             )
         )
 
@@ -47,7 +49,10 @@ _wire_model_provider()
 app = FastAPI(
     title=settings.app_name,
     version="0.1.0",
-    description="AI 小说自动生产 SaaS API。鉴权 = JWT Bearer；多租户通过 X-Organization-Id 头切换。",
+    description=(
+        "AI 小说自动生产 SaaS API。鉴权 = JWT Bearer；"
+        "多租户通过 X-Organization-Id 头切换。"
+    ),
     docs_url="/docs",
     redoc_url="/redoc",
 )

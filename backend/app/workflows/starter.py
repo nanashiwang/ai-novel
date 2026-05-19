@@ -190,7 +190,8 @@ class WorkflowStarter:
             await mark_job_status(job_id, "succeeded", None, result)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("local_workflow_failed", extra={"job_id": job_id})
-            await mark_job_status(job_id, "failed", str(exc))
+            message = str(exc) or exc.__class__.__name__
+            await mark_job_status(job_id, "failed", message)
 
 
 workflow_starter = WorkflowStarter()

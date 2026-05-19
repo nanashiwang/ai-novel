@@ -77,6 +77,18 @@ async def test_super_admin_can_create_and_update_plan(client):
     assert updated_data["price_yearly"] is None
     assert len(updated_data["features"]) == 2
 
+    logs = await client.get("/api/v1/admin/audit-logs", headers=headers)
+    assert logs.status_code == 200, logs.text
+    plan_logs = [row for row in logs.json() if row["target_id"] == data["id"]]
+    by_action = {row["action"]: row for row in plan_logs}
+    assert "plan.create" in by_action
+    assert "plan.update" in by_action
+    assert by_action["plan.create"]["before_data"] is None
+    assert by_action["plan.create"]["after_data"]["price_monthly"] == 79
+    assert by_action["plan.update"]["before_data"]["name"] == "Creator"
+    assert by_action["plan.update"]["after_data"]["name"] == "Creator Plus"
+    assert len(by_action["plan.update"]["after_data"]["features"]) == 2
+
 
 @pytest.mark.asyncio
 async def test_normal_user_cannot_create_plan(client):
@@ -98,4 +110,3 @@ async def test_normal_user_cannot_create_plan(client):
         },
     )
     assert res.status_code == 403
-
