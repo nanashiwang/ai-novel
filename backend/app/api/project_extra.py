@@ -7,10 +7,12 @@ from app.api.deps import CurrentUserDep, DbDep, TenantDep
 from app.core.exceptions import NotFoundError
 from app.core.permissions import require_permission
 from app.repositories import (
+    ChapterRepository,
     ContinuityIssueRepository,
     DraftVersionRepository,
     ExportFileRepository,
     MemoryRepository,
+    SceneRepository,
 )
 from app.schemas.common import APIModel
 
@@ -84,25 +86,88 @@ async def list_continuity_issues(
 
 
 # --- Draft versions ---
-class DraftVersionResponse(APIModel):
+class DraftVersionPayload(APIModel):
+    chapter_id: str | None = None
+    scene_id: str | None = None
+    version_type: str = "draft"
+    content: str = ""
+    word_count: int = 0
+    status: str = "draft"
+    parent_version_id: str | None = None
+
+
+class DraftVersionResponse(DraftVersionPayload):
     id: str
     organization_id: str
     project_id: str
-    chapter_id: str | None = None
-    scene_id: str | None = None
-    version_type: str
-    word_count: int
-    status: str
     created_by: str
 
 
 @router.get("/versions", response_model=list[DraftVersionResponse])
-async def list_versions(project_id: str, tenant: TenantDep, user: CurrentUserDep, db: DbDep):
+async def list_versions(
+    project_id: str,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+    chapter_id: str | None = None,
+    scene_id: str | None = None,
+):
     require_permission(user, "project:read", tenant)
     rows = await DraftVersionRepository(db).list(
-        organization_id=tenant.organization_id, project_id=project_id
+        organization_id=tenant.organization_id,
+        project_id=project_id,
+        chapter_id=chapter_id,
+        scene_id=scene_id,
     )
     return rows
+
+
+@router.post("/versions", response_model=DraftVersionResponse, status_code=201)
+async def create_version(
+    project_id: str,
+    payload: DraftVersionPayload,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    require_permission(user, "scene:write", tenant)
+    if payload.chapter_id:
+        chapter = await ChapterRepository(db).get(
+            payload.chapter_id, organization_id=tenant.organization_id
+        )
+        if not chapter or chapter.project_id != project_id:
+            raise NotFoundError("chapter_not_found")
+    if payload.scene_id:
+        scene = await SceneRepository(db).get(
+            payload.scene_id, organization_id=tenant.organization_id
+        )
+        if not scene or scene.project_id != project_id:
+            raise NotFoundError("scene_not_found")
+    version = await DraftVersionRepository(db).create(
+        organization_id=tenant.organization_id,
+        project_id=project_id,
+        created_by=user.id,
+        **payload.model_dump(),
+    )
+    await db.commit()
+    return version
+
+
+@router.get("/versions/{version_id}", response_model=DraftVersionResponse)
+async def get_version(
+    project_id: str,
+    version_id: str,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    require_permission(user, "project:read", tenant)
+    version = await DraftVersionRepository(db).get(
+        version_id, organization_id=tenant.organization_id
+    )
+    if not version or version.project_id != project_id:
+        raise NotFoundError("version_not_found")
+    return version
 
 
 # --- Exports ---

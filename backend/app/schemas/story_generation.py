@@ -1,0 +1,109 @@
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import Field, field_validator, model_validator
+
+from .common import APIModel
+
+
+class CharacterSeed(APIModel):
+    name: str = ""
+    role: str = ""
+    description: str = ""
+    motivation: str = ""
+    arc: str = ""
+
+
+class StoryBibleContract(APIModel):
+    premise: str = ""
+    theme: str = ""
+    genre: str = ""
+    tone: str = ""
+    target_reader: str = ""
+    narrative_pov: str = ""
+    style_guide: str = ""
+    constraints: list[str] = Field(default_factory=list)
+    world_rules: list[str] = Field(default_factory=list)
+    main_characters: list[CharacterSeed] = Field(default_factory=list)
+    continuity_rules: list[str] = Field(default_factory=list)
+
+
+class ChapterPlanItem(APIModel):
+    chapter_index: int = 0
+    title: str
+    summary: str = ""
+    goal: str = ""
+    conflict: str = ""
+    ending_hook: str = ""
+    volume_index: int | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "chapter_index" not in data and "chapter" in data:
+            data = {**data, "chapter_index": data.get("chapter")}
+        return data
+
+    @field_validator("summary", "goal", "conflict", "ending_hook", mode="before")
+    @classmethod
+    def stringify_text(cls, value: Any) -> str:
+        if isinstance(value, list):
+            return "；".join(str(item) for item in value)
+        if isinstance(value, dict):
+            return "；".join(f"{key}: {item}" for key, item in value.items())
+        return "" if value is None else str(value)
+
+
+class ChapterPlanContract(APIModel):
+    chapters: list[ChapterPlanItem] = Field(default_factory=list)
+
+
+class ScenePlanItem(APIModel):
+    scene_index: int
+    title: str
+    time_marker: str = ""
+    location: str = ""
+    characters: list[str] = Field(default_factory=list)
+    goal: str = ""
+    conflict: str = ""
+    emotion_start: str = ""
+    emotion_end: str = ""
+    reveal: str = ""
+    hook: str = ""
+    expected_words: int = 1200
+
+    @field_validator(
+        "title",
+        "time_marker",
+        "location",
+        "goal",
+        "conflict",
+        "emotion_start",
+        "emotion_end",
+        "reveal",
+        "hook",
+        mode="before",
+    )
+    @classmethod
+    def stringify_text(cls, value: Any) -> str:
+        if isinstance(value, list):
+            return "；".join(str(item) for item in value)
+        if isinstance(value, dict):
+            return "；".join(f"{key}: {item}" for key, item in value.items())
+        return "" if value is None else str(value)
+
+
+class ScenePlanContract(APIModel):
+    chapter_index: int = 0
+    chapter_title: str = ""
+    scenes: list[ScenePlanItem] = Field(default_factory=list)
+
+
+class SceneDraftContract(APIModel):
+    scene_id: str
+    title: str = ""
+    content: str = ""
+    word_count: int = 0
+    continuity_notes: list[str] = Field(default_factory=list)
+    unresolved_threads: list[str] = Field(default_factory=list)

@@ -31,6 +31,11 @@ class GenerationService:
         *,
         project_id: str,
         estimate_words: int,
+        mode: str = "full_novel",
+        topic: str = "",
+        target_chapters: int | None = None,
+        scenes_per_chapter: int = 3,
+        write_drafts: bool = True,
     ) -> GenerationJob:
         require_permission(user, "generation_job:create", tenant)
         require_entitlement(tenant, "generation:full_novel")
@@ -52,7 +57,14 @@ class GenerationService:
             plan_code=tenant.plan_code,
             reserved_quota=estimate_words,
             consumed_quota=0,
-            input_payload={"estimate_words": estimate_words},
+            input_payload={
+                "estimate_words": estimate_words,
+                "mode": mode,
+                "topic": topic,
+                "target_chapters": target_chapters,
+                "scenes_per_chapter": scenes_per_chapter,
+                "write_drafts": write_drafts,
+            },
         )
         await quota_service.reserve_quota(
             session,
@@ -63,6 +75,10 @@ class GenerationService:
         )
         job.workflow_id = workflow_starter.start_generate_full_novel({"id": job.id})
         await session.flush()
+        if workflow_starter.is_mock_workflow(job.workflow_id):
+            session.sync_session.info.setdefault("after_commit_tasks", []).append(
+                ("full_novel", job.id)
+            )
         return job
 
     async def create_scene_write_job(
@@ -105,6 +121,10 @@ class GenerationService:
         )
         job.workflow_id = workflow_starter.start_write_scene({"id": job.id})
         await session.flush()
+        if workflow_starter.is_mock_workflow(job.workflow_id):
+            session.sync_session.info.setdefault("after_commit_tasks", []).append(
+                ("scene_write", job.id)
+            )
         return job
 
     async def get_job(

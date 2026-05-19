@@ -66,3 +66,20 @@ make status
 make restart
 make down
 ```
+
+## GOAT 风格分层生成流水线
+
+全本生成已按从上到下的故事生产方式拆层：
+
+```text
+Topic / Project → Book Spec → Chapter Outline → Scene Cards → Scene Drafts
+```
+
+落库映射：
+
+- `Book Spec` → `novel_specs`
+- `Chapter Outline` → `chapters`
+- `Scene Cards` → `scenes`
+- `Scene Drafts` → `draft_versions`
+
+模型调用仍统一经过 `Model Gateway`，不会直接依赖 GOAT-Storytelling-Agent 的运行时后端。

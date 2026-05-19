@@ -7,7 +7,7 @@ from app.api.deps import CurrentUserDep, DbDep, TenantDep
 from app.api.pagination import Pagination, paginate
 from app.core.exceptions import NotFoundError
 from app.core.permissions import require_permission
-from app.repositories import ProjectRepository
+from app.repositories import NovelSpecRepository, ProjectRepository
 from app.schemas.generation import GenerationJobResponse
 from app.schemas.project import (
     GenerateNovelRequest,
@@ -55,6 +55,15 @@ async def create_project(
         tags=payload.tags,
         target_reader=payload.target_reader,
     )
+    if payload.premise:
+        await NovelSpecRepository(db).create(
+            organization_id=tenant.organization_id,
+            project_id=project.id,
+            premise=payload.premise,
+            genre=payload.genre,
+            target_reader=payload.target_reader,
+            style_guide=payload.style,
+        )
     await db.commit()
     return project
 
@@ -103,6 +112,11 @@ async def generate_full_novel(
         tenant,
         project_id=project_id,
         estimate_words=payload.estimate_words,
+        mode=payload.mode,
+        topic=payload.topic,
+        target_chapters=payload.target_chapters,
+        scenes_per_chapter=payload.scenes_per_chapter,
+        write_drafts=payload.write_drafts,
     )
     await db.commit()
     return job

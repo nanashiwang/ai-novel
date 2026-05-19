@@ -90,12 +90,35 @@ async def create_chapter(
     db: DbDep,
 ):
     require_permission(user, "chapter:write", tenant)
+    if payload.volume_id:
+        volume = await VolumeRepository(db).get(
+            payload.volume_id, organization_id=tenant.organization_id
+        )
+        if not volume or volume.project_id != project_id:
+            raise NotFoundError("volume_not_found")
     chapter = await ChapterRepository(db).create(
         organization_id=tenant.organization_id,
         project_id=project_id,
         **payload.model_dump(),
     )
     await db.commit()
+    return chapter
+
+
+@router.get("/chapters/{chapter_id}", response_model=ChapterResponse)
+async def get_chapter(
+    project_id: str,
+    chapter_id: str,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    require_permission(user, "chapter:read", tenant)
+    chapter = await ChapterRepository(db).get(
+        chapter_id, organization_id=tenant.organization_id
+    )
+    if not chapter or chapter.project_id != project_id:
+        raise NotFoundError("chapter_not_found")
     return chapter
 
 
@@ -109,6 +132,12 @@ async def update_chapter(
     db: DbDep,
 ):
     require_permission(user, "chapter:write", tenant)
+    if payload.volume_id:
+        volume = await VolumeRepository(db).get(
+            payload.volume_id, organization_id=tenant.organization_id
+        )
+        if not volume or volume.project_id != project_id:
+            raise NotFoundError("volume_not_found")
     chapter = await ChapterRepository(db).update(
         chapter_id,
         payload.model_dump(),

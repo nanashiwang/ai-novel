@@ -72,5 +72,40 @@ class WorkflowStarter:
     def start_write_scene(self, job: dict) -> str:
         return self._fire_and_forget("WriteSceneWorkflow", job, "write-scene")
 
+    def is_mock_workflow(self, workflow_id: str | None) -> bool:
+        return bool(workflow_id and workflow_id.startswith("mock-"))
+
+    def run_local_generate_full_novel(self, job_id: str) -> None:
+        self._run_local("full_novel", job_id)
+
+    def run_local_write_scene(self, job_id: str) -> None:
+        self._run_local("scene_write", job_id)
+
+    def _run_local(self, job_type: str, job_id: str) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            _logger.warning("local_workflow_skipped_no_event_loop", extra={"job_id": job_id})
+            return
+        loop.create_task(self._execute_local(job_type, job_id))
+
+    async def _execute_local(self, job_type: str, job_id: str) -> None:
+        from app.workflows.activities import (  # noqa: PLC0415
+            mark_job_status,
+            run_full_novel_pipeline,
+            run_scene_writing,
+        )
+
+        await mark_job_status(job_id, "running")
+        try:
+            if job_type == "full_novel":
+                result = await run_full_novel_pipeline({"id": job_id})
+            else:
+                result = await run_scene_writing({"id": job_id})
+            await mark_job_status(job_id, "succeeded", None, result)
+        except Exception as exc:  # noqa: BLE001
+            _logger.exception("local_workflow_failed", extra={"job_id": job_id})
+            await mark_job_status(job_id, "failed", str(exc))
+
 
 workflow_starter = WorkflowStarter()

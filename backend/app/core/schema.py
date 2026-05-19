@@ -19,10 +19,38 @@ _POSTGRES_SCHEMA_FIXES = [
     "ALTER TABLE organizations ADD COLUMN IF NOT EXISTS plan_code TEXT NOT NULL DEFAULT 'Free'",
     "CREATE INDEX IF NOT EXISTS ix_organizations_plan_code ON organizations(plan_code)",
     "ALTER TABLE projects ADD COLUMN IF NOT EXISTS current_word_count INTEGER NOT NULL DEFAULT 0",
-    "ALTER TABLE projects ADD COLUMN IF NOT EXISTS completed_chapter_count INTEGER NOT NULL DEFAULT 0",
+    (
+        "ALTER TABLE projects ADD COLUMN IF NOT EXISTS "
+        "completed_chapter_count INTEGER NOT NULL DEFAULT 0"
+    ),
     "ALTER TABLE projects ADD COLUMN IF NOT EXISTS cover_url TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE projects ADD COLUMN IF NOT EXISTS tags JSONB NOT NULL DEFAULT '[]'",
     "ALTER TABLE projects ADD COLUMN IF NOT EXISTS target_reader TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE model_calls ADD COLUMN IF NOT EXISTS cost_usd NUMERIC(10, 4) NOT NULL DEFAULT 0",
+    (
+        "ALTER TABLE model_calls ADD COLUMN IF NOT EXISTS "
+        "updated_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+    ),
+    """
+    CREATE TABLE IF NOT EXISTS draft_versions (
+      id TEXT PRIMARY KEY,
+      organization_id TEXT NOT NULL,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      chapter_id TEXT REFERENCES chapters(id),
+      scene_id TEXT REFERENCES scenes(id),
+      version_type TEXT NOT NULL DEFAULT 'draft',
+      content TEXT NOT NULL DEFAULT '',
+      word_count INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'draft',
+      parent_version_id TEXT,
+      created_by TEXT NOT NULL REFERENCES users(id),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_draft_versions_org ON draft_versions(organization_id)",
+    "CREATE INDEX IF NOT EXISTS ix_draft_versions_project ON draft_versions(project_id)",
+    "CREATE INDEX IF NOT EXISTS ix_draft_versions_scene ON draft_versions(scene_id)",
     """
     CREATE TABLE IF NOT EXISTS organization_invitations (
       id TEXT PRIMARY KEY,
@@ -39,7 +67,10 @@ _POSTGRES_SCHEMA_FIXES = [
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
     """,
-    "CREATE INDEX IF NOT EXISTS ix_invitations_organization_id ON organization_invitations(organization_id)",
+    (
+        "CREATE INDEX IF NOT EXISTS ix_invitations_organization_id "
+        "ON organization_invitations(organization_id)"
+    ),
     "CREATE INDEX IF NOT EXISTS ix_invitations_email ON organization_invitations(email)",
     "CREATE INDEX IF NOT EXISTS ix_invitations_status ON organization_invitations(status)",
     "CREATE UNIQUE INDEX IF NOT EXISTS ix_invitations_token ON organization_invitations(token)",

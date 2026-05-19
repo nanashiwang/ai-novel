@@ -6,7 +6,7 @@ from fastapi import APIRouter
 from app.api.deps import CurrentUserDep, DbDep, TenantDep
 from app.core.exceptions import NotFoundError
 from app.core.permissions import require_permission
-from app.repositories import SceneRepository
+from app.repositories import ChapterRepository, SceneRepository
 from app.schemas.common import APIModel
 
 router = APIRouter(prefix="/projects/{project_id}/scenes", tags=["scenes"])
@@ -60,12 +60,32 @@ async def create_scene(
     db: DbDep,
 ):
     require_permission(user, "scene:write", tenant)
+    chapter = await ChapterRepository(db).get(
+        payload.chapter_id, organization_id=tenant.organization_id
+    )
+    if not chapter or chapter.project_id != project_id:
+        raise NotFoundError("chapter_not_found")
     scene = await SceneRepository(db).create(
         organization_id=tenant.organization_id,
         project_id=project_id,
         **payload.model_dump(),
     )
     await db.commit()
+    return scene
+
+
+@router.get("/{scene_id}", response_model=SceneResponse)
+async def get_scene(
+    project_id: str,
+    scene_id: str,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    require_permission(user, "scene:read", tenant)
+    scene = await SceneRepository(db).get(scene_id, organization_id=tenant.organization_id)
+    if not scene or scene.project_id != project_id:
+        raise NotFoundError("scene_not_found")
     return scene
 
 
@@ -79,6 +99,11 @@ async def update_scene(
     db: DbDep,
 ):
     require_permission(user, "scene:write", tenant)
+    chapter = await ChapterRepository(db).get(
+        payload.chapter_id, organization_id=tenant.organization_id
+    )
+    if not chapter or chapter.project_id != project_id:
+        raise NotFoundError("chapter_not_found")
     scene = await SceneRepository(db).update(
         scene_id, payload.model_dump(), organization_id=tenant.organization_id
     )

@@ -61,3 +61,35 @@ async def test_project_pagination(client):
     res = await client.get("/api/v1/projects?page=2&page_size=2", headers=headers)
     assert res.status_code == 200
     assert len(res.json()) == 2
+
+
+@pytest.mark.asyncio
+async def test_project_create_persists_initial_spec(client):
+    token, _ = await _register(client, "spec@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    created = await client.post(
+        "/api/v1/projects",
+        json={
+            "title": "设定项目",
+            "premise": "一个档案员发现城市记忆被买卖。",
+            "genre": "都市悬疑",
+            "style": "冷峻",
+            "target_reader": "悬疑读者",
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    pid = created.json()["id"]
+
+    spec = await client.get(f"/api/v1/projects/{pid}/spec", headers=headers)
+    assert spec.status_code == 200, spec.text
+    assert spec.json()["premise"] == "一个档案员发现城市记忆被买卖。"
+
+    updated = await client.put(
+        f"/api/v1/projects/{pid}/spec",
+        json={"premise": "更新后的故事核心", "theme": "记忆与身份"},
+        headers=headers,
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["theme"] == "记忆与身份"

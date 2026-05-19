@@ -133,10 +133,13 @@ export const quotaApi = {
 
 // ----- Billing -----
 export type Plan = {
+  id?: string;
   code: string;
   name: string;
   description: string;
   price_monthly: number;
+  price_yearly?: number | null;
+  currency?: string;
   status: string;
 };
 
@@ -227,6 +230,32 @@ export type ModelGatewaySettingsUpdate = {
   anthropic_api_key?: string | null;
 };
 
+export type AdminPlanFeature = {
+  id?: string;
+  feature_key: string;
+  enabled: boolean;
+  limit_value: number | null;
+  limit_unit: string;
+};
+
+export type AdminPlan = Required<Pick<Plan, "id">> &
+  Plan & {
+    price_yearly: number | null;
+    currency: string;
+    features: AdminPlanFeature[];
+  };
+
+export type AdminPlanUpsert = {
+  code: string;
+  name: string;
+  description: string;
+  price_monthly: number;
+  price_yearly: number | null;
+  currency: string;
+  status: string;
+  features: AdminPlanFeature[];
+};
+
 export const adminApi = {
   users: () => http.get<unknown[]>("/admin/users"),
   organizations: () => http.get<unknown[]>("/admin/organizations"),
@@ -234,6 +263,10 @@ export const adminApi = {
   modelCalls: () => http.get<unknown[]>("/admin/model-calls"),
   auditLogs: () => http.get<unknown[]>("/admin/audit-logs"),
   contentReviews: () => http.get<unknown[]>("/admin/content-reviews"),
+  plans: () => http.get<AdminPlan[]>("/admin/plans"),
+  createPlan: (payload: AdminPlanUpsert) => http.post<AdminPlan>("/admin/plans", payload),
+  updatePlan: (id: string, payload: AdminPlanUpsert) =>
+    http.put<AdminPlan>(`/admin/plans/${id}`, payload),
   modelGatewaySettings: () =>
     http.get<ModelGatewaySettings>("/admin/settings/model-gateway"),
   updateModelGatewaySettings: (payload: ModelGatewaySettingsUpdate) =>

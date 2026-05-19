@@ -36,6 +36,10 @@ class GenerateNovelRequest(APIModel):
     mode: str = "full_novel"
     estimate_words: int = 20_000
     start_immediately: bool = True
+    topic: str = ""
+    target_chapters: int | None = None
+    scenes_per_chapter: int = 3
+    write_drafts: bool = True
 
 
 class SceneWriteRequest(APIModel):

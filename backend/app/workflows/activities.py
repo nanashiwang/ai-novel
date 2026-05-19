@@ -1,8 +1,6 @@
 """Temporal Activities。
 
-工作流中执行的、与外部世界交互的具体步骤。activities 会被 Temporal worker 真正调度。
-
-注意：activity 内部使用独立 SQLAlchemy session（不能复用 workflow 上下文）。
+工作流只编排步骤；所有模型调用、数据库写入都放在 activity 内。
 """
 from __future__ import annotations
 
@@ -10,10 +8,26 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio import activity
 
 from app.core.database import AsyncSessionLocal
-from app.repositories import GenerationJobRepository
+from app.core.exceptions import NotFoundError
+from app.models.chapter import Chapter
+from app.models.draft_version import DraftVersion
+from app.models.generation_job import GenerationJob
+from app.models.project import NovelSpec, Project
+from app.models.scene import Scene
+from app.repositories import (
+    ChapterRepository,
+    DraftVersionRepository,
+    GenerationJobRepository,
+    NovelSpecRepository,
+    ProjectRepository,
+    SceneRepository,
+)
+from app.services.novel_planner.service import novel_planner_service
+from app.services.writer.service import writer_service
 
 _logger = logging.getLogger(__name__)
 
@@ -29,9 +43,59 @@ async def _with_session(handler):
             raise
 
 
+async def _load_job(session: AsyncSession, job_id: str) -> GenerationJob:
+    job = await GenerationJobRepository(session).get(job_id)
+    if not job:
+        raise NotFoundError("job_not_found")
+    return job
+
+
+async def _load_project(session: AsyncSession, job: GenerationJob) -> Project:
+    project = await ProjectRepository(session).get(
+        job.project_id,
+        organization_id=job.organization_id,
+    )
+    if not project:
+        raise NotFoundError("project_not_found")
+    return project
+
+
+async def _load_spec(session: AsyncSession, job: GenerationJob) -> NovelSpec:
+    spec = await NovelSpecRepository(session).get_by(
+        organization_id=job.organization_id,
+        project_id=job.project_id,
+    )
+    if not spec:
+        raise NotFoundError("novel_spec_not_found")
+    return spec
+
+
+def _contract_constraints(bible) -> list[str]:
+    constraints = list(bible.constraints or [])
+    constraints.extend(f"世界规则：{item}" for item in bible.world_rules or [])
+    constraints.extend(f"连续性规则：{item}" for item in bible.continuity_rules or [])
+    if bible.main_characters:
+        names = [item.name for item in bible.main_characters if item.name]
+        if names:
+            constraints.append("主要人物：" + "、".join(names))
+    return constraints
+
+
+def _payload_int(payload: dict[str, Any], key: str, default: int) -> int:
+    try:
+        return int(payload.get(key) or default)
+    except (TypeError, ValueError):
+        return default
+
+
 @activity.defn(name="mark_job_status")
-async def mark_job_status(job_id: str, status: str, error_message: str | None = None) -> dict[str, Any]:
-    """更新 generation_jobs 的状态、时间戳，可选 error_message。"""
+async def mark_job_status(
+    job_id: str,
+    status: str,
+    error_message: str | None = None,
+    output_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """更新 generation_jobs 的状态、时间戳，可选 error_message/output_payload。"""
 
     async def handler(session):
         repo = GenerationJobRepository(session)
@@ -47,30 +111,376 @@ async def mark_job_status(job_id: str, status: str, error_message: str | None = 
             job.finished_at = now
         if error_message is not None:
             job.error_message = error_message
+        if output_payload is not None:
+            job.output_payload = output_payload
         return {"updated": True, "status": status}
+
+    return await _with_session(handler)
+
+
+@activity.defn(name="generate_book_spec")
+async def generate_book_spec(job: dict[str, Any]) -> dict[str, Any]:
+    """生成或补全 book spec，并落到 novel_specs。"""
+
+    async def handler(session: AsyncSession):
+        job_row = await _load_job(session, job["id"])
+        project = await _load_project(session, job_row)
+        payload = job_row.input_payload or {}
+        spec_repo = NovelSpecRepository(session)
+        existing = await spec_repo.get_by(
+            organization_id=job_row.organization_id,
+            project_id=job_row.project_id,
+        )
+        if (
+            existing
+            and existing.premise
+            and existing.theme
+            and not payload.get("force_regenerate_spec")
+        ):
+            project.status = "bible_ready"
+            return {"spec_id": existing.id, "reused": True, "premise": existing.premise}
+
+        bible = await novel_planner_service.generate_story_bible(
+            session,
+            organization_id=job_row.organization_id,
+            project_id=job_row.project_id,
+            job_id=job_row.id,
+            project=project,
+            topic=str(payload.get("topic") or ""),
+        )
+        values = {
+            "premise": bible.premise,
+            "theme": bible.theme,
+            "genre": bible.genre,
+            "tone": bible.tone,
+            "target_reader": bible.target_reader,
+            "narrative_pov": bible.narrative_pov,
+            "style_guide": bible.style_guide,
+            "constraints": _contract_constraints(bible),
+        }
+        if existing:
+            for key, value in values.items():
+                setattr(existing, key, value)
+            spec = existing
+        else:
+            spec = await spec_repo.create(
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                **values,
+            )
+        project.genre = project.genre or bible.genre
+        project.target_reader = project.target_reader or bible.target_reader
+        project.style = project.style or bible.style_guide[:500]
+        project.status = "bible_ready"
+        return {"spec_id": spec.id, "reused": False, "premise": spec.premise}
+
+    return await _with_session(handler)
+
+
+@activity.defn(name="generate_chapter_outline")
+async def generate_chapter_outline(job: dict[str, Any]) -> dict[str, Any]:
+    """按 book spec 生成章节规划，并落到 chapters。"""
+
+    async def handler(session: AsyncSession):
+        job_row = await _load_job(session, job["id"])
+        project = await _load_project(session, job_row)
+        spec = await _load_spec(session, job_row)
+        payload = job_row.input_payload or {}
+        chapter_repo = ChapterRepository(session)
+        existing = list(
+            await chapter_repo.list(
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                order_by=Chapter.chapter_index.asc(),
+            )
+        )
+        if existing and not payload.get("force_regenerate_outline"):
+            project.status = "outlined"
+            return {"chapter_count": len(existing), "reused": True}
+
+        requested = payload.get("target_chapters") or project.target_chapter_count or 6
+        target_chapters = max(1, min(int(requested), 12))
+        contract = await novel_planner_service.plan_chapters(
+            session,
+            organization_id=job_row.organization_id,
+            project_id=job_row.project_id,
+            job_id=job_row.id,
+            project=project,
+            bible=spec,
+            target_chapters=target_chapters,
+        )
+        created = 0
+        for item in contract.chapters:
+            await chapter_repo.create(
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                volume_id=None,
+                chapter_index=item.chapter_index,
+                title=item.title,
+                summary=item.summary,
+                goal=item.goal,
+                conflict=item.conflict,
+                ending_hook=item.ending_hook,
+                status="planned",
+            )
+            created += 1
+        project.target_chapter_count = project.target_chapter_count or created
+        project.status = "outlined"
+        return {"chapter_count": created, "reused": False}
+
+    return await _with_session(handler)
+
+
+@activity.defn(name="generate_scene_cards")
+async def generate_scene_cards(job: dict[str, Any]) -> dict[str, Any]:
+    """按章节规划拆 scene cards，并落到 scenes。"""
+
+    async def handler(session: AsyncSession):
+        job_row = await _load_job(session, job["id"])
+        project = await _load_project(session, job_row)
+        spec = await _load_spec(session, job_row)
+        payload = job_row.input_payload or {}
+        scene_repo = SceneRepository(session)
+        existing = list(
+            await scene_repo.list(
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                order_by=Scene.scene_index.asc(),
+            )
+        )
+        if existing and not payload.get("force_regenerate_scenes"):
+            project.status = "scenes_planned"
+            return {"scene_count": len(existing), "reused": True}
+
+        chapters = list(
+            await ChapterRepository(session).list(
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                order_by=Chapter.chapter_index.asc(),
+            )
+        )
+        scenes_per_chapter = max(1, min(_payload_int(payload, "scenes_per_chapter", 3), 8))
+        estimate_words = _payload_int(payload, "estimate_words", 20000)
+        expected_words = max(600, estimate_words // max(1, len(chapters) * scenes_per_chapter))
+        created = 0
+        for chapter in chapters:
+            contract = await novel_planner_service.plan_scenes(
+                session,
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                job_id=job_row.id,
+                project=project,
+                bible=spec,
+                chapter=chapter,
+                scenes_per_chapter=scenes_per_chapter,
+                expected_words=expected_words,
+            )
+            for item in contract.scenes[:scenes_per_chapter]:
+                await scene_repo.create(
+                    organization_id=job_row.organization_id,
+                    project_id=job_row.project_id,
+                    chapter_id=chapter.id,
+                    scene_index=item.scene_index,
+                    title=item.title,
+                    time_marker=item.time_marker,
+                    location=item.location,
+                    characters=item.characters,
+                    goal=item.goal,
+                    conflict=item.conflict,
+                    emotion_start=item.emotion_start,
+                    emotion_end=item.emotion_end,
+                    reveal=item.reveal,
+                    hook=item.hook,
+                    status="planned",
+                )
+                created += 1
+        project.status = "scenes_planned"
+        return {"scene_count": created, "reused": False}
+
+    return await _with_session(handler)
+
+
+@activity.defn(name="write_scene_drafts")
+async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
+    """逐场景写正文草稿，并落到 draft_versions。"""
+
+    async def handler(session: AsyncSession):
+        job_row = await _load_job(session, job["id"])
+        project = await _load_project(session, job_row)
+        spec = await _load_spec(session, job_row)
+        payload = job_row.input_payload or {}
+        if payload.get("write_drafts") is False:
+            project.status = "scenes_planned"
+            return {
+                "draft_count": 0,
+                "created_draft_count": 0,
+                "reused_draft_count": 0,
+                "word_count": 0,
+                "skipped": True,
+            }
+        scene_repo = SceneRepository(session)
+        draft_repo = DraftVersionRepository(session)
+        chapters = list(
+            await ChapterRepository(session).list(
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                order_by=Chapter.chapter_index.asc(),
+            )
+        )
+        chapter_by_id = {chapter.id: chapter for chapter in chapters}
+        scenes = list(
+            await scene_repo.list(
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+            )
+        )
+        scenes.sort(
+            key=lambda scene: (
+                chapter_by_id[scene.chapter_id].chapter_index,
+                scene.scene_index,
+            )
+        )
+        existing_drafts = list(
+            await draft_repo.list(
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+            )
+        )
+        draft_by_scene: dict[str, DraftVersion] = {
+            draft.scene_id: draft
+            for draft in existing_drafts
+            if draft.scene_id and draft.version_type == "draft"
+        }
+        estimate_words = _payload_int(payload, "estimate_words", 20000)
+        target_words = max(600, estimate_words // max(1, len(scenes)))
+        force = bool(payload.get("force_regenerate_drafts"))
+        created = 0
+        reused = 0
+        total_words = sum(draft.word_count for draft in draft_by_scene.values())
+        previous_excerpt = ""
+        for scene in scenes:
+            chapter = chapter_by_id[scene.chapter_id]
+            if scene.id in draft_by_scene and not force:
+                previous_excerpt = draft_by_scene[scene.id].content[-800:]
+                reused += 1
+                continue
+            draft = await writer_service.write_scene_draft(
+                session,
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                job_id=job_row.id,
+                spec=spec,
+                chapter=chapter,
+                scene=scene,
+                previous_scene_excerpt=previous_excerpt,
+                target_words=target_words,
+            )
+            word_count = draft.word_count or len(draft.content)
+            await draft_repo.create(
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                chapter_id=chapter.id,
+                scene_id=scene.id,
+                version_type="draft",
+                content=draft.content,
+                word_count=word_count,
+                status="draft",
+                parent_version_id=None,
+                created_by=job_row.user_id,
+            )
+            scene.status = "drafted"
+            previous_excerpt = draft.content[-800:]
+            total_words += word_count
+            created += 1
+        project.current_word_count = total_words
+        project.completed_chapter_count = len(chapters) if scenes else 0
+        project.status = "drafting"
+        return {
+            "draft_count": created + reused,
+            "created_draft_count": created,
+            "reused_draft_count": reused,
+            "word_count": total_words,
+        }
 
     return await _with_session(handler)
 
 
 @activity.defn(name="run_scene_writing")
 async def run_scene_writing(job: dict[str, Any]) -> dict[str, Any]:
-    """场景写作 activity。
+    """单 scene 写作 activity。"""
 
-    在 mock 模式下返回固定字数；real 模式下应在 worker 进程中调用 model_gateway。
-    """
-    target_words = int(job.get("input_payload", {}).get("target_words", 4000))
-    return {"scene_id": job.get("input_payload", {}).get("scene_id"), "word_count": target_words}
+    async def handler(session: AsyncSession):
+        job_row = await _load_job(session, job["id"])
+        payload = job_row.input_payload or {}
+        scene_id = payload.get("scene_id")
+        if not scene_id:
+            raise NotFoundError("scene_id_required")
+        project = await _load_project(session, job_row)
+        spec = await _load_spec(session, job_row)
+        scene = await SceneRepository(session).get(
+            scene_id, organization_id=job_row.organization_id
+        )
+        if not scene or scene.project_id != project.id:
+            raise NotFoundError("scene_not_found")
+        chapter = await ChapterRepository(session).get(
+            scene.chapter_id,
+            organization_id=job_row.organization_id,
+        )
+        if not chapter:
+            raise NotFoundError("chapter_not_found")
+        target_words = _payload_int(payload, "target_words", 1200)
+        draft = await writer_service.write_scene_draft(
+            session,
+            organization_id=job_row.organization_id,
+            project_id=job_row.project_id,
+            job_id=job_row.id,
+            spec=spec,
+            chapter=chapter,
+            scene=scene,
+            target_words=target_words,
+        )
+        word_count = draft.word_count or len(draft.content)
+        saved = await DraftVersionRepository(session).create(
+            organization_id=job_row.organization_id,
+            project_id=job_row.project_id,
+            chapter_id=chapter.id,
+            scene_id=scene.id,
+            version_type="draft",
+            content=draft.content,
+            word_count=word_count,
+            status="draft",
+            parent_version_id=None,
+            created_by=job_row.user_id,
+        )
+        scene.status = "drafted"
+        result = {"scene_id": scene.id, "draft_id": saved.id, "word_count": word_count}
+        job_row.output_payload = result
+        return result
+
+    return await _with_session(handler)
 
 
 @activity.defn(name="run_full_novel_pipeline")
 async def run_full_novel_pipeline(job: dict[str, Any]) -> dict[str, Any]:
-    """全本流水线 activity 占位。
+    """兼容入口：按 GOAT 风格顺序执行完整分层流水线。"""
+    spec = await generate_book_spec(job)
+    chapters = await generate_chapter_outline(job)
+    scenes = await generate_scene_cards(job)
+    drafts = await write_scene_drafts(job)
+    return {
+        "book_spec": spec,
+        "chapters": chapters,
+        "scenes": scenes,
+        "drafts": drafts,
+    }
 
-    真实链路：规划 → 章节大纲 → 场景写作 → 审稿 → 记忆更新 → 导出。
-    此处仅做骨架。
-    """
-    estimate_words = int(job.get("input_payload", {}).get("estimate_words", 20000))
-    return {"chapters": [], "estimated_words": estimate_words}
 
-
-ALL_ACTIVITIES = [mark_job_status, run_scene_writing, run_full_novel_pipeline]
+ALL_ACTIVITIES = [
+    mark_job_status,
+    generate_book_spec,
+    generate_chapter_outline,
+    generate_scene_cards,
+    write_scene_drafts,
+    run_scene_writing,
+    run_full_novel_pipeline,
+]
