@@ -9,7 +9,7 @@ import {
   Trash2,
   Wand2,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 
 import { Badge, StatusBadge } from "@/components/ui/badge";
@@ -21,26 +21,19 @@ import { BibleBlock } from "@/components/screens/project/shared/bible-block";
 import { PreflightCard } from "@/components/screens/project/shared/preflight-card";
 import { severityClass, severityTone } from "@/components/screens/project/shared/severity";
 import { labelForVersion } from "@/components/screens/project/shared/version-label";
-import {
-  chaptersApi,
-  continuityIssuesApi,
-  type DraftVersion,
-  type GenerationJob,
-  jobsApi,
-  projectsApi,
-  scenesApi,
-  versionsApi,
-} from "@/lib/api";
+import { chaptersApi, projectsApi, scenesApi } from "@/lib/api";
 import { ApiError } from "@/lib/http";
 import { useScopedKey } from "@/lib/use-scoped-key";
 
 import { ContextInspector, type ContextSummaryEntry } from "./context-inspector";
 import { SceneEditorCard } from "./scene-editor-card";
+import { useAuditRewrite } from "./use-audit-rewrite";
+import { useSceneJobs } from "./use-scene-jobs";
+import { useSceneVersions } from "./use-scene-versions";
 
 export function WritingWorkspacePage({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
   const chaptersKey = useScopedKey("project", projectId, "chapters");
-  const jobsKey = useScopedKey("jobs");
   const preflightKey = useScopedKey("project", projectId, "preflight", "write_scene");
 
   const { data: chapters = [] } = useQuery({
@@ -71,63 +64,51 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
   const [activeSceneId, setActiveSceneId] = useState<string | null>(null);
   const activeScene = scenes.find((s) => s.id === activeSceneId) ?? scenes[0];
 
-  // 当前 scene 的 draft_versions（base list 默认按 created_at desc）
-  const versionsKey = useScopedKey(
-    "project",
+  // === 三个组合 hook ===
+  const {
+    versionsKey,
+    versions,
+    latestDraft,
+    displayedVersion,
+    setDisplayedVersionId,
+    isShowingLatest,
+    compareWithVersion,
+    setCompareWithId,
+    isComparing,
+    saveVersion,
+    autoSave,
+    deleteVersion,
+  } = useSceneVersions({ projectId, activeChapter, activeScene });
+
+  const {
+    jobsKey,
+    latestSceneJob,
+    isWriting,
+    latestAuditJob,
+    isAuditing,
+    latestAuditIssueCount,
+    isRewriting,
+  } = useSceneJobs({ projectId, activeScene });
+
+  const {
+    sceneIssues,
+    sceneOpenIssues,
+    openIssueCountByScene,
+    issuePanelRef,
+    audit,
+    rewrite,
+  } = useAuditRewrite({
     projectId,
-    "versions",
-    activeScene?.id,
-  );
-  const { data: versions = [] } = useQuery({
-    queryKey: versionsKey,
-    queryFn: () => versionsApi.list(projectId, { scene_id: activeScene?.id }),
-    enabled: !!activeScene,
+    activeScene,
+    jobsKey,
+    versionsKey,
+    scenesKey,
+    latestAuditJob,
+    latestAuditIssueCount,
+    onRewriteSuccess: () => setDisplayedVersionId(null),
   });
-  const latestDraft: DraftVersion | undefined = versions[0];
 
-  // 显示的版本：默认最新；如果切换到了某历史版本，记录其 id。当 scene 改变
-  // 或 versions 列表变化导致该 id 失效时，displayedVersion 自动 fallback
-  // 到 latestDraft，无需用 useEffect 重置 displayedVersionId。
-  const [displayedVersionId, setDisplayedVersionId] = useState<string | null>(null);
-  const displayedVersion =
-    (displayedVersionId
-      ? versions.find((v) => v.id === displayedVersionId)
-      : undefined) ?? latestDraft;
-  const isShowingLatest =
-    !displayedVersion || displayedVersion.id === latestDraft?.id;
-
-  // 对比模式：与当前 displayedVersion 对比的另一个版本 id。null = 普通编辑模式。
-  const [compareWithId, setCompareWithId] = useState<string | null>(null);
-  const compareWithVersion = compareWithId
-    ? versions.find((v) => v.id === compareWithId)
-    : undefined;
-  const isComparing = !!compareWithVersion;
-
-  // 当前 scene 的 write_scene 任务（按 input_payload.scene_id 过滤）
-  const { data: jobs = [] } = useQuery({
-    queryKey: jobsKey,
-    queryFn: () => jobsApi.list(),
-    refetchInterval: (query) => {
-      const list = (query.state.data as GenerationJob[] | undefined) ?? [];
-      const active = list.find(
-        (j) =>
-          j.project_id === projectId &&
-          ["write_scene", "audit_scene", "rewrite_scene"].includes(j.job_type) &&
-          (j.status === "queued" || j.status === "running"),
-      );
-      return active ? 1500 : false;
-    },
-  });
-  const latestSceneJob = jobs.find(
-    (j) =>
-      j.project_id === projectId &&
-      j.job_type === "write_scene" &&
-      (j.input_payload as { scene_id?: string } | null | undefined)?.scene_id ===
-        activeScene?.id,
-  );
-  const isWriting =
-    latestSceneJob?.status === "queued" || latestSceneJob?.status === "running";
-
+  // === write mutation：依赖太多本地 key，保留在 page 内 ===
   const write = useMutation({
     mutationFn: () => {
       if (!activeScene) {
@@ -149,201 +130,6 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
       toast.error(e instanceof ApiError ? e.message : "提交失败");
     },
   });
-
-  const saveVersion = useMutation({
-    mutationFn: (content: string) => {
-      if (!activeScene || !activeChapter) {
-        return Promise.reject(new Error("no_active_scene"));
-      }
-      return versionsApi.create(projectId, {
-        chapter_id: activeChapter.id,
-        scene_id: activeScene.id,
-        version_type: "user",
-        content,
-        word_count: content.length,
-        status: "draft",
-        parent_version_id: displayedVersion?.id ?? null,
-      });
-    },
-    onSuccess: () => {
-      toast.success("已保存为新版本");
-      queryClient.invalidateQueries({ queryKey: versionsKey });
-      setDisplayedVersionId(null);
-    },
-    onError: (e: unknown) => {
-      toast.error(e instanceof ApiError ? e.message : "保存失败");
-    },
-  });
-
-  const autoSave = useMutation({
-    // autosave 默默成功；与手动保存的差别：不弹 toast、version_type=autosave。
-    mutationFn: (content: string) => {
-      if (!activeScene || !activeChapter) {
-        return Promise.reject(new Error("no_active_scene"));
-      }
-      return versionsApi.create(projectId, {
-        chapter_id: activeChapter.id,
-        scene_id: activeScene.id,
-        version_type: "autosave",
-        content,
-        word_count: content.length,
-        status: "draft",
-        parent_version_id: displayedVersion?.id ?? null,
-      });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: versionsKey });
-      setDisplayedVersionId(null);
-    },
-    onError: (e: unknown) => {
-      // autosave 失败不打断用户，仅 console.warn
-      console.warn("autosave failed", e);
-    },
-  });
-
-  const deleteVersion = useMutation({
-    mutationFn: (versionId: string) => versionsApi.delete(projectId, versionId),
-    onSuccess: (_, versionId) => {
-      toast.success("已删除该版本");
-      // 若当前预览的就是被删的版本，自动回到最新版
-      if (displayedVersionId === versionId) {
-        setDisplayedVersionId(null);
-      }
-      queryClient.invalidateQueries({ queryKey: versionsKey });
-    },
-    onError: (e: unknown) => {
-      toast.error(e instanceof ApiError ? e.message : "删除失败");
-    },
-  });
-
-  // 审稿 / 重写：本 scene 的 ContinuityIssue 列表
-  const issuesKey = useScopedKey("project", projectId, "continuity-issues");
-  const { data: allIssues = [] } = useQuery({
-    queryKey: issuesKey,
-    queryFn: () => continuityIssuesApi.list(projectId),
-    enabled: !!projectId,
-  });
-  const openIssueCountByScene = allIssues.reduce<Record<string, number>>((acc, issue) => {
-    if (issue.scene_id && issue.status === "open") {
-      acc[issue.scene_id] = (acc[issue.scene_id] ?? 0) + 1;
-    }
-    return acc;
-  }, {});
-  const sceneIssues = allIssues.filter((i) => i.scene_id === activeScene?.id);
-  const sceneOpenIssues = sceneIssues.filter((i) => i.status === "open");
-  const issuePanelRef = useRef<HTMLDivElement | null>(null);
-  const activeAuditJobIds = useRef<Set<string>>(new Set());
-  const notifiedAuditJobIds = useRef<Set<string>>(new Set());
-
-  const audit = useMutation({
-    mutationFn: () => {
-      if (!activeScene) {
-        return Promise.reject(new Error("no_active_scene"));
-      }
-      return projectsApi.auditScene(projectId, activeScene.id, {
-        estimate_words: 500,
-      });
-    },
-    onSuccess: (job) => {
-      activeAuditJobIds.current.add(job.id);
-      toast.success("已提交审稿任务");
-      queryClient.invalidateQueries({ queryKey: jobsKey });
-      queryClient.invalidateQueries({ queryKey: issuesKey });
-    },
-    onError: (e: unknown) => {
-      toast.error(e instanceof ApiError ? e.message : "审稿提交失败");
-    },
-  });
-
-  const rewrite = useMutation({
-    mutationFn: () => {
-      if (!activeScene) {
-        return Promise.reject(new Error("no_active_scene"));
-      }
-      return projectsApi.rewriteScene(projectId, activeScene.id, {
-        target_words: 1200,
-        estimate_words: 2000,
-      });
-    },
-    onSuccess: () => {
-      toast.success("已提交重写任务");
-      queryClient.invalidateQueries({ queryKey: jobsKey });
-      queryClient.invalidateQueries({ queryKey: issuesKey });
-      queryClient.invalidateQueries({ queryKey: scenesKey });
-      queryClient.invalidateQueries({ queryKey: versionsKey });
-      setDisplayedVersionId(null);
-    },
-    onError: (e: unknown) => {
-      toast.error(e instanceof ApiError ? e.message : "重写提交失败");
-    },
-  });
-
-  // audit/rewrite 任务"正在进行"判断（基于 job.input_payload.scene_id）
-  const latestAuditJob = jobs.find(
-    (j) =>
-      j.project_id === projectId &&
-      j.job_type === "audit_scene" &&
-      (j.input_payload as { scene_id?: string } | null | undefined)?.scene_id ===
-        activeScene?.id,
-  );
-  const isAuditing =
-    latestAuditJob?.status === "queued" || latestAuditJob?.status === "running";
-  const latestRewriteJob = jobs.find(
-    (j) =>
-      j.project_id === projectId &&
-      j.job_type === "rewrite_scene" &&
-      (j.input_payload as { scene_id?: string } | null | undefined)?.scene_id ===
-        activeScene?.id,
-  );
-  const isRewriting =
-    latestRewriteJob?.status === "queued" || latestRewriteJob?.status === "running";
-  const latestAuditPayload = latestAuditJob?.output_payload as
-    | { issue_count?: number }
-    | null
-    | undefined;
-  const latestAuditIssueCount =
-    typeof latestAuditPayload?.issue_count === "number"
-      ? latestAuditPayload.issue_count
-      : undefined;
-
-  useEffect(() => {
-    if (!latestAuditJob) return;
-    if (latestAuditJob.status === "queued" || latestAuditJob.status === "running") {
-      activeAuditJobIds.current.add(latestAuditJob.id);
-      return;
-    }
-    if (notifiedAuditJobIds.current.has(latestAuditJob.id)) return;
-
-    const shouldNotify = activeAuditJobIds.current.has(latestAuditJob.id);
-    notifiedAuditJobIds.current.add(latestAuditJob.id);
-    if (!shouldNotify) return;
-
-    if (latestAuditJob.status === "succeeded") {
-      queryClient.invalidateQueries({ queryKey: issuesKey });
-      const count =
-        typeof latestAuditIssueCount === "number" ? latestAuditIssueCount : 0;
-      toast.success(
-        count > 0 ? `审稿完成：发现 ${count} 个问题` : "审稿完成：未发现问题",
-      );
-      window.setTimeout(() => {
-        issuePanelRef.current?.scrollIntoView({
-          behavior: "smooth",
-          block: "start",
-        });
-      }, 150);
-    } else if (latestAuditJob.status === "failed") {
-      toast.error(
-        latestAuditJob.error_message
-          ? `审稿失败：${latestAuditJob.error_message}`
-          : "审稿失败",
-      );
-    }
-  }, [
-    latestAuditIssueCount,
-    latestAuditJob,
-    issuesKey,
-    queryClient,
-  ]);
 
   return (
     <div className="space-y-4">
