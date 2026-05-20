@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import Field, field_validator
 
 from app.api.deps import CurrentUserDep, DbDep
+from app.core.config import get_settings
 from app.core.permissions import require_permission, require_platform_admin
 from app.repositories import AuditLogRepository
 from app.schemas.common import APIModel
@@ -28,7 +29,7 @@ class ModelGatewaySettingsResponse(APIModel):
 
 
 class ModelGatewaySettingsUpdate(APIModel):
-    mode: Literal["mock", "real"] = "mock"
+    mode: Literal["mock", "real"] = "real"
     provider: Literal["openai", "anthropic"] = "openai"
     default_model: str = Field(min_length=1, max_length=120)
     openai_base_url: str = Field(min_length=1, max_length=500)
@@ -54,9 +55,11 @@ class ModelGatewaySettingsUpdate(APIModel):
 
 
 def _to_response(config: ModelGatewayConfig) -> ModelGatewaySettingsResponse:
+    settings = get_settings()
     active_key = config.active_api_key
+    mode = config.mode if settings.model_gateway_allow_mock else "real"
     return ModelGatewaySettingsResponse(
-        mode=config.mode if config.mode in {"mock", "real"} else "mock",
+        mode=mode if mode in {"mock", "real"} else "real",
         provider=config.provider if config.provider in {"openai", "anthropic"} else "openai",
         default_model=config.default_model,
         openai_base_url=config.openai_base_url,
@@ -64,7 +67,7 @@ def _to_response(config: ModelGatewayConfig) -> ModelGatewaySettingsResponse:
         anthropic_base_url=config.anthropic_base_url,
         anthropic_api_key_configured=bool(config.anthropic_api_key),
         active_base_url=config.active_base_url,
-        ready=config.mode == "mock" or bool(active_key),
+        ready=bool(active_key) if mode == "real" else settings.model_gateway_allow_mock,
     )
 
 
@@ -82,6 +85,8 @@ async def update_model_gateway_settings(
     db: DbDep,
 ):
     require_permission(user, "admin:system:update")
+    if payload.mode == "mock" and not get_settings().model_gateway_allow_mock:
+        raise HTTPException(status_code=400, detail="mock_model_gateway_disabled")
 
     # 记录变更前的配置（不含敏感字段），用于审计 before/after 对比
     before = await system_settings_service.get_model_config(db)
@@ -134,4 +139,3 @@ async def update_model_gateway_settings(
 
     await db.commit()
     return _to_response(config)
-

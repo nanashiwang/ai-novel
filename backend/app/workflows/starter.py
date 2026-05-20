@@ -1,6 +1,6 @@
 """Temporal Workflow Starter。
 
-- TEMPORAL_ENABLED=false（默认）：返回 mock workflow_id，便于无依赖本地开发
+- TEMPORAL_ENABLED=false（默认）：返回 local workflow_id，使用进程内本地执行
 - TEMPORAL_ENABLED=true：通过 temporalio 客户端启动真实 workflow
 
 设计：starter 不直接 await client 启动结果，使用 fire-and-forget，
@@ -92,7 +92,7 @@ class WorkflowStarter:
     def _fire_and_forget(self, workflow_name: str, job: dict, prefix: str) -> str:
         workflow_id = f"{prefix}-{job['id']}"
         if not self.settings.temporal_enabled:
-            return f"mock-{workflow_id}"
+            return f"local-{workflow_id}"
         try:
             loop = asyncio.get_running_loop()
             task = loop.create_task(
@@ -101,7 +101,7 @@ class WorkflowStarter:
             self._track_task(task)
             return workflow_id
         except RuntimeError:
-            return f"mock-{workflow_id}"
+            return f"local-{workflow_id}"
 
     def start_generate_full_novel(self, job: dict) -> str:
         return self._fire_and_forget("GenerateFullNovelWorkflow", job, "generate-full-novel")
@@ -127,7 +127,7 @@ class WorkflowStarter:
         return self._fire_and_forget("RewriteSceneWorkflow", job, "rewrite-scene")
 
     def is_mock_workflow(self, workflow_id: str | None) -> bool:
-        return bool(workflow_id and workflow_id.startswith("mock-"))
+        return bool(workflow_id and workflow_id.startswith(("local-", "mock-")))
 
     def run_local_generate_full_novel(self, job_id: str) -> None:
         self._run_local("full_novel", job_id)

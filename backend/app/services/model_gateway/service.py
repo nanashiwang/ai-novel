@@ -1,9 +1,7 @@
 """模型网关。
 
-- MODEL_GATEWAY_MODE=mock：返回 mock 数据并落库 model_calls
-- MODEL_GATEWAY_MODE=real：通过可插拔 provider 调用真实模型；
-  当前内置 provider 为占位（raise NotImplementedError），便于在不同部署环境
-  通过 monkey-patch 注入 OpenAI / Anthropic / 自托管模型客户端。
+默认走真实模型。MockProvider 只保留给自动化测试或显式开启的本地隔离测试，
+避免生产链路静默生成固定占位内容。
 """
 from __future__ import annotations
 
@@ -214,15 +212,15 @@ class _MockProvider:
         ):
             return {
                 "scene_id": "",
-                "title": "Mock 重写场景",
+                "title": "测试重写场景",
                 "content": (
                     "雾笼罩档案馆的清晨，林澈推开门，发现门禁锁芯比昨晚多了一道刻痕。"
                     "他蹲下，指尖蹭过冰凉的金属，记忆里浮起一段被篡改过的画面——"
                     "妹妹的笑声、关上的门、和那枚他从未真正见过的钥匙。"
-                    "（Mock 重写正文：已基于待修复问题润色，保留原场景目标与钩子。）"
+                    "（测试正文：已基于待修复问题润色，保留原场景目标与钩子。）"
                 ),
                 "word_count": 96,
-                "continuity_notes": ["mock 重写：已按 issues 修订关键道具描述"],
+                "continuity_notes": ["测试重写：已按 issues 修订关键道具描述"],
                 "unresolved_threads": [],
             }
         return {
@@ -269,7 +267,8 @@ class ModelGateway:
         self._default_model = self.settings.default_model
         self._provider: ModelProvider = (
             _MockProvider()
-            if self.settings.model_gateway_mode == "mock"
+            if self.settings.model_gateway_allow_mock
+            and self.settings.model_gateway_mode == "mock"
             else _RealProviderPlaceholder()
         )
         self._settings_cache_at: float = 0.0  # monotonic 时间；0 = 强制首次刷新
@@ -280,7 +279,7 @@ class ModelGateway:
 
     def configure(self, config: ModelGatewayConfig) -> None:
         self._default_model = config.default_model
-        if config.mode != "real":
+        if config.mode == "mock" and self.settings.model_gateway_allow_mock:
             self._provider = _MockProvider()
         elif config.provider == "openai" and config.openai_api_key:
             self._provider = OpenAIChatProvider(

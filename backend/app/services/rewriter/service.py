@@ -96,7 +96,7 @@ class RewriterService:
                 title=scene.title,
                 content=current_content,
                 word_count=len(current_content),
-                continuity_notes=["mock 模式回退：rewrite 没能生成新正文，沿用原稿。"],
+                continuity_notes=["模型返回空正文，已沿用原稿，建议重新生成。"],
                 unresolved_threads=[],
             )
         return draft

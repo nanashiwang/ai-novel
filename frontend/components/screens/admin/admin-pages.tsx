@@ -1377,7 +1377,7 @@ export function AdminSettingsPage() {
   });
   const [draft, setDraft] = useState<Partial<ModelGatewaySettingsUpdate>>({});
   const form: ModelGatewaySettingsUpdate = {
-    mode: draft.mode ?? data?.mode ?? "mock",
+    mode: "real",
     provider: draft.provider ?? data?.provider ?? "openai",
     default_model: draft.default_model ?? data?.default_model ?? "gpt-5.5",
     openai_base_url:
@@ -1413,7 +1413,7 @@ export function AdminSettingsPage() {
     form.default_model.trim() &&
     form.openai_base_url.trim() &&
     form.anthropic_base_url.trim() &&
-    (form.mode === "mock" || selectedKeyConfigured || typedSelectedKey?.trim());
+    (selectedKeyConfigured || typedSelectedKey?.trim());
 
   function updateField<K extends keyof ModelGatewaySettingsUpdate>(
     key: K,
@@ -1447,8 +1447,8 @@ export function AdminSettingsPage() {
         <SettingStatusCard
           icon={Server}
           label="运行模式"
-          value={form.mode === "real" ? "真实模型" : "Mock"}
-          tone={form.mode === "real" ? "green" : "amber"}
+          value="真实模型"
+          tone="green"
         />
         <SettingStatusCard
           icon={Link2}
@@ -1477,19 +1477,12 @@ export function AdminSettingsPage() {
           </Badge>
         </CardHeader>
         <CardContent className="space-y-6">
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3">
             <SegmentButton
-              active={form.mode === "mock"}
+              active
               disabled={!editable}
-              title="Mock"
-              desc="本地演示，不消耗额度"
-              onClick={() => updateField("mode", "mock")}
-            />
-            <SegmentButton
-              active={form.mode === "real"}
-              disabled={!editable}
-              title="真实模型"
-              desc="使用下方 URL 和 Key"
+              title="真实模型生产模式"
+              desc="所有生成链路直接调用下方 URL 和 Key"
               onClick={() => updateField("mode", "real")}
             />
           </div>

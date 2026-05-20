@@ -12,6 +12,8 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("REDIS_URL", "memory://")
 os.environ.setdefault("JWT_SECRET", "test-secret-min-32-chars-aaaaaaaa")
 os.environ.setdefault("RATE_LIMIT_ENABLED", "false")
+os.environ.setdefault("MODEL_GATEWAY_MODE", "mock")
+os.environ.setdefault("MODEL_GATEWAY_ALLOW_MOCK", "true")
 
 import pytest
 import pytest_asyncio

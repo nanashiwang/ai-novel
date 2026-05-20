@@ -114,7 +114,7 @@ export type GenerateBiblePayload = {
   estimate_words?: number;
   topic?: string;
   force_regenerate?: boolean;
-  // 创作偏好：让 LLM prompt 含具体约束。所有字段可选；留空走原有 mock fixture。
+  // 创作偏好：让 LLM prompt 含具体约束；留空则由真实模型按项目元数据发挥。
   protagonist_archetype?: string;
   reference_works?: string[];
   forbidden_themes?: string[];

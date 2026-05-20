@@ -107,7 +107,7 @@ class WriterService:
                 title=scene.title,
                 content=content,
                 word_count=len(content),
-                continuity_notes=["mock 模式生成的占位正文，后续可用真实模型重写。"],
+                continuity_notes=["模型返回空正文，已生成临时占位正文，建议重新生成。"],
                 unresolved_threads=[scene.hook] if scene.hook else [],
             )
         return draft

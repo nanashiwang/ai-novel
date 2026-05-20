@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.models.system_setting import SystemSetting
 
-
 MODEL_SETTING_KEYS = {
     "mode": "model_gateway.mode",
     "provider": "model_gateway.provider",
@@ -63,12 +62,16 @@ class SystemSettingsService:
 
     async def get_model_config(self, session: AsyncSession) -> ModelGatewayConfig:
         defaults = self._defaults()
+        settings = get_settings()
         result = await session.execute(
             select(SystemSetting).where(SystemSetting.key.in_(MODEL_SETTING_KEYS.values()))
         )
         values = {row.key: row.value or "" for row in result.scalars().all()}
+        mode = values.get(MODEL_SETTING_KEYS["mode"], defaults.mode) or "real"
+        if mode == "mock" and not settings.model_gateway_allow_mock:
+            mode = "real"
         return ModelGatewayConfig(
-            mode=values.get(MODEL_SETTING_KEYS["mode"], defaults.mode) or "mock",
+            mode=mode,
             provider=values.get(MODEL_SETTING_KEYS["provider"], defaults.provider) or "openai",
             default_model=values.get(MODEL_SETTING_KEYS["default_model"], defaults.default_model)
             or "gpt-5.5",
@@ -77,7 +80,10 @@ class SystemSettingsService:
                 defaults.openai_base_url,
             )
             or "https://api.openai.com/v1",
-            openai_api_key=values.get(MODEL_SETTING_KEYS["openai_api_key"], defaults.openai_api_key),
+            openai_api_key=values.get(
+                MODEL_SETTING_KEYS["openai_api_key"],
+                defaults.openai_api_key,
+            ),
             anthropic_base_url=values.get(
                 MODEL_SETTING_KEYS["anthropic_base_url"],
                 defaults.anthropic_base_url,
