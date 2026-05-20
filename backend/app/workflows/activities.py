@@ -396,6 +396,7 @@ async def generate_book_spec(job: dict[str, Any]) -> dict[str, Any]:
             job_id=job_row.id,
             project=project,
             topic=str(payload.get("topic") or ""),
+            creative_prefs=payload.get("creative_prefs") or {},
         )
         values = {
             "premise": bible.premise,

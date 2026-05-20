@@ -93,6 +93,10 @@ class GenerationService:
         estimate_words: int = 2000,
         topic: str = "",
         force_regenerate: bool = False,
+        protagonist_archetype: str = "",
+        reference_works: list[str] | None = None,
+        forbidden_themes: list[str] | None = None,
+        temperature: float | None = None,
     ) -> GenerationJob:
         require_permission(user, "generation_job:create", tenant)
 
@@ -104,6 +108,13 @@ class GenerationService:
         ensure_same_tenant(project.organization_id, tenant)
 
         estimate_words = max(1, estimate_words)
+        # 创作偏好参与去重 key：改了任何偏好都视为新意图，应触发新 job
+        creative_prefs: dict = {
+            "protagonist_archetype": (protagonist_archetype or "").strip(),
+            "reference_works": [s.strip() for s in (reference_works or []) if s.strip()],
+            "forbidden_themes": [s.strip() for s in (forbidden_themes or []) if s.strip()],
+            "temperature": temperature,
+        }
         dedupe = _compute_dedupe_key(
             organization_id=tenant.organization_id,
             project_id=project_id,
@@ -111,6 +122,7 @@ class GenerationService:
             canonical_input={
                 "topic": topic,
                 "force_regenerate_spec": force_regenerate,
+                "creative_prefs": creative_prefs,
             },
         )
         existing = await _find_active_by_dedupe_key(
@@ -135,6 +147,7 @@ class GenerationService:
                 "estimate_words": estimate_words,
                 "topic": topic,
                 "force_regenerate_spec": force_regenerate,
+                "creative_prefs": creative_prefs,
             },
             dedupe_key=dedupe,
         )

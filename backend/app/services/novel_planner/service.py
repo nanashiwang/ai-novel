@@ -34,19 +34,38 @@ class NovelPlannerService:
         job_id: str,
         project: Project,
         topic: str = "",
+        creative_prefs: dict | None = None,
     ) -> StoryBibleContract:
         prompt = prompt_manager.load(_PROMPT_STORY_BIBLE, version=_PROMPT_VERSION)
-        user_prompt = (
-            "请从上到下生成小说故事圣经。\n"
-            f"初始题材/topic：{topic or project.title}\n"
-            f"项目标题：{project.title}\n"
-            f"类型：{project.genre}\n"
-            f"目标读者：{project.target_reader}\n"
-            f"目标字数：{project.target_word_count}\n"
-            f"目标章节数：{project.target_chapter_count}\n"
-            f"文风：{project.style}\n"
-            "要求：只返回 JSON，字段必须可直接落库。"
-        )
+        prefs = creative_prefs or {}
+        protagonist = (prefs.get("protagonist_archetype") or "").strip()
+        references = [s for s in (prefs.get("reference_works") or []) if s.strip()]
+        forbidden = [s for s in (prefs.get("forbidden_themes") or []) if s.strip()]
+        temperature = prefs.get("temperature")
+        # 默认 0.7：足够发挥但不会偏离 schema；用户可在 0~1.5 内自调
+        if temperature is None:
+            temperature = 0.7
+
+        # 拼装 user_prompt：项目字段一定加，创作偏好按存在与否选择性加
+        lines: list[str] = [
+            "请从上到下生成小说故事圣经。",
+            f"初始题材/topic：{topic or project.title}",
+            f"项目标题：{project.title}",
+            f"类型：{project.genre}",
+            f"目标读者：{project.target_reader}",
+            f"目标字数：{project.target_word_count}",
+            f"目标章节数：{project.target_chapter_count}",
+            f"文风：{project.style}",
+        ]
+        if protagonist:
+            lines.append(f"主角原型/期望：{protagonist}")
+        if references:
+            lines.append(f"参考作品（仅做风格参考，不要照搬人物/情节）：{', '.join(references)}")
+        if forbidden:
+            lines.append(f"禁忌主题（绝对不要出现）：{', '.join(forbidden)}")
+        lines.append("要求：只返回 JSON，字段必须可直接落库。")
+        user_prompt = "\n".join(lines)
+
         raw = await model_gateway.generate_json(
             session,
             organization_id=organization_id,
@@ -58,7 +77,8 @@ class NovelPlannerService:
             schema=StoryBibleContract.model_json_schema(),
             prompt_key=_PROMPT_STORY_BIBLE,
             prompt_version=_PROMPT_VERSION,
-            metadata={"module": "novel_planner"},
+            temperature=float(temperature),
+            metadata={"module": "novel_planner", "has_prefs": bool(prefs)},
         )
         return self._normalize_story_bible(StoryBibleContract.model_validate(raw), project, topic)
 

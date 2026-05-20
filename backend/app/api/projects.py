@@ -33,6 +33,12 @@ class GenerateBibleRequest(APIModel):
     estimate_words: int = Field(default=2000, ge=1, le=20000)
     topic: str = ""
     force_regenerate: bool = False
+    # 创作偏好（全部可选）：让 LLM prompt 含具体约束，避免每次都生成
+    # 同质化的"主角追真相"开局
+    protagonist_archetype: str = Field(default="", max_length=400)
+    reference_works: list[str] = Field(default_factory=list)
+    forbidden_themes: list[str] = Field(default_factory=list)
+    temperature: float | None = Field(default=None, ge=0.0, le=1.5)
 
 
 class GenerateOutlineRequest(APIModel):
@@ -238,6 +244,10 @@ async def generate_bible(
         estimate_words=payload.estimate_words,
         topic=payload.topic,
         force_regenerate=payload.force_regenerate,
+        protagonist_archetype=payload.protagonist_archetype,
+        reference_works=payload.reference_works,
+        forbidden_themes=payload.forbidden_themes,
+        temperature=payload.temperature,
     )
     await db.refresh(job)
     response = GenerationJobResponse.model_validate(job)
