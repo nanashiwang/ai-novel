@@ -8,6 +8,7 @@ from app.api import (
     generation_jobs,
     novel_specs,
     organizations,
+    plot_threads,
     project_extra,
     projects,
     quotas,
@@ -30,6 +31,7 @@ api_router.include_router(characters.router)
 api_router.include_router(chapters.router)
 api_router.include_router(scenes.router)
 api_router.include_router(world_items.router)
+api_router.include_router(plot_threads.router)
 api_router.include_router(generation_jobs.router)
 
 # Admin
