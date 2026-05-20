@@ -25,28 +25,24 @@ import { Badge, PlanBadge, StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/data-table";
-import { ProgressBar, QuotaProgress } from "@/components/ui/progress";
+import { QuotaProgress } from "@/components/ui/progress";
 import { StatCard } from "@/components/ui/stat-card";
 import {
   adminApi,
   type AdminPlan,
   type AdminPlanFeature,
   type AdminPlanUpsert,
+  type AdminUser,
   type AdminUserUpdate,
+  type GenerationJob,
   type ModelGatewaySettingsUpdate,
 } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { isSuperAdmin } from "@/lib/permissions";
+import { AdminTitle } from "@/components/ui/admin-title";
+import { AdminJobsTable } from "@/components/screens/admin/shared/admin-jobs-table";
 
 // 后端 admin/* 返回为 unknown[]，这里就近声明运行时形状
-type AdminUser = {
-  id: string;
-  email: string;
-  display_name: string;
-  platform_role: string;
-  status: string;
-};
-
 type AdminOrg = {
   id: string;
   name: string;
@@ -54,18 +50,6 @@ type AdminOrg = {
   plan_code: string;
   status: string;
   owner_user_id: string;
-};
-
-type AdminJob = {
-  id: string;
-  organization_id: string;
-  project_id: string;
-  job_type: string;
-  status: string;
-  priority: string;
-  workflow_id: string | null;
-  reserved_quota: number;
-  consumed_quota: number;
 };
 
 type AdminModelCall = {
@@ -106,7 +90,7 @@ type AdminContentReview = {
 export function AdminDashboardPage() {
   const { data: jobs = [] } = useQuery({
     queryKey: ["admin", "jobs"],
-    queryFn: () => adminApi.jobs() as Promise<AdminJob[]>,
+    queryFn: () => adminApi.jobs() as Promise<GenerationJob[]>,
   });
   const { data: users = [] } = useQuery({
     queryKey: ["admin", "users"],
@@ -174,15 +158,6 @@ export function AdminDashboardPage() {
           )}
         </CardContent>
       </Card>
-    </div>
-  );
-}
-
-function AdminTitle({ title, desc }: { title: string; desc: string }) {
-  return (
-    <div>
-      <h1 className="text-3xl font-black text-slate-950">{title}</h1>
-      <p className="mt-1 text-slate-500">{desc}</p>
     </div>
   );
 }
@@ -1109,7 +1084,7 @@ export function AdminGenerationJobsPage() {
 
   const { data = [], refetch } = useQuery({
     queryKey: ["admin", "jobs", queryFilter],
-    queryFn: () => adminApi.jobs(queryFilter) as Promise<AdminJob[]>,
+    queryFn: () => adminApi.jobs(queryFilter) as Promise<GenerationJob[]>,
   });
 
   const cancel = async (id: string) => {
@@ -1167,61 +1142,6 @@ export function AdminGenerationJobsPage() {
         </CardContent>
       </Card>
     </div>
-  );
-}
-
-function AdminJobsTable({
-  rows,
-  onCancel,
-}: {
-  rows: AdminJob[];
-  onCancel?: (id: string) => void;
-}) {
-  return (
-    <DataTable
-      rows={rows}
-      columns={[
-        {
-          key: "title",
-          header: "任务",
-          render: (row) => (
-            <div>
-              <p className="font-bold text-slate-950">{row.job_type}</p>
-              <p className="text-xs text-slate-500">{row.workflow_id ?? "未启动 workflow"}</p>
-            </div>
-          ),
-        },
-        { key: "org", header: "organization_id", render: (row) => row.organization_id },
-        { key: "type", header: "task_type", render: (row) => row.job_type },
-        {
-          key: "status",
-          header: "状态",
-          render: (row) => <StatusBadge status={row.status as never} />,
-        },
-        {
-          key: "quota",
-          header: "额度",
-          render: (row) => `${row.consumed_quota}/${row.reserved_quota}`,
-        },
-        {
-          key: "progress",
-          header: "进度",
-          render: (row) => (
-            <ProgressBar value={(row.consumed_quota / Math.max(row.reserved_quota, 1)) * 100} />
-          ),
-        },
-        {
-          key: "action",
-          header: "强制操作",
-          render: (row) =>
-            onCancel ? (
-              <Button size="sm" variant="danger" onClick={() => onCancel(row.id)}>
-                取消
-              </Button>
-            ) : null,
-        },
-      ]}
-    />
   );
 }
 

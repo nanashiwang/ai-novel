@@ -26,7 +26,6 @@ import {
   Trash2,
   Users,
   Wand2,
-  X,
   XCircle,
 } from "lucide-react";
 import Link from "next/link";
@@ -73,8 +72,13 @@ import type {
   WorldItemPayload,
 } from "@/lib/api";
 import { ApiError } from "@/lib/http";
-import { formatDateTime } from "@/lib/format";
+import { formatBytes, formatDateTime } from "@/lib/format";
 import { useScopedKey } from "@/lib/use-scoped-key";
+import { Modal } from "@/components/ui/modal";
+import { ListField, TextField } from "@/components/ui/form-field";
+import { severityClass, severityTone } from "./shared/severity";
+import { labelForVersion } from "./shared/version-label";
+import { taskTypeLabel } from "./shared/task-type-label";
 
 type Character = {
   id: string;
@@ -549,19 +553,6 @@ export function BiblePage({ projectId }: { projectId: string }) {
   );
 }
 
-function taskTypeLabel(jobType: string): string {
-  const m: Record<string, string> = {
-    generate_bible: "故事圣经生成",
-    generate_outline: "章节大纲生成",
-    generate_scene_plan: "场景拆分",
-    write_scene: "场景正文写作",
-    audit_scene: "审稿",
-    rewrite_scene: "重写",
-    full_novel: "全书生成",
-  };
-  return m[jobType] ?? jobType;
-}
-
 /** 项目阶段卡片：展示当前里程碑 + 推荐下一步。 */
 function ProjectStageCard({
   projectId,
@@ -996,99 +987,6 @@ function EditableItem({
       </div>
       <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-500">{text || "—"}</p>
     </div>
-  );
-}
-
-function Modal({
-  title,
-  onClose,
-  children,
-}: {
-  title: string;
-  onClose: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4"
-      onClick={onClose}
-    >
-      <div
-        className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-lg font-black text-slate-950">{title}</h3>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg p-1 text-slate-500 hover:bg-slate-100"
-            aria-label="关闭"
-          >
-            <X className="size-5" />
-          </button>
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function TextField({
-  label,
-  value,
-  onChange,
-  rows,
-  placeholder,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  rows?: number;
-  placeholder?: string;
-}) {
-  return (
-    <label className="block text-sm font-semibold text-slate-700">
-      {label}
-      {rows ? (
-        <textarea
-          rows={rows}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder}
-          className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-        />
-      ) : (
-        <input
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder}
-          className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
-        />
-      )}
-    </label>
-  );
-}
-
-function ListField({
-  label,
-  values,
-  onChange,
-  placeholder,
-}: {
-  label: string;
-  values: string[];
-  onChange: (v: string[]) => void;
-  placeholder?: string;
-}) {
-  return (
-    <TextField
-      label={`${label}（一行一条）`}
-      rows={3}
-      value={values.join("\n")}
-      onChange={(v) => onChange(v.split("\n").map((s) => s.trim()).filter(Boolean))}
-      placeholder={placeholder}
-    />
   );
 }
 
@@ -1902,34 +1800,6 @@ function ContextInspector({
       ))}
     </div>
   );
-}
-
-function labelForVersion(versions: DraftVersion[], versionId: string): string {
-  const idx = versions.findIndex((v) => v.id === versionId);
-  if (idx < 0) return "未知版本";
-  return `第 ${versions.length - idx} 版`;
-}
-
-function severityTone(severity: string): "rose" | "amber" | "slate" {
-  switch (severity) {
-    case "high":
-      return "rose";
-    case "medium":
-      return "amber";
-    default:
-      return "slate";
-  }
-}
-
-function severityClass(severity: string): string {
-  switch (severity) {
-    case "high":
-      return "border-rose-200 bg-rose-50/40";
-    case "medium":
-      return "border-amber-200 bg-amber-50/40";
-    default:
-      return "border-slate-200";
-  }
 }
 
 /**
@@ -2916,10 +2786,4 @@ export function ExportPage({ projectId }: { projectId: string }) {
       </Card>
     </div>
   );
-}
-
-function formatBytes(size: number): string {
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-  return `${(size / 1024 / 1024).toFixed(2)} MB`;
 }
