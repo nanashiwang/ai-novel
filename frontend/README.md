@@ -1,6 +1,6 @@
 # NovelFlow AI Frontend
 
-第一阶段前端 UI 壳：Next.js App Router + React + TypeScript + Tailwind CSS。
+生产版前端：Next.js App Router + React + TypeScript + Tailwind CSS，默认连接真实后端 API。
 
 ## 安装与启动
 
@@ -26,15 +26,6 @@ npm run build
 - 账号与套餐：`/studio/billing`、`/studio/usage`、`/studio/account`
 - Admin：`/admin`、`/admin/users`、`/admin/organizations`、`/admin/plans`、`/admin/quotas`、`/admin/generation-jobs`、`/admin/model-calls`、`/admin/content-review`、`/admin/settings`、`/admin/audit-logs`
 
-## Mock 身份切换
-
-顶部栏按钮可在两种身份间切换：
-
-- 普通用户：`writer@example.com`
-- 管理员：`admin@novelflow.ai`（`super_admin`）
-
-普通用户不会看到 Admin 导航；访问 `/admin/*` 会显示无权限页。
-
 ## 阶段边界
 
-本阶段不接真实后端、数据库、GPT API、支付、Temporal 或真实导出。所有数据、按钮反馈和状态变化均为 mock。
+当前前端直接调用后端 API。登录、项目、故事圣经、章节、场景、任务和 Admin 页面都以真实接口为准；模型生成依赖后端 Model Gateway 的真实 Key 配置。

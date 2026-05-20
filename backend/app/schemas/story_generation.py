@@ -32,7 +32,9 @@ class StoryBibleContract(APIModel):
 
 class ChapterPlanItem(APIModel):
     chapter_index: int = 0
-    title: str
+    # 跟 ScenePlanItem 同样的鲁棒性考虑：LLM 漏字段时不让整次大纲生成 fail，
+    # normalize 阶段会补默认标题
+    title: str = ""
     summary: str = ""
     goal: str = ""
     conflict: str = ""
@@ -62,7 +64,10 @@ class ChapterPlanContract(APIModel):
 
 class ScenePlanItem(APIModel):
     scene_index: int
-    title: str
+    # LLM 偶尔会漏掉 title 字段（即使 prompt 指定了 schema），把它从 required
+    # 改成可选；normalize_scenes 会在 title 为空时按 chapter+scene_index 自动
+    # 补一个默认标题，避免整次场景计划生成 fail。
+    title: str = ""
     time_marker: str = ""
     location: str = ""
     characters: list[str] = Field(default_factory=list)

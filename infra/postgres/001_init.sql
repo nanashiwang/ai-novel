@@ -116,7 +116,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   current_period_start TIMESTAMPTZ NOT NULL,
   current_period_end TIMESTAMPTZ NOT NULL,
   cancel_at_period_end BOOLEAN NOT NULL DEFAULT FALSE,
-  provider TEXT NOT NULL DEFAULT 'mock',
+  provider TEXT NOT NULL DEFAULT 'manual',
   provider_subscription_id TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -139,7 +139,7 @@ CREATE INDEX IF NOT EXISTS idx_invoices_org ON invoices(organization_id);
 CREATE TABLE IF NOT EXISTS payment_events (
   id TEXT PRIMARY KEY,
   organization_id TEXT REFERENCES organizations(id),
-  provider TEXT NOT NULL DEFAULT 'mock',
+  provider TEXT NOT NULL DEFAULT 'manual',
   event_type TEXT NOT NULL,
   provider_event_id TEXT,
   payload JSONB NOT NULL DEFAULT '{}',

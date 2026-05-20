@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.models.chapter import Chapter
 from app.models.common import new_id
 from app.models.generation_job import GenerationJob
-from app.models.project import NovelSpec, Project
+from app.models.project import NovelSpec
 from app.models.quota import QuotaBalance
 from app.workflows import activities
 

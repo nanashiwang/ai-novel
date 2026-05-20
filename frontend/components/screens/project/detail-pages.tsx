@@ -3,7 +3,7 @@
 /**
  * 项目详情子页集合。
  *
- * 已从 mock-data 切换为真实 API（characters / chapters / scenes / world-items / exports / versions）。
+ * 已切换为真实 API（characters / chapters / scenes / world-items / exports / versions）。
  * 部分页面（写作工作台 / 故事圣经）仍含静态展示文案，作为前端骨架；后端有数据时会自动展示，
  * 否则显示空态或固定提示。
  */

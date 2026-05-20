@@ -156,11 +156,11 @@ async def test_generate_bible_accepts_creative_prefs(client, db_engine):
 
 
 @pytest.mark.asyncio
-async def test_mock_bible_varies_by_project_title():
-    """不同 project.title 在 mock provider 下应生成不同的 premise / 角色名。"""
-    from app.services.model_gateway.service import _MockProvider
+async def test_test_provider_bible_varies_by_project_title():
+    """不同 project.title 在测试 provider 下应生成不同的 premise / 角色名。"""
+    from tests.fakes import DeterministicModelProvider
 
-    mock = _MockProvider()
+    provider = DeterministicModelProvider()
     p1_prompt = (
         "项目标题：雾城记忆案\n类型：悬疑幻想\n目标读者：中文读者\n文风：克制\n"
         "初始题材/topic：雾城记忆案\n"
@@ -169,14 +169,14 @@ async def test_mock_bible_varies_by_project_title():
         "项目标题：星海贫民窟\n类型：太空歌剧\n目标读者：中文读者\n文风：粗粝\n"
         "初始题材/topic：星海贫民窟\n"
     )
-    bible1 = await mock.complete_json(
+    bible1 = await provider.complete_json(
         model="m",
         system_prompt="",
         user_prompt=p1_prompt,
         schema={"properties": {"main_characters": {}, "premise": {}}},
         temperature=0.7,
     )
-    bible2 = await mock.complete_json(
+    bible2 = await provider.complete_json(
         model="m",
         system_prompt="",
         user_prompt=p2_prompt,
@@ -190,16 +190,16 @@ async def test_mock_bible_varies_by_project_title():
 
 
 @pytest.mark.asyncio
-async def test_mock_bible_honors_forbidden_themes():
+async def test_test_provider_bible_honors_forbidden_themes():
     """禁忌主题应该出现在 constraints 中，作为对 LLM 的硬约束。"""
-    from app.services.model_gateway.service import _MockProvider
+    from tests.fakes import DeterministicModelProvider
 
-    mock = _MockProvider()
+    provider = DeterministicModelProvider()
     prompt = (
         "项目标题：玄幻测试\n类型：玄幻\n目标读者：成人\n文风：豪迈\n"
         "初始题材/topic：玄幻测试\n禁忌主题（绝对不要出现）：血腥, 政治隐喻\n"
     )
-    bible = await mock.complete_json(
+    bible = await provider.complete_json(
         model="m",
         system_prompt="",
         user_prompt=prompt,
@@ -209,4 +209,3 @@ async def test_mock_bible_honors_forbidden_themes():
     joined = " ".join(bible["constraints"])
     assert "血腥" in joined
     assert "政治隐喻" in joined
-

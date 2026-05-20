@@ -9,7 +9,7 @@ import { Button } from "./button";
 const PLACEHOLDER =
   "尚未生成正文。请在写作工作台中执行生成任务，或导入既有章节内容。";
 
-export function EditorMock() {
+export function EditorPanel() {
   const [value, setValue] = useState(PLACEHOLDER);
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">

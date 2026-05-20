@@ -7,7 +7,6 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.models.common import new_id
 from app.models import (
     Character,
     GenerationJob,
@@ -20,6 +19,7 @@ from app.models import (
     UsageEvent,
     WorldItem,
 )
+from app.models.common import new_id
 from app.workflows import activities
 
 

@@ -122,9 +122,9 @@ node_modules/.bin/vitest run
 - ✅ project.status → `bible_ready`
 - ✅ Overview "下一步动作" 切换到「生成章节大纲」
 
-**Bible 页应该出现这些数据（mock provider 固定 fixture）：**
-- premise: 一名创作者在失控的记忆城市中追查真相
-- 至少 2 个角色（林澈、沈砚）
+**Bible 页应该出现这些数据（真实模型生成）：**
+- premise: 与项目标题、类型和 topic 相关
+- 至少 2 个角色
 - 至少 2 个 world_items
 - 至少 1 个 plot thread
 
@@ -157,7 +157,7 @@ node_modules/.bin/vitest run
 
 - 大纲页 → 点某一章卡片 → 右侧场景拆分区
 - 点"生成场景计划"
-- ✅ 该章生成 3 个 scenes（mock 默认）
+- ✅ 该章生成 3 个 scenes（按请求参数）
 - ✅ 每个 scene 卡显示标题 / 地点 / 目标 / 状态=`planned`
 - ✅ project.status 不变（仍是 `outlined` — 单章生成不应推进项目级状态）
 
@@ -190,7 +190,7 @@ WHERE project_id = '<project_id>' AND source_type = 'scene';
 
 - 右上"生成当前场景" → 提交
 - ✅ Toast 提示 + scene 状态 badge 短暂变 `writing` → `drafted`
-- ✅ 中间区域显示 Tiptap 编辑器，渲染 mock 正文
+- ✅ 中间区域显示 Tiptap 编辑器，渲染真实生成正文
 - ✅ 右栏"版本历史"显示 1 个 draft 版本
 - ✅ 右栏"ContextBuilder Inspector" 折叠区显示 7 段（hard_constraints / task / characters / world_rules / plot_threads / recent_summary / memory_recall）
 - ✅ 各段显示 token budget 与 truncated 标签
@@ -252,7 +252,7 @@ WHERE project_id = '<project_id>' AND source_type = 'scene';
 - 写作页中部"审稿 & 问题"面板
 - 点"审稿"
 - ✅ Toast `已提交审稿任务`
-- ✅ 1-2 秒后面板显示 2 个 mock issues（continuity / character 各一个，severity=medium 和 low）
+- ✅ 面板显示真实审稿 issues（数量可随正文质量变化）
 - ✅ DB 检查：`SELECT * FROM continuity_issues WHERE scene_id='<id>' AND status='open'` 应该有数据
 
 ### 7.2 重写并修复

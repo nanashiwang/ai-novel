@@ -165,7 +165,9 @@ async def create_admin_plan(
         name=payload.name,
         description=payload.description,
         price_monthly=Decimal(str(payload.price_monthly)),
-        price_yearly=Decimal(str(payload.price_yearly)) if payload.price_yearly is not None else None,
+        price_yearly=(
+            Decimal(str(payload.price_yearly)) if payload.price_yearly is not None else None
+        ),
         currency=payload.currency,
         status=payload.status,
     )
@@ -207,7 +209,9 @@ async def update_admin_plan(
     plan.name = payload.name
     plan.description = payload.description
     plan.price_monthly = Decimal(str(payload.price_monthly))
-    plan.price_yearly = Decimal(str(payload.price_yearly)) if payload.price_yearly is not None else None
+    plan.price_yearly = (
+        Decimal(str(payload.price_yearly)) if payload.price_yearly is not None else None
+    )
     plan.currency = payload.currency
     plan.status = payload.status
     await _replace_features(db, plan.id, payload.features)

@@ -10,7 +10,9 @@ from app.models.common import new_id
 from app.models.quota import QuotaBalance
 
 
-async def _register_with_project(client, email: str, *, target_chapter_count: int = 5, genre: str = "悬疑"):
+async def _register_with_project(
+    client, email: str, *, target_chapter_count: int = 5, genre: str = "悬疑"
+):
     res = await client.post(
         "/api/v1/auth/register",
         json={"email": email, "password": "password123", "display_name": email.split("@")[0]},

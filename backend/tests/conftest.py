@@ -6,14 +6,13 @@
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import AsyncIterator
 
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("REDIS_URL", "memory://")
 os.environ.setdefault("JWT_SECRET", "test-secret-min-32-chars-aaaaaaaa")
 os.environ.setdefault("RATE_LIMIT_ENABLED", "false")
-os.environ.setdefault("MODEL_GATEWAY_MODE", "mock")
-os.environ.setdefault("MODEL_GATEWAY_ALLOW_MOCK", "true")
 
 import pytest
 import pytest_asyncio
@@ -66,12 +65,14 @@ def _isolate_model_gateway():
     ModelGateway 是模块级单例，admin settings 测试会调用 configure() 注入
     真实 OpenAI provider；同进程后续测试（如 generate_bible_flow）会沿用
     这个 provider，对空的内存 sqlite 报 401。
-    通过失效 settings 缓存让每个测试的首次 generate 强制查库回到 mock。
+    单测注入稳定模型替身，并把 settings 缓存标记为新鲜，避免空内存库
+    覆盖掉替身 provider。
     """
-    from app.services.model_gateway.service import _MockProvider, model_gateway
+    from app.services.model_gateway.service import model_gateway
+    from tests.fakes import DeterministicModelProvider
 
-    model_gateway._provider = _MockProvider()
-    model_gateway.invalidate_settings_cache()
+    model_gateway.set_provider(DeterministicModelProvider())
+    model_gateway._settings_cache_at = time.monotonic()
     yield
-    model_gateway._provider = _MockProvider()
-    model_gateway.invalidate_settings_cache()
+    model_gateway.set_provider(DeterministicModelProvider())
+    model_gateway._settings_cache_at = time.monotonic()

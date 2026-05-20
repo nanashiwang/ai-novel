@@ -16,8 +16,6 @@ class Settings(BaseSettings):
     temporal_host: str = "localhost:7233"
     temporal_namespace: str = "default"
     temporal_enabled: bool = False
-    model_gateway_mode: str = "real"
-    model_gateway_allow_mock: bool = False
     model_gateway_provider: str = "openai"  # openai | anthropic
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"

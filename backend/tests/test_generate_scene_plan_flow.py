@@ -189,7 +189,9 @@ async def test_generate_scene_plan_happy_path(client, db_engine, db_session, mon
 
 
 @pytest.mark.asyncio
-async def test_generate_scene_plan_rejects_without_bible(client, db_engine, db_session, monkeypatch):
+async def test_generate_scene_plan_rejects_without_bible(
+    client, db_engine, db_session, monkeypatch
+):
     """缺 NovelSpec → 404 novel_spec_not_found。"""
     Session = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
     monkeypatch.setattr(activities, "AsyncSessionLocal", Session)
@@ -244,7 +246,9 @@ async def test_generate_scene_plan_rejects_without_bible(client, db_engine, db_s
 
 
 @pytest.mark.asyncio
-async def test_generate_scene_plan_rejects_missing_chapter(client, db_engine, db_session, monkeypatch):
+async def test_generate_scene_plan_rejects_missing_chapter(
+    client, db_engine, db_session, monkeypatch
+):
     """chapter_id 不存在或不属于该 project → 404 chapter_not_found。"""
     Session = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
     monkeypatch.setattr(activities, "AsyncSessionLocal", Session)

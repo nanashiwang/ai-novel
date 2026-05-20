@@ -184,6 +184,20 @@ _POSTGRES_SCHEMA_FIXES = [
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
     """,
+    "DELETE FROM system_settings WHERE key = 'model_gateway.mode'",
+    "ALTER TABLE IF EXISTS subscriptions ALTER COLUMN provider SET DEFAULT 'manual'",
+    "ALTER TABLE IF EXISTS payment_events ALTER COLUMN provider SET DEFAULT 'manual'",
+    """
+    DO $$
+    BEGIN
+      IF to_regclass('public.subscriptions') IS NOT NULL THEN
+        UPDATE subscriptions SET provider = 'manual' WHERE provider = 'mock';
+      END IF;
+      IF to_regclass('public.payment_events') IS NOT NULL THEN
+        UPDATE payment_events SET provider = 'manual' WHERE provider = 'mock';
+      END IF;
+    END $$;
+    """,
 ]
 
 

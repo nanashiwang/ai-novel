@@ -139,7 +139,7 @@ async def _await_job_terminal(db_session, job_id: str, *, max_polls: int = 30) -
 
 @pytest.mark.asyncio
 async def test_write_scene_happy_path(client, db_engine, db_session, monkeypatch):
-    """write_scene 闭环：draft 落库 + scene.status=drafted + quota 消耗 + model_calls 含 ContextBuilder 指标。"""
+    """write_scene 闭环：draft 落库、状态推进、quota 消耗和 model_calls 指标。"""
     Session = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
     monkeypatch.setattr(activities, "AsyncSessionLocal", Session)
 

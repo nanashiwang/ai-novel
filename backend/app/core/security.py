@@ -1,7 +1,7 @@
 """鉴权依赖。
 
 从 `Authorization: Bearer <jwt>` 解析 access token，查 users 表，
-返回封装好的 `CurrentUser`。彻底移除 X-Mock-User 提权漏洞。
+返回封装好的 `CurrentUser`。旧调试提权头不再生效。
 """
 from __future__ import annotations
 

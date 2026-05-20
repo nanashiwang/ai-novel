@@ -1377,7 +1377,6 @@ export function AdminSettingsPage() {
   });
   const [draft, setDraft] = useState<Partial<ModelGatewaySettingsUpdate>>({});
   const form: ModelGatewaySettingsUpdate = {
-    mode: "real",
     provider: draft.provider ?? data?.provider ?? "openai",
     default_model: draft.default_model ?? data?.default_model ?? "gpt-5.5",
     openai_base_url:
@@ -1516,7 +1515,7 @@ export function AdminSettingsPage() {
               disabled={!editable}
               title="真实模型生产模式"
               desc="所有生成链路直接调用下方 URL 和 Key"
-              onClick={() => updateField("mode", "real")}
+              onClick={() => undefined}
             />
           </div>
 
@@ -1582,7 +1581,7 @@ export function AdminSettingsPage() {
 
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-5">
             <p className="text-sm text-slate-500">
-              {form.mode === "real" && !canSave
+              {!canSave
                 ? "真实模型模式需要当前服务商的 Key。"
                 : "Key 不会在页面回显。可先用「测试连接」验证再保存。"}
             </p>

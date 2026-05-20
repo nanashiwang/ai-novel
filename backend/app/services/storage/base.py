@@ -46,7 +46,9 @@ class _DbStorage:
         return StoredObject(key=key, size=len(content))
 
     async def get(self, key: str) -> bytes:
-        raise NotImplementedError("DbStorage.get should not be called; endpoint reads ExportFile.content")
+        raise NotImplementedError(
+            "DbStorage.get should not be called; endpoint reads ExportFile.content"
+        )
 
     async def sign_url(self, key: str, filename: str, content_type: str) -> str | None:
         return None

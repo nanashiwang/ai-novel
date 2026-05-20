@@ -21,7 +21,6 @@ async def test_super_admin_can_configure_model_gateway(client):
         "/api/v1/admin/settings/model-gateway",
         headers=headers,
         json={
-            "mode": "real",
             "provider": "openai",
             "default_model": "gpt-4o-mini",
             "openai_base_url": "https://api.openai.com/v1",
@@ -33,6 +32,7 @@ async def test_super_admin_can_configure_model_gateway(client):
     assert res.status_code == 200, res.text
     data = res.json()
     assert data["ready"] is True
+    assert "mode" not in data
     assert data["openai_api_key_configured"] is True
     assert "sk-test" not in res.text
 
@@ -51,7 +51,6 @@ async def test_normal_user_cannot_update_model_gateway_settings(client):
         "/api/v1/admin/settings/model-gateway",
         headers={"Authorization": f"Bearer {token}"},
         json={
-            "mode": "mock",
             "provider": "openai",
             "default_model": "gpt-5.5",
             "openai_base_url": "https://api.openai.com/v1",

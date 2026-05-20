@@ -16,8 +16,8 @@ from app.repositories import (
     ProjectRepository,
     WorldItemRepository,
 )
-from app.schemas.generation import GenerationJobResponse
 from app.schemas.common import APIModel
+from app.schemas.generation import GenerationJobResponse
 from app.schemas.project import (
     GenerateNovelRequest,
     ProjectCreate,

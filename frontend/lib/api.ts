@@ -628,7 +628,6 @@ export const exportsApi = {
 
 // ----- Admin -----
 export type ModelGatewaySettings = {
-  mode: "mock" | "real";
   provider: "openai" | "anthropic";
   default_model: string;
   openai_base_url: string;
@@ -640,7 +639,6 @@ export type ModelGatewaySettings = {
 };
 
 export type ModelGatewaySettingsUpdate = {
-  mode: "mock" | "real";
   provider: "openai" | "anthropic";
   default_model: string;
   openai_base_url: string;

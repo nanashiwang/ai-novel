@@ -100,7 +100,7 @@ async def test_full_novel_pipeline_persists_goat_style_layers(db_engine, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_mock_workflow_runs_after_commit(monkeypatch, db_session):
+async def test_local_workflow_runs_after_commit(monkeypatch, db_session):
     from datetime import datetime, timedelta, timezone
 
     from app.models.common import new_id
@@ -113,12 +113,12 @@ async def test_mock_workflow_runs_after_commit(monkeypatch, db_session):
     monkeypatch.setattr(
         workflow_starter,
         "start_generate_full_novel",
-        lambda job: f"mock-generate-full-novel-{job['id']}",
+        lambda job: f"local-generate-full-novel-{job['id']}",
     )
     monkeypatch.setattr(
         workflow_starter,
-        "is_mock_workflow",
-        lambda workflow_id: str(workflow_id).startswith("mock-"),
+        "is_local_workflow",
+        lambda workflow_id: str(workflow_id).startswith("local-"),
     )
     monkeypatch.setattr(
         workflow_starter,

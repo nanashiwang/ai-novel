@@ -3,7 +3,7 @@ export type OrganizationRole = "owner" | "admin" | "editor" | "viewer" | "billin
 export type UserStatus = "active" | "suspended" | "deleted";
 export type PlanCode = "Free" | "Starter" | "Pro" | "Team" | "Enterprise" | "Internal";
 
-export type MockUser = {
+export type FrontendUser = {
   id: string;
   name: string;
   email: string;

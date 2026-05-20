@@ -7,7 +7,7 @@ import { DataTable } from "./data-table";
 /**
  * 模型调用日志表格。
  *
- * 不再依赖 mock-data；调用方传 rows，由 useQuery + adminApi.modelCalls 提供。
+ * 调用方传 rows，由 useQuery + adminApi.modelCalls 提供。
  * 默认空数组，避免 undefined 时崩溃。
  */
 export function ModelCallTable({ rows = [] }: { rows?: ModelCall[] }) {

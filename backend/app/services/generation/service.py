@@ -161,7 +161,7 @@ class GenerationService:
         project.status = "bible_generating"
         job.workflow_id = workflow_starter.start_generate_bible({"id": job.id})
         await session.flush()
-        if workflow_starter.is_mock_workflow(job.workflow_id):
+        if workflow_starter.is_local_workflow(job.workflow_id):
             session.sync_session.info.setdefault("after_commit_tasks", []).append(
                 ("generate_bible", job.id)
             )
@@ -250,7 +250,7 @@ class GenerationService:
         project.status = "outline_generating"
         job.workflow_id = workflow_starter.start_generate_outline({"id": job.id})
         await session.flush()
-        if workflow_starter.is_mock_workflow(job.workflow_id):
+        if workflow_starter.is_local_workflow(job.workflow_id):
             session.sync_session.info.setdefault("after_commit_tasks", []).append(
                 ("generate_outline", job.id)
             )
@@ -349,7 +349,7 @@ class GenerationService:
         )
         job.workflow_id = workflow_starter.start_generate_scene_plan({"id": job.id})
         await session.flush()
-        if workflow_starter.is_mock_workflow(job.workflow_id):
+        if workflow_starter.is_local_workflow(job.workflow_id):
             session.sync_session.info.setdefault("after_commit_tasks", []).append(
                 ("generate_scene_plan", job.id)
             )
@@ -407,7 +407,7 @@ class GenerationService:
         )
         job.workflow_id = workflow_starter.start_generate_full_novel({"id": job.id})
         await session.flush()
-        if workflow_starter.is_mock_workflow(job.workflow_id):
+        if workflow_starter.is_local_workflow(job.workflow_id):
             session.sync_session.info.setdefault("after_commit_tasks", []).append(
                 ("full_novel", job.id)
             )
@@ -470,7 +470,7 @@ class GenerationService:
         )
         job.workflow_id = workflow_starter.start_write_scene({"id": job.id})
         await session.flush()
-        if workflow_starter.is_mock_workflow(job.workflow_id):
+        if workflow_starter.is_local_workflow(job.workflow_id):
             session.sync_session.info.setdefault("after_commit_tasks", []).append(
                 ("write_scene", job.id)
             )
@@ -521,7 +521,7 @@ class GenerationService:
         )
         job.workflow_id = workflow_starter.start_audit_scene({"id": job.id})
         await session.flush()
-        if workflow_starter.is_mock_workflow(job.workflow_id):
+        if workflow_starter.is_local_workflow(job.workflow_id):
             session.sync_session.info.setdefault("after_commit_tasks", []).append(
                 ("audit_scene", job.id)
             )
@@ -578,7 +578,7 @@ class GenerationService:
         )
         job.workflow_id = workflow_starter.start_rewrite_scene({"id": job.id})
         await session.flush()
-        if workflow_starter.is_mock_workflow(job.workflow_id):
+        if workflow_starter.is_local_workflow(job.workflow_id):
             session.sync_session.info.setdefault("after_commit_tasks", []).append(
                 ("rewrite_scene", job.id)
             )

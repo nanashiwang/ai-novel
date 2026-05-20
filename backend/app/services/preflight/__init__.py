@@ -21,7 +21,6 @@ from app.repositories import QuotaBalanceRepository
 from app.services.entitlement.service import PLAN_ENTITLEMENTS, has_entitlement
 from app.services.quota.service import _resolve_plan_limit
 
-
 # 各 job_type 的默认预估消耗字数（与 generation_service 默认值对齐）
 DEFAULT_ESTIMATE_WORDS: dict[str, int] = {
     "generate_bible": 2000,
@@ -197,7 +196,8 @@ class PreflightService:
                     label=f"超长篇模式（{project.target_chapter_count} 章）",
                     level="warn",
                     detail=(
-                        f"完整生成预计需要约 {int(est_total)} 字额度（≈ {int(est_total / 10000)} 万）。"
+                        f"完整生成预计需要约 {int(est_total)} 字额度"
+                        f"（≈ {int(est_total / 10000)} 万）。"
                         " 建议采用分批策略：先生成圣经 + 前 3 章试写，确认风格后再批量生成；"
                         " 每 10 章做一次记忆校准，每 50 章做一次主线复盘。"
                     ),

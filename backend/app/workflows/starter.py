@@ -126,8 +126,8 @@ class WorkflowStarter:
     def start_rewrite_scene(self, job: dict) -> str:
         return self._fire_and_forget("RewriteSceneWorkflow", job, "rewrite-scene")
 
-    def is_mock_workflow(self, workflow_id: str | None) -> bool:
-        return bool(workflow_id and workflow_id.startswith(("local-", "mock-")))
+    def is_local_workflow(self, workflow_id: str | None) -> bool:
+        return bool(workflow_id and workflow_id.startswith("local-"))
 
     def run_local_generate_full_novel(self, job_id: str) -> None:
         self._run_local("full_novel", job_id)

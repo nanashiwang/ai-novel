@@ -25,7 +25,7 @@ pytestmark = pytest.mark.postgres
 
 
 @pytest.mark.asyncio
-async def test_reserve_quota_under_real_concurrency(pg_engine):
+async def test_reserve_quota_under_real_concurrency(pg_engine):  # noqa: F811
     Session = async_sessionmaker(pg_engine, expire_on_commit=False)
 
     async with Session() as session:
@@ -42,7 +42,12 @@ async def test_reserve_quota_under_real_concurrency(pg_engine):
         session.add(org)
         await session.flush()
         session.add(
-            OrganizationMember(id=new_id("mem"), organization_id=org.id, user_id=admin.id, role="owner")
+            OrganizationMember(
+                id=new_id("mem"),
+                organization_id=org.id,
+                user_id=admin.id,
+                role="owner",
+            )
         )
         project = Project(
             id="project_x",

@@ -6,7 +6,7 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_refresh_rotates_and_blacklists_old(client, monkeypatch):
-    # Mock Redis 黑名单：用内存集合替代
+    # 用内存集合替代 Redis 黑名单
     revoked: set[str] = set()
 
     async def fake_revoke(jti: str, exp):  # noqa: ANN001

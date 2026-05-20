@@ -4,7 +4,6 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models import (
     Chapter,
@@ -58,7 +57,7 @@ async def _setup(client, db_session, *, email: str) -> tuple[str, str, dict]:
 async def test_duplicate_bible_request_returns_same_job(client, db_engine, db_session, monkeypatch):
     """同租户/同项目/同输入连点两次 bible/generate，第二次返回第一次的 job
     不创建新 job、不重复扣 quota。"""
-    # 阻塞 mock workflow 让 job 卡在 queued 状态（不被立即推进到 succeeded）
+    # 阻塞本地 workflow 让 job 卡在 queued 状态（不被立即推进到 succeeded）
     monkeypatch.setattr(
         workflow_starter, "_run_local", lambda *a, **kw: None
     )

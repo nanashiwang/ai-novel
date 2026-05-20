@@ -76,7 +76,7 @@
 
 ## 2. 路由清单
 
-✅ = Sprint 1 已实现并测试覆盖；🟡 = 后续 Sprint 占位（路由保留，未来实现时必须用同一路径）；⚪ = 仅前端 mock，尚未接后端。
+✅ = 已实现并测试覆盖；🟡 = 后续 Sprint 占位（路由保留，未来实现时必须用同一路径）；⚪ = 前端占位，尚未接后端。
 
 ### 2.1 认证 `/api/v1/auth`
 
@@ -152,7 +152,7 @@
 | 路径 | 状态 |
 |---|---|
 | `GET /billing/plans` | ✅ |
-| `POST /billing/checkout-session` | ✅（mock） / 升级未排期 |
+| `POST /billing/checkout-session` | ✅（待接真实支付网关） / 升级未排期 |
 | `GET /quotas` | ✅ |
 | `GET /usage` | ✅ |
 | `GET /entitlements` | ✅ |

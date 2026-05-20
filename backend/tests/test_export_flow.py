@@ -11,8 +11,6 @@ from app.models import (
     DraftVersion,
     ExportFile,
     NovelSpec,
-    Organization,
-    Project,
     QuotaBalance,
     Scene,
 )

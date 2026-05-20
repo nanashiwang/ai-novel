@@ -33,7 +33,7 @@ POST /api/v1/projects/{project_id}/generate-full-novel
 - 所有小说业务数据带 `organization_id`。
 - 权限（Role/Permission）和商业权益（Plan/Entitlement）分离。
 - 自动写作任务写入 `generation_jobs`，模型调用写入 `model_calls`，额度消耗写入 `usage_events`。
-- Model Gateway 是唯一模型调用入口；当前是 mock 模式。
+- Model Gateway 是唯一模型调用入口；当前默认只调用真实 provider，未配置 Key 会显式失败。
 - Temporal workflow 已有类和 worker 入口，后续可替换 `WorkflowStarter` 为真实 client。
 
 ## 本地验证

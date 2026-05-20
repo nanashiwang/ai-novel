@@ -2,7 +2,7 @@ import Link from "next/link";
 import { LockKeyhole } from "lucide-react";
 import { Button } from "./button";
 
-export function PermissionNotice({ title = "无权限访问", description = "当前 mock 用户不是平台管理员，Admin Console 已隐藏。" }: { title?: string; description?: string }) {
+export function PermissionNotice({ title = "无权限访问", description = "当前账号不是平台管理员，Admin Console 已隐藏。" }: { title?: string; description?: string }) {
   return (
     <div className="grid min-h-screen place-items-center bg-slate-50 p-6">
       <div className="max-w-lg rounded-3xl border border-slate-200 bg-white p-8 text-center shadow-sm">

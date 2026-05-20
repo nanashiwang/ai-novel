@@ -28,7 +28,6 @@ from app.repositories import (
     CharacterRepository,
     MemoryRepository,
     PlotThreadRepository,
-    SceneRepository,
     WorldItemRepository,
 )
 from app.services.model_gateway.service import _estimate_tokens

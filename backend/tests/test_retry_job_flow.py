@@ -4,10 +4,9 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.models import GenerationJob, Organization, Project, QuotaBalance
+from app.models import GenerationJob, QuotaBalance
 from app.models.common import new_id
 from app.workflows import activities
 
@@ -69,7 +68,7 @@ async def test_retry_failed_job_creates_new_job_with_retry_of(
 
     _, project_id, headers = await _setup(client, db_session, email="retry-failed@example.com")
 
-    # mock 失败：让 novel_planner 抛异常
+    # 模拟失败：让 novel_planner 抛异常
     from app.services.novel_planner.service import novel_planner_service
 
     async def _boom(*args, **kwargs):

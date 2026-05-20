@@ -9,7 +9,6 @@ from app.core.config import get_settings
 from app.models.system_setting import SystemSetting
 
 MODEL_SETTING_KEYS = {
-    "mode": "model_gateway.mode",
     "provider": "model_gateway.provider",
     "default_model": "model_gateway.default_model",
     "openai_base_url": "model_gateway.openai_base_url",
@@ -26,7 +25,6 @@ SECRET_SETTING_KEYS = {
 
 @dataclass(frozen=True)
 class ModelGatewayConfig:
-    mode: str
     provider: str
     default_model: str
     openai_base_url: str
@@ -51,7 +49,6 @@ class SystemSettingsService:
     def _defaults(self) -> ModelGatewayConfig:
         settings = get_settings()
         return ModelGatewayConfig(
-            mode=settings.model_gateway_mode,
             provider=settings.model_gateway_provider,
             default_model=settings.default_model,
             openai_base_url=settings.openai_base_url,
@@ -62,16 +59,11 @@ class SystemSettingsService:
 
     async def get_model_config(self, session: AsyncSession) -> ModelGatewayConfig:
         defaults = self._defaults()
-        settings = get_settings()
         result = await session.execute(
             select(SystemSetting).where(SystemSetting.key.in_(MODEL_SETTING_KEYS.values()))
         )
         values = {row.key: row.value or "" for row in result.scalars().all()}
-        mode = values.get(MODEL_SETTING_KEYS["mode"], defaults.mode) or "real"
-        if mode == "mock" and not settings.model_gateway_allow_mock:
-            mode = "real"
         return ModelGatewayConfig(
-            mode=mode,
             provider=values.get(MODEL_SETTING_KEYS["provider"], defaults.provider) or "openai",
             default_model=values.get(MODEL_SETTING_KEYS["default_model"], defaults.default_model)
             or "gpt-5.5",
@@ -99,7 +91,6 @@ class SystemSettingsService:
         self,
         session: AsyncSession,
         *,
-        mode: str,
         provider: str,
         default_model: str,
         openai_base_url: str,
@@ -109,7 +100,6 @@ class SystemSettingsService:
     ) -> ModelGatewayConfig:
         current = await self.get_model_config(session)
         values = {
-            MODEL_SETTING_KEYS["mode"]: mode,
             MODEL_SETTING_KEYS["provider"]: provider,
             MODEL_SETTING_KEYS["default_model"]: default_model,
             MODEL_SETTING_KEYS["openai_base_url"]: openai_base_url,

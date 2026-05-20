@@ -5,8 +5,8 @@
 """
 from __future__ import annotations
 
-import pytest
 import httpx
+import pytest
 
 from app.services.model_gateway.providers import OpenAIChatProvider
 

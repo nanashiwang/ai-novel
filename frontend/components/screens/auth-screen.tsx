@@ -49,7 +49,7 @@ export function AuthScreen({ mode }: { mode: "login" | "register" }) {
       <section className="relative hidden overflow-hidden p-10 text-white lg:block">
         <div className="absolute inset-0 bg-gradient-to-br from-slate-950 via-[#11194a] to-indigo-950" />
         <Image
-          src="/mock-assets/login-illustration.png"
+          src="/brand-assets/login-illustration.png"
           alt="小说氛围插图"
           fill
           sizes="50vw"
