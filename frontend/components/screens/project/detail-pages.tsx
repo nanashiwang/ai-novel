@@ -1493,6 +1493,8 @@ export function WorldPage({ projectId }: { projectId: string }) {
 }
 
 // =========== 大纲 ===========
+const OUTLINE_CHAPTER_BATCH_SIZE = 60;
+
 export function OutlinePage({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
   const projectKey = useScopedKey("project", projectId);
@@ -1538,6 +1540,10 @@ export function OutlinePage({ projectId }: { projectId: string }) {
   const targetChapterCount = project?.target_chapter_count ?? 0;
   const shouldAppendOutline =
     chapters.length > 0 && targetChapterCount > chapters.length;
+  const nextBatchChapterCount =
+    targetChapterCount > 0
+      ? Math.min(targetChapterCount, chapters.length + OUTLINE_CHAPTER_BATCH_SIZE)
+      : 0;
   const outlineProgress =
     targetChapterCount > 0
       ? `已生成 ${chapters.length}/${targetChapterCount} 章`
@@ -1547,9 +1553,11 @@ export function OutlinePage({ projectId }: { projectId: string }) {
   const generateOutlineLabel = isGenerating
     ? "生成中"
     : chapters.length === 0
-      ? "启动生成"
+      ? targetChapterCount > OUTLINE_CHAPTER_BATCH_SIZE
+        ? `生成前 ${OUTLINE_CHAPTER_BATCH_SIZE}/${targetChapterCount} 章`
+        : "启动生成"
       : shouldAppendOutline
-        ? `补全至 ${targetChapterCount} 章`
+        ? `补全下一批至 ${nextBatchChapterCount}/${targetChapterCount} 章`
         : "重新生成大纲";
 
   const generate = useMutation({
@@ -1639,7 +1647,7 @@ export function OutlinePage({ projectId }: { projectId: string }) {
               <p className="font-bold text-slate-950">Sprint 2 大纲闭环</p>
               <p className="text-sm text-slate-500">
                 {shouldAppendOutline
-                  ? "当前少于项目目标章节数，点击补全会只追加缺失的后续章节。"
+                  ? "当前少于项目目标章节数，点击补全会按批追加后续章节。"
                   : "调用模型规划三幕推进，每章产出标题、摘要、目标、冲突、结尾钩子。"}
               </p>
             </div>

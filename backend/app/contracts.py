@@ -132,9 +132,10 @@ ERROR_CODES: frozenset[str] = frozenset(
 # ----------------------------------------------------------------------------
 # generation limits
 # ----------------------------------------------------------------------------
-# 单次章节大纲生成的安全上限。默认新项目是 48 章，不应再被早期 Sprint
-# 的 12 章测试上限截断；超长篇后续再做分卷/分批大纲生成。
-MAX_OUTLINE_CHAPTERS = 200
+# 项目级章节大纲目标上限。超长篇允许设置较大目标，但实际生成会按批推进，
+# 避免一次请求让模型输出数百章 JSON。
+MAX_OUTLINE_CHAPTERS = 2000
+OUTLINE_CHAPTER_BATCH_SIZE = 60
 
 
 __all__ = [
@@ -142,4 +143,6 @@ __all__ = [
     "JOB_STATUSES",
     "PROJECT_STATUSES",
     "ERROR_CODES",
+    "MAX_OUTLINE_CHAPTERS",
+    "OUTLINE_CHAPTER_BATCH_SIZE",
 ]

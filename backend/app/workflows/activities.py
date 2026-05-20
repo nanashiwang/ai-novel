@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio import activity
 
-from app.contracts import MAX_OUTLINE_CHAPTERS
+from app.contracts import MAX_OUTLINE_CHAPTERS, OUTLINE_CHAPTER_BATCH_SIZE
 from app.core.database import AsyncSessionLocal
 from app.core.exceptions import NotFoundError
 from app.core.metrics import JOBS_CREATED
@@ -460,12 +460,22 @@ async def generate_chapter_outline(job: dict[str, Any]) -> dict[str, Any]:
             )
         )
         requested = payload.get("target_chapters") or project.target_chapter_count or 6
-        target_chapters = max(1, min(int(requested), MAX_OUTLINE_CHAPTERS))
+        target_total_chapters = max(1, min(int(requested), MAX_OUTLINE_CHAPTERS))
+        existing_count = len(existing)
+        batch_target_chapters = min(
+            target_total_chapters,
+            existing_count + OUTLINE_CHAPTER_BATCH_SIZE,
+        )
         if existing and not payload.get("force_regenerate_outline"):
-            if len(existing) >= target_chapters:
+            if existing_count >= target_total_chapters:
                 project.status = "outlined"
                 await _settle_job_usage(session, job_row, amount=0)
-                return {"chapter_count": len(existing), "reused": True}
+                return {
+                    "chapter_count": existing_count,
+                    "target_chapter_count": target_total_chapters,
+                    "remaining_chapter_count": 0,
+                    "reused": True,
+                }
 
         # force_regenerate=True：先清掉旧章节，再写新章节。
         # 否则 chapter_repo.create() 会和旧记录冲突或导致 chapter_index 重复。
@@ -477,6 +487,11 @@ async def generate_chapter_outline(job: dict[str, Any]) -> dict[str, Any]:
                 await session.delete(old)
             await session.flush()
             existing = []
+            existing_count = 0
+            batch_target_chapters = min(
+                target_total_chapters,
+                OUTLINE_CHAPTER_BATCH_SIZE,
+            )
 
         contract = await novel_planner_service.plan_chapters(
             session,
@@ -485,7 +500,7 @@ async def generate_chapter_outline(job: dict[str, Any]) -> dict[str, Any]:
             job_id=job_row.id,
             project=project,
             bible=spec,
-            target_chapters=target_chapters,
+            target_chapters=batch_target_chapters,
         )
         existing_indices = {chapter.chapter_index for chapter in existing}
         created = 0
@@ -505,15 +520,19 @@ async def generate_chapter_outline(job: dict[str, Any]) -> dict[str, Any]:
                 status="planned",
             )
             created += 1
-        if target_chapters > (project.target_chapter_count or 0):
-            project.target_chapter_count = target_chapters
+        total_chapters = len(existing) + created
+        if target_total_chapters > (project.target_chapter_count or 0):
+            project.target_chapter_count = target_total_chapters
         else:
-            project.target_chapter_count = project.target_chapter_count or (len(existing) + created)
+            project.target_chapter_count = project.target_chapter_count or total_chapters
         project.status = "outlined"
         await _settle_job_usage(session, job_row, amount=job_row.reserved_quota)
         return {
-            "chapter_count": len(existing) + created,
+            "chapter_count": total_chapters,
             "created_chapter_count": created,
+            "target_chapter_count": target_total_chapters,
+            "batch_target_chapter_count": batch_target_chapters,
+            "remaining_chapter_count": max(0, target_total_chapters - total_chapters),
             "reused": False,
             "appended": bool(existing),
         }

@@ -193,6 +193,40 @@ async def test_generate_outline_uses_project_target_above_12(
 
 
 @pytest.mark.asyncio
+async def test_generate_outline_batches_very_large_project_target(
+    client, db_engine, db_session, monkeypatch
+):
+    """750 章目标应通过请求校验，并按批生成，避免一次让模型输出超大 JSON。"""
+    Session = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+    monkeypatch.setattr(activities, "AsyncSessionLocal", Session)
+
+    _, project_id, headers = await _setup_org_project_and_spec(
+        client,
+        db_session,
+        email="outline-target-750@example.com",
+        target_chapter_count=750,
+    )
+
+    res = await client.post(
+        f"/api/v1/projects/{project_id}/outline/generate",
+        headers=headers,
+        json={"target_chapters": 750, "estimate_words": 3000},
+    )
+    assert res.status_code == 202, res.text
+    job = await _await_job_terminal(db_session, res.json()["id"])
+    assert job.status == "succeeded"
+    assert (job.output_payload or {}).get("target_chapter_count") == 750
+    assert (job.output_payload or {}).get("batch_target_chapter_count") == 60
+    assert (job.output_payload or {}).get("remaining_chapter_count") == 690
+
+    db_session.expire_all()
+    chapters = (
+        await db_session.execute(select(Chapter).where(Chapter.project_id == project_id))
+    ).scalars().all()
+    assert len(chapters) == 60
+
+
+@pytest.mark.asyncio
 async def test_generate_outline_rejects_without_bible(client, db_engine, db_session, monkeypatch):
     """没有 NovelSpec 时拒绝，返回 404 novel_spec_not_found。"""
     Session = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)

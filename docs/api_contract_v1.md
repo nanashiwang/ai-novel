@@ -190,8 +190,8 @@
 
 | 字段 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
-| `target_chapters` | int | 否 | project.target_chapter_count 或 6 | 期望章节数，服务端上限 200 |
-| `force_regenerate` | bool | 否 | false | 若已有 chapters 且已达到目标数，走 reuse；若未达到目标数，补齐缺失后续章节；设为 true 时重生成完整大纲 |
+| `target_chapters` | int | 否 | project.target_chapter_count 或 6 | 期望总章节数，项目级上限 2000；单次按 60 章分批推进 |
+| `force_regenerate` | bool | 否 | false | 若已有 chapters 且已达到目标数，走 reuse；若未达到目标数，按批补齐后续章节；设为 true 时从第 1 批重新生成 |
 | `estimate_words` | int | 否 | 3000 | 用于 quota 预留 |
 
 响应（**202**）：`GenerationJobResponse`（同 generate_bible）。
