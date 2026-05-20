@@ -97,6 +97,11 @@ _POSTGRES_SCHEMA_FIXES = [
         "ALTER TABLE export_files ADD COLUMN IF NOT EXISTS "
         "updated_at TIMESTAMPTZ NOT NULL DEFAULT now()"
     ),
+    # draft_versions：富文本格式标识（Sprint 4-C：升级编辑器为 markdown）
+    (
+        "ALTER TABLE draft_versions ADD COLUMN IF NOT EXISTS "
+        "content_format VARCHAR(16) NOT NULL DEFAULT 'text'"
+    ),
     "ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS event_metadata JSONB",
     """
     DO $$
@@ -133,6 +138,82 @@ _POSTGRES_SCHEMA_FIXES = [
         "ON generation_jobs(organization_id, status, created_at)"
     ),
     """
+    CREATE TABLE IF NOT EXISTS revision_sessions (
+      id TEXT PRIMARY KEY,
+      organization_id TEXT NOT NULL,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      created_by TEXT NOT NULL REFERENCES users(id),
+      scope TEXT NOT NULL DEFAULT 'story_bible',
+      title TEXT NOT NULL DEFAULT 'AI 设定共创',
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_revision_sessions_project ON revision_sessions(project_id)",
+    """
+    CREATE TABLE IF NOT EXISTS revision_messages (
+      id TEXT PRIMARY KEY,
+      organization_id TEXT NOT NULL,
+      session_id TEXT NOT NULL REFERENCES revision_sessions(id) ON DELETE CASCADE,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_revision_messages_session ON revision_messages(session_id)",
+    "CREATE INDEX IF NOT EXISTS ix_revision_messages_project ON revision_messages(project_id)",
+    """
+    CREATE TABLE IF NOT EXISTS revision_proposals (
+      id TEXT PRIMARY KEY,
+      organization_id TEXT NOT NULL,
+      session_id TEXT NOT NULL REFERENCES revision_sessions(id) ON DELETE CASCADE,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      target_type TEXT NOT NULL,
+      target_id TEXT,
+      action TEXT NOT NULL DEFAULT 'update',
+      title TEXT NOT NULL DEFAULT '设定优化提案',
+      reason TEXT NOT NULL DEFAULT '',
+      impact JSONB NOT NULL DEFAULT '[]',
+      patch JSONB NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_revision_proposals_session ON revision_proposals(session_id)",
+    "CREATE INDEX IF NOT EXISTS ix_revision_proposals_project ON revision_proposals(project_id)",
+    (
+        "CREATE INDEX IF NOT EXISTS ix_revision_proposals_target "
+        "ON revision_proposals(target_type, target_id)"
+    ),
+    """
+    CREATE TABLE IF NOT EXISTS revision_applied_changes (
+      id TEXT PRIMARY KEY,
+      organization_id TEXT NOT NULL,
+      session_id TEXT NOT NULL REFERENCES revision_sessions(id) ON DELETE CASCADE,
+      proposal_id TEXT NOT NULL REFERENCES revision_proposals(id) ON DELETE CASCADE,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      target_type TEXT NOT NULL,
+      target_id TEXT,
+      before_data JSONB NOT NULL DEFAULT '{}',
+      after_data JSONB NOT NULL DEFAULT '{}',
+      applied_by TEXT NOT NULL REFERENCES users(id),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    (
+        "CREATE INDEX IF NOT EXISTS ix_revision_applied_changes_proposal "
+        "ON revision_applied_changes(proposal_id)"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_revision_applied_changes_project "
+        "ON revision_applied_changes(project_id)"
+    ),
+    """
     CREATE TABLE IF NOT EXISTS draft_versions (
       id TEXT PRIMARY KEY,
       organization_id TEXT NOT NULL,
@@ -141,6 +222,7 @@ _POSTGRES_SCHEMA_FIXES = [
       scene_id TEXT REFERENCES scenes(id),
       version_type TEXT NOT NULL DEFAULT 'draft',
       content TEXT NOT NULL DEFAULT '',
+      content_format VARCHAR(16) NOT NULL DEFAULT 'text',
       word_count INTEGER NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'draft',
       parent_version_id TEXT,

@@ -19,6 +19,8 @@ class DraftVersion(Base, TenantMixin, TimestampMixin):
     scene_id: Mapped[Optional[str]] = mapped_column(String(64), ForeignKey("scenes.id"))
     version_type: Mapped[str] = mapped_column(String(64), default="draft")
     content: Mapped[str] = mapped_column(Text, default="")
+    # 'text'（历史 plain text）| 'markdown'（新写入路径：AI 生成 / 用户编辑器保存）
+    content_format: Mapped[str] = mapped_column(String(16), default="text", server_default="text")
     word_count: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(64), default="draft")
     parent_version_id: Mapped[Optional[str]] = mapped_column(String(64))

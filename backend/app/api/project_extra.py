@@ -1,6 +1,9 @@
 """项目内 Memory / Continuity Issue / Draft Version / Export 路由。"""
 from __future__ import annotations
 
+from datetime import datetime
+from typing import Literal
+
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
@@ -72,11 +75,15 @@ class ContinuityIssueResponse(APIModel):
     id: str
     organization_id: str
     project_id: str
+    chapter_id: str | None = None
+    scene_id: str | None = None
     issue_type: str
     severity: str
     description: str
     suggested_fix: str
     status: str
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 @router.get("/continuity-issues", response_model=list[ContinuityIssueResponse])
@@ -96,6 +103,8 @@ class DraftVersionPayload(APIModel):
     scene_id: str | None = None
     version_type: str = "draft"
     content: str = ""
+    # 'text' = 历史纯文本数据（兼容路径）；'markdown' = 新编辑器 / AI 输出
+    content_format: Literal["text", "markdown"] = "text"
     word_count: int = 0
     status: str = "draft"
     parent_version_id: str | None = None
@@ -106,6 +115,8 @@ class DraftVersionResponse(DraftVersionPayload):
     organization_id: str
     project_id: str
     created_by: str
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 @router.get("/versions", response_model=list[DraftVersionResponse])
