@@ -2,6 +2,9 @@
 
 Sprint 5-B 实现：把项目下所有 chapter 的每个 scene 取最新 draft，拼成
 Markdown / TXT，返回 (content, size) 元组。不调 LLM、无 quota、同步操作。
+
+Sprint 4-C 起 draft.content 可能是 markdown 字符串（content_format='markdown'），
+导出 markdown 时直接拼接；导出 TXT 时经过 markdown_stripper 转 plain。
 """
 from __future__ import annotations
 
@@ -18,6 +21,8 @@ from app.repositories import (
     DraftVersionRepository,
     SceneRepository,
 )
+
+from .markdown_stripper import strip_markdown
 
 ExportFormat = Literal["markdown", "txt"]
 
@@ -138,6 +143,8 @@ class ExporterService:
                 lines.append(f"\n### 场景 {scene.scene_index} · {scene.title}\n")
                 draft = drafts_by_scene.get(scene.id)
                 if draft and draft.content:
+                    # markdown / text 在 markdown 导出场景下都可以直接拼接：
+                    # text 是 markdown 的合法子集（无标记），markdown 自然保留格式
                     lines.append("\n" + draft.content + "\n")
                 else:
                     lines.append("\n*该场景尚未生成正文。*\n")
@@ -171,7 +178,12 @@ class ExporterService:
                 draft = drafts_by_scene.get(scene.id)
                 if draft and draft.content:
                     lines.append("")
-                    lines.append(draft.content)
+                    # TXT 导出剥离 markdown 标记，确保阅读体验为纯文本；
+                    # 旧 'text' 数据走 strip 是无副作用的（无标记可剥）
+                    if getattr(draft, "content_format", "text") == "markdown":
+                        lines.append(strip_markdown(draft.content))
+                    else:
+                        lines.append(draft.content)
                 else:
                     lines.append("\n（该场景尚未生成正文）")
         return "\n".join(lines) + "\n"

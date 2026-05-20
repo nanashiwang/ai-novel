@@ -18,12 +18,17 @@ from app.contracts import MAX_OUTLINE_CHAPTERS, OUTLINE_CHAPTER_BATCH_SIZE
 from app.core.database import AsyncSessionLocal
 from app.core.exceptions import NotFoundError
 from app.core.metrics import JOBS_CREATED
+from app.models.character import Character
 from app.models.chapter import Chapter
+from app.models.continuity_issue import ContinuityIssue
 from app.models.draft_version import DraftVersion
 from app.models.generation_job import GenerationJob
+from app.models.memory import MemoryEntry
+from app.models.plot_thread import PlotThread
 from app.models.project import NovelSpec, Project
 from app.models.quota import QuotaReservation
 from app.models.scene import Scene
+from app.models.world_item import WorldItem
 from app.repositories import (
     ChapterRepository,
     CharacterRepository,
@@ -102,7 +107,7 @@ def _contract_constraints(bible) -> list[str]:
 
     历史上这里还会把 world_rules / continuity_rules / main_characters 折叠
     成中文字符串塞进 constraints。问题是这些信息其他地方已有结构化存储：
-    - world_rules → world_items 表
+    - locations / factions / world_rules → world_items 表
     - continuity_rules → NovelSpec.continuity_rules（独立 JSON 列）
     - main_characters → characters 表
 
@@ -126,6 +131,86 @@ def _payload_int(payload: dict[str, Any], key: str, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+async def _delete_project_rows(
+    session: AsyncSession,
+    job: GenerationJob,
+    model: type,
+    **filters: Any,
+) -> int:
+    stmt = select(model).where(
+        model.organization_id == job.organization_id,
+        model.project_id == job.project_id,
+    )
+    for key, value in filters.items():
+        if value is None:
+            continue
+        column = getattr(model, key)
+        if isinstance(value, (list, tuple, set, frozenset)):
+            values = list(value)
+            if not values:
+                return 0
+            stmt = stmt.where(column.in_(values))
+        else:
+            stmt = stmt.where(column == value)
+    rows = list((await session.execute(stmt)).scalars().all())
+    for row in rows:
+        await session.delete(row)
+    if rows:
+        await session.flush()
+    return len(rows)
+
+
+async def _clear_outline_dependents(session: AsyncSession, job: GenerationJob) -> dict[str, int]:
+    """清掉由大纲/场景/正文派生出的数据，避免重生成后混用旧设定。"""
+    counts: dict[str, int] = {}
+    for model, key in [
+        (ContinuityIssue, "continuity_issues"),
+        (DraftVersion, "draft_versions"),
+        (Scene, "scenes"),
+        (Chapter, "chapters"),
+    ]:
+        counts[key] = await _delete_project_rows(session, job, model)
+    counts["memory_entries"] = await _delete_project_rows(
+        session,
+        job,
+        MemoryEntry,
+        source_type="scene",
+    )
+    return counts
+
+
+async def _clear_story_bible_dependents(
+    session: AsyncSession,
+    job: GenerationJob,
+) -> dict[str, int]:
+    """重生成故事圣经时，旧人物/世界观/大纲都视为失效。"""
+    counts = await _clear_outline_dependents(session, job)
+    for model, key in [
+        (PlotThread, "plot_threads"),
+        (WorldItem, "world_items"),
+        (Character, "characters"),
+    ]:
+        counts[key] = await _delete_project_rows(session, job, model)
+    return counts
+
+
+async def _character_roster_for_prompt(session: AsyncSession, job: GenerationJob) -> str:
+    rows = list(
+        await CharacterRepository(session).list(
+            organization_id=job.organization_id,
+            project_id=job.project_id,
+            order_by=Character.created_at.asc(),
+        )
+    )
+    if not rows:
+        return ""
+    lines = []
+    for row in rows[:40]:
+        detail = row.motivation or row.arc or row.description or ""
+        lines.append(f"- {row.name}（{row.role or 'supporting'}）：{detail}")
+    return "\n".join(lines)
 
 
 async def _sync_bible_characters(session: AsyncSession, job: GenerationJob, bible) -> int:
@@ -163,23 +248,34 @@ async def _sync_bible_characters(session: AsyncSession, job: GenerationJob, bibl
 async def _sync_bible_world_items(session: AsyncSession, job: GenerationJob, bible) -> int:
     repo = WorldItemRepository(session)
     count = 0
-    for index, rule in enumerate(bible.world_rules or [], start=1):
-        text = str(rule).strip()
-        if not text:
-            continue
-        name = text[:80] or f"世界规则 {index}"
+
+    async def upsert_item(
+        *,
+        item_type: str,
+        name: str,
+        description: str,
+        importance: str = "medium",
+        is_hard_rule: bool = False,
+    ) -> None:
+        nonlocal count
+        clean_name = name.strip()[:200]
+        clean_description = description.strip()
+        if not clean_name and not clean_description:
+            return
+        clean_name = clean_name or clean_description[:80] or "未命名设定"
         existing = await repo.get_by(
             organization_id=job.organization_id,
             project_id=job.project_id,
-            name=name,
+            type=item_type,
+            name=clean_name,
         )
         values = {
-            "type": "rule",
-            "description": text,
-            "rules": {"source": "story_bible"},
+            "type": item_type,
+            "description": clean_description or clean_name,
+            "rules": {"source": "story_bible", "kind": item_type},
             "related_characters": [],
-            "importance": "high",
-            "is_hard_rule": True,
+            "importance": importance or "medium",
+            "is_hard_rule": is_hard_rule,
         }
         if existing:
             for key, value in values.items():
@@ -188,10 +284,45 @@ async def _sync_bible_world_items(session: AsyncSession, job: GenerationJob, bib
             await repo.create(
                 organization_id=job.organization_id,
                 project_id=job.project_id,
-                name=name,
+                name=clean_name,
                 **values,
             )
         count += 1
+
+    for index, location in enumerate(getattr(bible, "locations", []) or [], start=1):
+        name = getattr(location, "name", "") or f"重要地点 {index}"
+        description = getattr(location, "description", "") or str(name)
+        importance = getattr(location, "importance", "medium")
+        await upsert_item(
+            item_type="location",
+            name=str(name),
+            description=str(description),
+            importance=str(importance),
+        )
+
+    for index, faction in enumerate(getattr(bible, "factions", []) or [], start=1):
+        name = getattr(faction, "name", "") or f"关键势力 {index}"
+        description = getattr(faction, "description", "") or str(name)
+        importance = getattr(faction, "importance", "medium")
+        await upsert_item(
+            item_type="faction",
+            name=str(name),
+            description=str(description),
+            importance=str(importance),
+        )
+
+    for index, rule in enumerate(bible.world_rules or [], start=1):
+        text = str(rule).strip()
+        if not text:
+            continue
+        name = text[:80] or f"世界规则 {index}"
+        await upsert_item(
+            item_type="rule",
+            name=name,
+            description=text,
+            importance="high",
+            is_hard_rule=True,
+        )
     return count
 
 
@@ -390,6 +521,10 @@ async def generate_book_spec(job: dict[str, Any]) -> dict[str, Any]:
             await _settle_job_usage(session, job_row, amount=0)
             return {"spec_id": existing.id, "reused": True, "premise": existing.premise}
 
+        cleared_counts: dict[str, int] = {}
+        if existing and payload.get("force_regenerate_spec"):
+            cleared_counts = await _clear_story_bible_dependents(session, job_row)
+
         bible = await novel_planner_service.generate_story_bible(
             session,
             organization_id=job_row.organization_id,
@@ -435,6 +570,7 @@ async def generate_book_spec(job: dict[str, Any]) -> dict[str, Any]:
             "character_count": character_count,
             "world_item_count": world_item_count,
             "plot_thread_count": plot_thread_count,
+            "cleared_counts": cleared_counts,
         }
 
 
@@ -477,15 +613,10 @@ async def generate_chapter_outline(job: dict[str, Any]) -> dict[str, Any]:
                     "reused": True,
                 }
 
-        # force_regenerate=True：先清掉旧章节，再写新章节。
-        # 否则 chapter_repo.create() 会和旧记录冲突或导致 chapter_index 重复。
-        # 注意：scenes / draft_versions 在 chapters 删除时由 FK 关联清理（ON DELETE
-        # 行为见 schema）；如果用户已经有 scene 计划，重生成大纲是破坏性动作，
-        # 上层 UI 需要在按钮上提示。
+        # force_regenerate=True：先显式清掉旧大纲/场景/正文/审稿问题，再写新章节。
+        # Postgres 初始化表没有 ON DELETE CASCADE，不能依赖 FK 自动清理。
         if existing and payload.get("force_regenerate_outline"):
-            for old in existing:
-                await session.delete(old)
-            await session.flush()
+            await _clear_outline_dependents(session, job_row)
             existing = []
             existing_count = 0
             batch_target_chapters = min(
@@ -501,6 +632,7 @@ async def generate_chapter_outline(job: dict[str, Any]) -> dict[str, Any]:
             project=project,
             bible=spec,
             target_chapters=batch_target_chapters,
+            character_roster=await _character_roster_for_prompt(session, job_row),
         )
         existing_indices = {chapter.chapter_index for chapter in existing}
         created = 0
@@ -564,6 +696,7 @@ async def _plan_and_persist_scenes_for_chapter(
         chapter=chapter,
         scenes_per_chapter=scenes_per_chapter,
         expected_words=expected_words,
+        character_roster=await _character_roster_for_prompt(session, job),
     )
     scene_repo = SceneRepository(session)
     created: list[Scene] = []
@@ -613,9 +746,10 @@ async def generate_scene_cards(job: dict[str, Any]) -> dict[str, Any]:
             return {"scene_count": len(existing), "reused": True}
         # force=True 时先全删旧 scenes，再批量重生成
         if existing and payload.get("force_regenerate_scenes"):
-            for old in existing:
-                await session.delete(old)
-            await session.flush()
+            await _delete_project_rows(session, job_row, ContinuityIssue)
+            await _delete_project_rows(session, job_row, DraftVersion)
+            await _delete_project_rows(session, job_row, MemoryEntry, source_type="scene")
+            await _delete_project_rows(session, job_row, Scene)
 
         chapters = list(
             await ChapterRepository(session).list(
@@ -684,9 +818,19 @@ async def generate_chapter_scene_cards(job: dict[str, Any]) -> dict[str, Any]:
             }
         # force=True 时先删除旧场景，避免 scene_index 重复追加
         if existing and force:
-            for old in existing:
-                await session.delete(old)
-            await session.flush()
+            old_scene_ids = [scene.id for scene in existing]
+            await _delete_project_rows(session, job_row, ContinuityIssue, chapter_id=chapter.id)
+            await _delete_project_rows(session, job_row, ContinuityIssue, scene_id=old_scene_ids)
+            await _delete_project_rows(session, job_row, DraftVersion, chapter_id=chapter.id)
+            await _delete_project_rows(session, job_row, DraftVersion, scene_id=old_scene_ids)
+            await _delete_project_rows(
+                session,
+                job_row,
+                MemoryEntry,
+                source_type="scene",
+                source_id=old_scene_ids,
+            )
+            await _delete_project_rows(session, job_row, Scene, chapter_id=chapter.id)
 
         scenes_per_chapter = max(1, min(_payload_int(payload, "scenes_per_chapter", 3), 8))
         expected_words = max(600, _payload_int(payload, "expected_words", 1500))
@@ -799,6 +943,7 @@ async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
                 scene_id=scene.id,
                 version_type="draft",
                 content=draft.content,
+                content_format="markdown",
                 word_count=word_count,
                 status="draft",
                 parent_version_id=None,
@@ -881,6 +1026,7 @@ async def run_scene_writing(job: dict[str, Any]) -> dict[str, Any]:
             scene_id=scene.id,
             version_type="draft",
             content=draft.content,
+            content_format="markdown",
             word_count=word_count,
             status="draft",
             parent_version_id=parent_version_id,
@@ -1158,6 +1304,7 @@ async def rewrite_scene(job: dict[str, Any]) -> dict[str, Any]:
             scene_id=scene.id,
             version_type="rewrite",
             content=new_draft.content,
+            content_format="markdown",
             word_count=word_count,
             status="draft",
             parent_version_id=latest_draft.id,
