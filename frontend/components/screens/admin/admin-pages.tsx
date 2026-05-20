@@ -1402,6 +1402,39 @@ export function AdminSettingsPage() {
     },
   });
 
+  const testMutation = useMutation({
+    mutationFn: () => {
+      // 只传当前 form 草稿里"非空"的字段。后端会把缺失字段回落到 db 里
+      // 已存的值，从而支持"我只改 base_url，用现有 Key 测试"等场景。
+      const payload: import("@/lib/api").ModelGatewayTestPayload = {
+        provider: form.provider,
+        default_model: form.default_model.trim() || undefined,
+        openai_base_url: form.openai_base_url.trim() || undefined,
+        openai_api_key: form.openai_api_key?.trim() || undefined,
+        anthropic_base_url: form.anthropic_base_url.trim() || undefined,
+        anthropic_api_key: form.anthropic_api_key?.trim() || undefined,
+      };
+      return adminApi.testModelGateway(payload);
+    },
+    onSuccess: (result) => {
+      if (result.ok) {
+        toast.success(
+          `连接成功（${result.latency_ms} ms）样例：${result.sample || "OK"}`,
+        );
+      } else {
+        const friendly =
+          result.error === "missing_api_key"
+            ? "缺少 API Key"
+            : result.error === "timeout_15s"
+              ? "请求超时（>15s）"
+              : result.error || "未知错误";
+        toast.error(`连接失败：${friendly}`);
+      }
+    },
+    onError: (err) =>
+      toast.error(err instanceof Error ? err.message : "测试请求失败"),
+  });
+
   const selectedKeyConfigured =
     form.provider === "anthropic"
       ? data?.anthropic_api_key_configured
@@ -1551,12 +1584,22 @@ export function AdminSettingsPage() {
             <p className="text-sm text-slate-500">
               {form.mode === "real" && !canSave
                 ? "真实模型模式需要当前服务商的 Key。"
-                : "Key 不会在页面回显。"}
+                : "Key 不会在页面回显。可先用「测试连接」验证再保存。"}
             </p>
-            <Button disabled={!canSave || saveMutation.isPending} onClick={save}>
-              <Save className="size-4" />
-              {saveMutation.isPending ? "保存中" : "保存配置"}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="secondary"
+                disabled={!editable || testMutation.isPending}
+                onClick={() => testMutation.mutate()}
+              >
+                <Sparkles className="size-4" />
+                {testMutation.isPending ? "测试中…" : "测试连接"}
+              </Button>
+              <Button disabled={!canSave || saveMutation.isPending} onClick={save}>
+                <Save className="size-4" />
+                {saveMutation.isPending ? "保存中" : "保存配置"}
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>

@@ -735,6 +735,27 @@ export const adminApi = {
     http.get<ModelGatewaySettings>("/admin/settings/model-gateway"),
   updateModelGatewaySettings: (payload: ModelGatewaySettingsUpdate) =>
     http.put<ModelGatewaySettings>("/admin/settings/model-gateway", payload),
+  testModelGateway: (payload: ModelGatewayTestPayload) =>
+    http.post<ModelGatewayTestResult>("/admin/settings/model-gateway/test", payload),
+};
+
+export type ModelGatewayTestPayload = {
+  provider?: "openai" | "anthropic";
+  default_model?: string;
+  openai_base_url?: string;
+  openai_api_key?: string | null;
+  anthropic_base_url?: string;
+  anthropic_api_key?: string | null;
+};
+
+export type ModelGatewayTestResult = {
+  ok: boolean;
+  provider: string;
+  default_model: string;
+  base_url: string;
+  latency_ms: number;
+  sample: string;
+  error: string;
 };
 
 export type AdminUser = {
