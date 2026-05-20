@@ -1,7 +1,7 @@
 """项目 API。"""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import Field
 
 from app.api.deps import CurrentUserDep, DbDep, TenantDep
@@ -25,6 +25,8 @@ from app.schemas.project import (
     SceneWriteRequest,
 )
 from app.services.generation.service import generation_service
+from app.services.preflight import preflight_service
+from app.services.story_direction.service import story_direction_service
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -435,3 +437,107 @@ async def rewrite_scene(
     response = GenerationJobResponse.model_validate(job)
     await db.commit()
     return response
+
+
+
+# --- Preflight & Direction Preview ---
+
+
+class PreflightCheckItem(APIModel):
+    label: str
+    level: str  # ok / warn / block
+    detail: str = ""
+
+
+class PreflightNextAction(APIModel):
+    kind: str
+    label: str
+    href_suffix: str
+
+
+class PreflightResponse(APIModel):
+    project_status: str
+    plan_code: str
+    quota_key: str
+    quota_limit: int
+    quota_used: int
+    quota_reserved: int
+    quota_available: int
+    estimate_words: int
+    target_chapter_count: int
+    is_long_novel: bool
+    can_generate: bool
+    checks: list[PreflightCheckItem] = []
+    next_action: PreflightNextAction | None = None
+
+
+@router.get("/{project_id}/preflight", response_model=PreflightResponse)
+async def preflight(
+    project_id: str,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+    job_type: str = Query(default="generate_bible"),
+):
+    """生成前检查：套餐 / 额度 / 项目状态 / 长篇风险 / 推荐下一步。"""
+    require_permission(user, "project:read", tenant)
+    project = await ProjectRepository(db).get(
+        project_id, organization_id=tenant.organization_id
+    )
+    if not project:
+        raise NotFoundError("project_not_found")
+    report = await preflight_service.check(db, tenant, project, job_type=job_type)
+    return report.as_dict()
+
+
+class DirectionPreviewRequest(APIModel):
+    topic: str = Field(default="", max_length=400)
+    protagonist_archetype: str = Field(default="", max_length=400)
+    reference_works: list[str] = Field(default_factory=list)
+    forbidden_themes: list[str] = Field(default_factory=list)
+
+
+class DirectionItem(APIModel):
+    name: str
+    summary: str
+    selling_points: list[str] = []
+    risk: str = ""
+    recommended: bool = False
+
+
+class DirectionPreviewResponse(APIModel):
+    directions: list[DirectionItem] = []
+
+
+@router.post(
+    "/{project_id}/bible/preview-directions",
+    response_model=DirectionPreviewResponse,
+)
+async def preview_directions(
+    project_id: str,
+    payload: DirectionPreviewRequest,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    """根据项目元数据 + 创作偏好生成 3 个候选方向，让用户选一个再生成圣经。
+
+    成本远低于完整 generate_bible：不写库、不扣额度（按 ContentReview 视角免费），
+    只生成简短的方向卡片。
+    """
+    require_permission(user, "project:read", tenant)
+    project = await ProjectRepository(db).get(
+        project_id, organization_id=tenant.organization_id
+    )
+    if not project:
+        raise NotFoundError("project_not_found")
+    directions = await story_direction_service.preview(
+        db,
+        project=project,
+        topic=payload.topic,
+        protagonist_archetype=payload.protagonist_archetype,
+        reference_works=payload.reference_works,
+        forbidden_themes=payload.forbidden_themes,
+        tenant=tenant,
+    )
+    return {"directions": [d.__dict__ for d in directions]}
