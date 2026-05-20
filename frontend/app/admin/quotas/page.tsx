@@ -1,4 +1,4 @@
-import { AdminQuotasPage } from "@/components/screens/admin/admin-pages";
+import { AdminQuotasPage } from "@/components/screens/admin/pages/quotas";
 
 export default function Page() {
   return <AdminQuotasPage />;
