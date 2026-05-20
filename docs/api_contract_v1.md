@@ -208,6 +208,32 @@
 
 ---
 
+### 3.2 `POST /projects/{project_id}/versions`（DraftVersion 创建）
+
+请求体 `DraftVersionPayload`：
+
+| 字段 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `chapter_id` | string \| null | 否 | null | 关联章节，与 scene 至少二选一 |
+| `scene_id` | string \| null | 否 | null | 关联场景 |
+| `version_type` | string | 否 | `"draft"` | `draft` / `user` / `autosave` / `rewrite` |
+| `content` | string | 否 | `""` | 正文字符串；具体语义由 `content_format` 决定 |
+| `content_format` | enum | 否 | `"text"` | `"text"`（历史纯文本兼容）/ `"markdown"`（Sprint 4-C 起的默认） |
+| `word_count` | int | 否 | 0 | 前端按字符数估算 |
+| `status` | string | 否 | `"draft"` | |
+| `parent_version_id` | string \| null | 否 | null | 版本链父节点 |
+
+**content_format 规则**：
+- `"markdown"` 内容仅允许 StarterKit 子集：`# heading` / `**bold**` / `*italic*` / `~~strike~~` / `> blockquote` / `- list` / `1. list` / `` `inline` `` / ``` fenced ```
+- AI 写作活动（`write_scene` / `rewrite_scene`）固定写入 `"markdown"`
+- 前端编辑器保存（手动 / autosave）固定写入 `"markdown"`
+- 任何 `"text"` 版本一旦被用户编辑保存，新版本自然升级为 `"markdown"`
+- 导出 Markdown：直接拼接（两种 format 都安全）；导出 TXT：`"markdown"` 走 stripper 转纯文本，`"text"` 直接拼
+
+响应 `DraftVersionResponse`：在 Payload 基础上加 `id` / `organization_id` / `project_id` / `created_by` / `created_at` / `updated_at`。
+
+---
+
 ## 4. 枚举值
 
 ### 4.1 `generation_jobs.job_type`
@@ -320,6 +346,8 @@ created ──→ bible_generating ──→ bible_ready ──→ outline_gener
 | `member_not_found` | organizations |
 | `quota_not_found` | admin/organizations |
 | `draft_not_found` | workflows（audit/rewrite/write 需要前置 draft） |
+| `revision_session_not_found` | revisions |
+| `revision_proposal_not_found` | revisions |
 
 #### 额度/付费
 
@@ -339,6 +367,9 @@ created ──→ bible_generating ──→ bible_ready ──→ outline_gener
 | `export_type_not_supported` | 导出格式超出 markdown/txt 范围 |
 | `job_not_retryable` | 试图 retry 一个 succeeded/queued/running 任务 |
 | `unknown_job_type` | retry 收到契约外的 job_type |
+| `revision_proposal_already_applied` | 试图重复应用同一个 AI 共创提案 |
+| `revision_action_not_supported` | AI 共创提案 action 超出 update/create 范围 |
+| `revision_target_not_supported` | AI 共创提案 target_type 不可应用 |
 
 **新增规则**：所有新 error code 必须先登记到本表与 `app/contracts.py::ERROR_CODES`，命名必须 snake_case，资源不存在统一用 `<resource>_not_found`。`tests/test_contract_consistency.py` 会扫描代码字面量，未登记的值在 CI 中会失败。
 

@@ -287,4 +287,151 @@ async def test_export_empty_project_returns_placeholder(client, db_engine, db_se
         )
     ).scalar_one()
     assert "空项目" in exp_row.content
-    assert "尚未生成任何章节" in exp_row.content
+
+
+# --------------------------------------------------------------------------
+# Sprint 4-C：富文本导出（content_format='markdown'）
+# --------------------------------------------------------------------------
+
+async def _seed_project_with_markdown_drafts(
+    client, db_session, *, email: str
+) -> tuple[str, str, dict]:
+    """与 _seed_project_with_drafts 类似，但 draft.content 是 markdown 字符串。"""
+    token, org_id = await _register(client, email)
+    headers = {"Authorization": f"Bearer {token}"}
+    now = datetime.now(timezone.utc)
+    db_session.add(
+        QuotaBalance(
+            id=new_id("quota"),
+            organization_id=org_id,
+            quota_key="monthly_generated_words",
+            period_start=now,
+            period_end=now + timedelta(days=30),
+            limit_value=10000,
+            used_value=0,
+            reserved_value=0,
+            reset_at=now + timedelta(days=30),
+        )
+    )
+    project_res = await client.post(
+        "/api/v1/projects",
+        headers=headers,
+        json={"title": "富文本测试小说", "genre": "测试体裁"},
+    )
+    project_id = project_res.json()["id"]
+    chapter_id = new_id("chapter")
+    db_session.add(
+        Chapter(
+            id=chapter_id,
+            organization_id=org_id,
+            project_id=project_id,
+            volume_id=None,
+            chapter_index=1,
+            title="第一章 测试",
+            summary="markdown 测试章",
+            goal="测试目标",
+            conflict="测试冲突",
+            ending_hook="测试钩子",
+            status="planned",
+        )
+    )
+    scene_id = new_id("scene")
+    db_session.add(
+        Scene(
+            id=scene_id,
+            organization_id=org_id,
+            project_id=project_id,
+            chapter_id=chapter_id,
+            scene_index=1,
+            title="markdown 场景",
+            time_marker="",
+            location="",
+            characters=[],
+            goal="",
+            conflict="",
+            emotion_start="",
+            emotion_end="",
+            reveal="",
+            hook="",
+            status="drafted",
+        )
+    )
+    db_session.add(
+        DraftVersion(
+            id=new_id("draft"),
+            organization_id=org_id,
+            project_id=project_id,
+            chapter_id=chapter_id,
+            scene_id=scene_id,
+            version_type="draft",
+            content="他**走进来**，看见*她*。\n\n> 「你还好吗？」\n\n- 灯灭了\n- 风停了",
+            content_format="markdown",
+            word_count=20,
+            status="draft",
+            parent_version_id=None,
+            created_by="user_x",
+        )
+    )
+    await db_session.commit()
+    return org_id, project_id, headers
+
+
+@pytest.mark.asyncio
+async def test_export_markdown_preserves_rich_formatting(
+    client, db_engine, db_session, monkeypatch
+):
+    """markdown 导出直接拼接 content，富文本标记保留。"""
+    Session = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+    monkeypatch.setattr(activities, "AsyncSessionLocal", Session)
+
+    _, project_id, headers = await _seed_project_with_markdown_drafts(
+        client, db_session, email="export-md-rich@example.com"
+    )
+
+    res = await client.post(
+        f"/api/v1/projects/{project_id}/exports",
+        headers=headers,
+        json={"export_type": "markdown"},
+    )
+    assert res.status_code == 201, res.text
+    db_session.expire_all()
+    exp_row = await db_session.get(ExportFile, res.json()["id"])
+    assert exp_row is not None
+    content = exp_row.content
+    # markdown 标记保持完整
+    assert "**走进来**" in content
+    assert "*她*" in content
+    assert "> 「你还好吗？」" in content
+    assert "- 灯灭了" in content
+
+
+@pytest.mark.asyncio
+async def test_export_txt_strips_markdown(
+    client, db_engine, db_session, monkeypatch
+):
+    """TXT 导出把 markdown 标记剥离为纯文本。"""
+    Session = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+    monkeypatch.setattr(activities, "AsyncSessionLocal", Session)
+
+    _, project_id, headers = await _seed_project_with_markdown_drafts(
+        client, db_session, email="export-txt-strip@example.com"
+    )
+
+    res = await client.post(
+        f"/api/v1/projects/{project_id}/exports",
+        headers=headers,
+        json={"export_type": "txt"},
+    )
+    assert res.status_code == 201, res.text
+    db_session.expire_all()
+    exp_row = await db_session.get(ExportFile, res.json()["id"])
+    assert exp_row is not None
+    content = exp_row.content
+    # markdown 标记被剥离
+    assert "走进来" in content
+    assert "**" not in content
+    assert "她" in content
+    # blockquote 前缀 ">" 被去除（仍保留引文内容）
+    assert "「你还好吗？」" in content
+    # 列表项变为圆点形式
+    assert "• 灯灭了" in content

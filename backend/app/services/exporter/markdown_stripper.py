@@ -17,11 +17,11 @@ import re
 
 # 按"行级 → 行内 → 围栏代码块"分三遍处理，避免规则相互污染
 _FENCED_CODE_RE = re.compile(r"```[a-zA-Z0-9_-]*\n([\s\S]*?)\n```", re.MULTILINE)
-_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+", re.MULTILINE)
-_BLOCKQUOTE_RE = re.compile(r"^\s{0,3}>\s?", re.MULTILINE)
-_BULLET_RE = re.compile(r"^(\s*)([-*+])\s+", re.MULTILINE)
-_ORDERED_RE = re.compile(r"^(\s*)\d+\.\s+", re.MULTILINE)
-_HORIZONTAL_RULE_RE = re.compile(r"^\s{0,3}([-*_])\s*\1\s*\1[-*_\s]*$", re.MULTILINE)
+_HEADING_RE = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]+", re.MULTILINE)
+_BLOCKQUOTE_RE = re.compile(r"^[ \t]{0,3}>[ \t]?", re.MULTILINE)
+_BULLET_RE = re.compile(r"^([ \t]*)([-*+])[ \t]+", re.MULTILINE)
+_ORDERED_RE = re.compile(r"^([ \t]*)\d+\.[ \t]+", re.MULTILINE)
+_HORIZONTAL_RULE_RE = re.compile(r"^[ \t]{0,3}([-*_])[ \t]*\1[ \t]*\1[-*_\s]*$", re.MULTILINE)
 
 _BOLD_RE = re.compile(r"\*\*([^*]+)\*\*|__([^_]+)__")
 _ITALIC_RE = re.compile(r"(?<![*_])\*([^*\n]+)\*(?!\*)|(?<![*_])_([^_\n]+)_(?!_)")
