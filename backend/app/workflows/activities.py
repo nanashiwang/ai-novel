@@ -5,8 +5,8 @@
 from __future__ import annotations
 
 import logging
-from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 
@@ -16,11 +16,12 @@ from temporalio import activity
 
 from app.core.database import AsyncSessionLocal
 from app.core.exceptions import NotFoundError
+from app.core.metrics import JOBS_CREATED
 from app.models.chapter import Chapter
 from app.models.draft_version import DraftVersion
 from app.models.generation_job import GenerationJob
-from app.models.quota import QuotaReservation
 from app.models.project import NovelSpec, Project
+from app.models.quota import QuotaReservation
 from app.models.scene import Scene
 from app.repositories import (
     ChapterRepository,
@@ -31,17 +32,16 @@ from app.repositories import (
     NovelSpecRepository,
     PlotThreadRepository,
     ProjectRepository,
+    SceneRepository,
     UsageEventRepository,
     WorldItemRepository,
-    SceneRepository,
 )
 from app.services.auditor.service import auditor_service
+from app.services.context_builder.service import context_builder
 from app.services.novel_planner.service import novel_planner_service
 from app.services.quota.service import quota_service
 from app.services.rewriter.service import rewriter_service
 from app.services.writer.service import writer_service
-from app.services.context_builder.service import context_builder
-from app.core.metrics import JOBS_CREATED
 
 _logger = logging.getLogger(__name__)
 
@@ -463,6 +463,16 @@ async def generate_chapter_outline(job: dict[str, Any]) -> dict[str, Any]:
             await _settle_job_usage(session, job_row, amount=0)
             return {"chapter_count": len(existing), "reused": True}
 
+        # force_regenerate=True：先清掉旧章节，再写新章节。
+        # 否则 chapter_repo.create() 会和旧记录冲突或导致 chapter_index 重复。
+        # 注意：scenes / draft_versions 在 chapters 删除时由 FK 关联清理（ON DELETE
+        # 行为见 schema）；如果用户已经有 scene 计划，重生成大纲是破坏性动作，
+        # 上层 UI 需要在按钮上提示。
+        if existing and payload.get("force_regenerate_outline"):
+            for old in existing:
+                await session.delete(old)
+            await session.flush()
+
         requested = payload.get("target_chapters") or project.target_chapter_count or 6
         target_chapters = max(1, min(int(requested), 12))
         contract = await novel_planner_service.plan_chapters(
@@ -568,6 +578,11 @@ async def generate_scene_cards(job: dict[str, Any]) -> dict[str, Any]:
         if existing and not payload.get("force_regenerate_scenes"):
             project.status = "scenes_planned"
             return {"scene_count": len(existing), "reused": True}
+        # force=True 时先全删旧 scenes，再批量重生成
+        if existing and payload.get("force_regenerate_scenes"):
+            for old in existing:
+                await session.delete(old)
+            await session.flush()
 
         chapters = list(
             await ChapterRepository(session).list(
@@ -634,6 +649,11 @@ async def generate_chapter_scene_cards(job: dict[str, Any]) -> dict[str, Any]:
                 "chapter_id": chapter.id,
                 "reused": True,
             }
+        # force=True 时先删除旧场景，避免 scene_index 重复追加
+        if existing and force:
+            for old in existing:
+                await session.delete(old)
+            await session.flush()
 
         scenes_per_chapter = max(1, min(_payload_int(payload, "scenes_per_chapter", 3), 8))
         expected_words = max(600, _payload_int(payload, "expected_words", 1500))
@@ -772,7 +792,7 @@ async def run_scene_writing(job: dict[str, Any]) -> dict[str, Any]:
 
     Sprint 4 升级：
     - scene 状态机：planned/drafted → writing → drafted，让前端轮询期间能
-      看到中间态（mock 跑得快几乎看不到，真实 provider 时持续到模型返回）。
+      看到中间态（本地短链路很快，真实 provider 时持续到模型返回）。
     - DraftVersion 父链：把上一个 draft 作为 parent_version_id，构成版本链，
       未来在 UI 上可显示历史变迁。
     - 上一场景结尾片段：从同章前一个 scene 的最新 draft 取最后 800 字作为
