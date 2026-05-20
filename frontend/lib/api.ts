@@ -114,6 +114,11 @@ export type GenerateBiblePayload = {
   estimate_words?: number;
   topic?: string;
   force_regenerate?: boolean;
+  // 创作偏好：让 LLM prompt 含具体约束。所有字段可选；留空走原有 mock fixture。
+  protagonist_archetype?: string;
+  reference_works?: string[];
+  forbidden_themes?: string[];
+  temperature?: number | null;
 };
 
 // 与 backend/app/schemas/story_generation.py::ChapterPlanItem 对齐
@@ -361,9 +366,94 @@ export const organizationsApi = {
 };
 
 // ----- Characters / Chapters / Scenes / WorldItems / Memory -----
+export type NovelSpecPayload = {
+  premise?: string;
+  theme?: string;
+  genre?: string;
+  tone?: string;
+  target_reader?: string;
+  narrative_pov?: string;
+  style_guide?: string;
+  constraints?: string[];
+  continuity_rules?: string[];
+};
+
+export type Character = {
+  id: string;
+  organization_id: string;
+  project_id: string;
+  name: string;
+  role: string;
+  description: string;
+  personality?: string;
+  motivation: string;
+  secret?: string;
+  arc: string;
+  relationships?: Record<string, unknown>;
+  current_state?: Record<string, unknown>;
+};
+
+export type CharacterPayload = {
+  name: string;
+  role?: string;
+  description?: string;
+  personality?: string;
+  motivation?: string;
+  secret?: string;
+  arc?: string;
+  relationships?: Record<string, unknown>;
+  current_state?: Record<string, unknown>;
+};
+
+export type WorldItem = {
+  id: string;
+  organization_id: string;
+  project_id: string;
+  type: string;
+  name: string;
+  description: string;
+  importance?: string;
+  is_hard_rule?: boolean;
+  attributes?: Record<string, unknown>;
+};
+
+export type WorldItemPayload = {
+  type: string;
+  name: string;
+  description?: string;
+  importance?: string;
+  is_hard_rule?: boolean;
+  attributes?: Record<string, unknown>;
+};
+
+export type PlotThread = {
+  id: string;
+  organization_id: string;
+  project_id: string;
+  title: string;
+  thread_type: string;
+  description: string;
+  status: string;
+  related_characters: string[];
+};
+
+export type PlotThreadPayload = {
+  title: string;
+  thread_type?: string;
+  description?: string;
+  status?: string;
+  related_characters?: string[];
+};
+
 export const charactersApi = {
   list: (projectId: string) =>
-    http.get<unknown[]>(`/projects/${projectId}/characters`),
+    http.get<Character[]>(`/projects/${projectId}/characters`),
+  create: (projectId: string, payload: CharacterPayload) =>
+    http.post<Character>(`/projects/${projectId}/characters`, payload),
+  update: (projectId: string, characterId: string, payload: Partial<CharacterPayload>) =>
+    http.patch<Character>(`/projects/${projectId}/characters/${characterId}`, payload),
+  remove: (projectId: string, characterId: string) =>
+    http.delete<void>(`/projects/${projectId}/characters/${characterId}`),
 };
 export const chaptersApi = {
   list: (projectId: string) =>
@@ -372,6 +462,18 @@ export const chaptersApi = {
 export const scenesApi = {
   list: (projectId: string, chapterId?: string) =>
     http.get<Scene[]>(`/projects/${projectId}/scenes`, { chapter_id: chapterId }),
+};
+
+export const specApi = {
+  get: (projectId: string) =>
+    http.get<NovelSpecPayload & { id: string; project_id: string }>(
+      `/projects/${projectId}/spec`,
+    ),
+  upsert: (projectId: string, payload: NovelSpecPayload) =>
+    http.put<NovelSpecPayload & { id: string; project_id: string }>(
+      `/projects/${projectId}/spec`,
+      payload,
+    ),
 };
 
 // 与 backend/app/api/project_extra.py::DraftVersionResponse 对齐
@@ -413,7 +515,23 @@ export const versionsApi = {
 };
 export const worldItemsApi = {
   list: (projectId: string) =>
-    http.get<unknown[]>(`/projects/${projectId}/world-items`),
+    http.get<WorldItem[]>(`/projects/${projectId}/world-items`),
+  create: (projectId: string, payload: WorldItemPayload) =>
+    http.post<WorldItem>(`/projects/${projectId}/world-items`, payload),
+  update: (projectId: string, itemId: string, payload: Partial<WorldItemPayload>) =>
+    http.patch<WorldItem>(`/projects/${projectId}/world-items/${itemId}`, payload),
+  remove: (projectId: string, itemId: string) =>
+    http.delete<void>(`/projects/${projectId}/world-items/${itemId}`),
+};
+export const plotThreadsApi = {
+  list: (projectId: string) =>
+    http.get<PlotThread[]>(`/projects/${projectId}/plot-threads`),
+  create: (projectId: string, payload: PlotThreadPayload) =>
+    http.post<PlotThread>(`/projects/${projectId}/plot-threads`, payload),
+  update: (projectId: string, threadId: string, payload: Partial<PlotThreadPayload>) =>
+    http.patch<PlotThread>(`/projects/${projectId}/plot-threads/${threadId}`, payload),
+  remove: (projectId: string, threadId: string) =>
+    http.delete<void>(`/projects/${projectId}/plot-threads/${threadId}`),
 };
 export const memoryApi = {
   list: (projectId: string) =>

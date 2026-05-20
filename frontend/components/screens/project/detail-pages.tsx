@@ -17,12 +17,16 @@ import {
   GitCompare,
   Layers3,
   Network,
+  Pencil,
+  Plus,
   RefreshCw,
+  Settings2,
   Sparkles,
   TimerReset,
   Trash2,
   Users,
   Wand2,
+  X,
   XCircle,
 } from "lucide-react";
 import Link from "next/link";
@@ -44,8 +48,10 @@ import {
   continuityIssuesApi,
   exportsApi,
   jobsApi,
+  plotThreadsApi,
   projectsApi,
   scenesApi,
+  specApi,
   versionsApi,
   worldItemsApi,
 } from "@/lib/api";
@@ -54,8 +60,13 @@ import type {
   BibleCharacter,
   BiblePlotThread,
   BibleWorldItem,
+  CharacterPayload,
   DraftVersion,
+  GenerateBiblePayload,
   GenerationJob,
+  NovelSpecPayload,
+  PlotThreadPayload,
+  WorldItemPayload,
 } from "@/lib/api";
 import { ApiError } from "@/lib/http";
 import { formatDateTime } from "@/lib/format";
@@ -117,12 +128,36 @@ function BibleItem({
 }
 
 // =========== 故事圣经 ===========
+type CreativePrefs = {
+  topic: string;
+  protagonist_archetype: string;
+  reference_works: string;
+  forbidden_themes: string;
+  temperature: number;
+};
+
+const DEFAULT_PREFS: CreativePrefs = {
+  topic: "",
+  protagonist_archetype: "",
+  reference_works: "",
+  forbidden_themes: "",
+  temperature: 0.7,
+};
+
+function splitTags(value: string): string[] {
+  return value
+    .split(/[,，;；\n]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 export function BiblePage({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
   const projectKey = useScopedKey("project", projectId);
   const bibleKey = useScopedKey("project", projectId, "bible");
   const charactersKey = useScopedKey("project", projectId, "characters");
   const worldItemsKey = useScopedKey("project", projectId, "world-items");
+  const plotThreadsKey = useScopedKey("project", projectId, "plot-threads");
   const jobsKey = useScopedKey("jobs");
   const { data: bible, isPending } = useQuery({
     queryKey: bibleKey,
@@ -138,24 +173,46 @@ export function BiblePage({ projectId }: { projectId: string }) {
   const latestJob = bible?.latest_job;
   const isGenerating = latestJob?.status === "queued" || latestJob?.status === "running";
 
+  const [prefsOpen, setPrefsOpen] = useState(false);
+  const [prefs, setPrefs] = useState<CreativePrefs>(DEFAULT_PREFS);
+  const [specEditing, setSpecEditing] = useState(false);
+  const [editChar, setEditChar] = useState<BibleCharacter | "new" | null>(null);
+  const [editWorld, setEditWorld] = useState<BibleWorldItem | "new" | null>(null);
+  const [editThread, setEditThread] = useState<BiblePlotThread | "new" | null>(null);
+
   const generate = useMutation({
-    mutationFn: () =>
-      projectsApi.generateBible(projectId, {
+    mutationFn: () => {
+      const payload: GenerateBiblePayload = {
         estimate_words: 2000,
         force_regenerate: !bible?.spec,
-      }),
+        topic: prefs.topic.trim() || undefined,
+        protagonist_archetype: prefs.protagonist_archetype.trim() || undefined,
+        reference_works: splitTags(prefs.reference_works),
+        forbidden_themes: splitTags(prefs.forbidden_themes),
+        temperature: prefs.temperature,
+      };
+      return projectsApi.generateBible(projectId, payload);
+    },
     onSuccess: () => {
       toast.success("已提交故事圣经生成任务");
       queryClient.invalidateQueries({ queryKey: bibleKey });
       queryClient.invalidateQueries({ queryKey: projectKey });
       queryClient.invalidateQueries({ queryKey: charactersKey });
       queryClient.invalidateQueries({ queryKey: worldItemsKey });
+      queryClient.invalidateQueries({ queryKey: plotThreadsKey });
       queryClient.invalidateQueries({ queryKey: jobsKey });
     },
     onError: (e: unknown) => {
       toast.error(e instanceof ApiError ? e.message : "提交失败");
     },
   });
+
+  const invalidateAll = () => {
+    queryClient.invalidateQueries({ queryKey: bibleKey });
+    queryClient.invalidateQueries({ queryKey: charactersKey });
+    queryClient.invalidateQueries({ queryKey: worldItemsKey });
+    queryClient.invalidateQueries({ queryKey: plotThreadsKey });
+  };
 
   const spec = bible?.spec;
   const characters = bible?.characters ?? [];
@@ -169,7 +226,9 @@ export function BiblePage({ projectId }: { projectId: string }) {
         <CardHeader className="flex flex-row items-center justify-between">
           <div>
             <CardTitle>故事圣经 Story Bible</CardTitle>
-            <p className="mt-1 text-sm text-slate-500">生成后会同步写入设定、人物、世界观与主线。</p>
+            <p className="mt-1 text-sm text-slate-500">
+              生成后会同步写入设定、人物、世界观与主线。可填写「创作偏好」约束 LLM 的方向。
+            </p>
           </div>
           <div className="flex items-center gap-2">
             {latestJob ? <StatusBadge status={latestJob.status as never} /> : null}
@@ -184,11 +243,19 @@ export function BiblePage({ projectId }: { projectId: string }) {
                 提交任务后会预留额度，调用模型，完成后自动展示结果。
               </p>
             </div>
-            <Button onClick={() => generate.mutate()} disabled={generate.isPending || isGenerating}>
-              {isGenerating ? <RefreshCw className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-              {spec ? "重新生成" : "启动生成"}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="ghost" onClick={() => setPrefsOpen((v) => !v)}>
+                <Settings2 className="size-4" /> {prefsOpen ? "收起创作偏好" : "创作偏好"}
+              </Button>
+              <Button onClick={() => generate.mutate()} disabled={generate.isPending || isGenerating}>
+                {isGenerating ? <RefreshCw className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+                {spec ? "重新生成" : "启动生成"}
+              </Button>
+            </div>
           </div>
+          {prefsOpen ? (
+            <CreativePrefsCard prefs={prefs} onChange={setPrefs} />
+          ) : null}
           {latestJob ? (
             <div className="grid gap-3 md:grid-cols-3">
               <BibleBlock title="任务类型" text={latestJob.job_type} />
@@ -215,7 +282,12 @@ export function BiblePage({ projectId }: { projectId: string }) {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle>核心设定</CardTitle>
-              <Badge tone="violet">{spec.genre || "未分类"}</Badge>
+              <div className="flex items-center gap-2">
+                <Badge tone="violet">{spec.genre || "未分类"}</Badge>
+                <Button size="sm" variant="ghost" onClick={() => setSpecEditing(true)}>
+                  <Pencil className="size-3.5" /> 编辑
+                </Button>
+              </div>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-4 md:grid-cols-2">
@@ -235,40 +307,48 @@ export function BiblePage({ projectId }: { projectId: string }) {
 
           <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
             <Card>
-              <CardHeader>
+              <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle>主要人物</CardTitle>
+                <Button size="sm" variant="ghost" onClick={() => setEditChar("new")}>
+                  <Plus className="size-3.5" /> 新增
+                </Button>
               </CardHeader>
               <CardContent className="grid gap-3 md:grid-cols-2">
                 {characters.length === 0 ? (
                   <p className="text-sm text-slate-500">暂无人物。</p>
                 ) : (
                   characters.map((character: BibleCharacter) => (
-                    <BibleItem
+                    <EditableItem
                       key={character.id}
                       title={character.name}
                       badge={character.role}
                       text={[character.description, character.motivation, character.arc]
                         .filter(Boolean)
                         .join(" / ")}
+                      onEdit={() => setEditChar(character)}
                     />
                   ))
                 )}
               </CardContent>
             </Card>
             <Card>
-              <CardHeader>
+              <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle>剧情线</CardTitle>
+                <Button size="sm" variant="ghost" onClick={() => setEditThread("new")}>
+                  <Plus className="size-3.5" /> 新增
+                </Button>
               </CardHeader>
               <CardContent className="space-y-3">
                 {plotThreads.length === 0 ? (
                   <p className="text-sm text-slate-500">暂无剧情线。</p>
                 ) : (
                   plotThreads.map((thread: BiblePlotThread) => (
-                    <BibleItem
+                    <EditableItem
                       key={thread.id}
                       title={thread.title}
                       badge={`${thread.thread_type} · ${thread.status}`}
                       text={thread.description}
+                      onEdit={() => setEditThread(thread)}
                     />
                   ))
                 )}
@@ -277,19 +357,23 @@ export function BiblePage({ projectId }: { projectId: string }) {
           </div>
 
           <Card>
-            <CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle>世界观条目</CardTitle>
+              <Button size="sm" variant="ghost" onClick={() => setEditWorld("new")}>
+                <Plus className="size-3.5" /> 新增
+              </Button>
             </CardHeader>
             <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
               {worldItems.length === 0 ? (
                 <p className="text-sm text-slate-500">暂无世界观条目。</p>
               ) : (
                 worldItems.map((item: BibleWorldItem) => (
-                  <BibleItem
+                  <EditableItem
                     key={item.id}
                     title={item.name}
                     badge={item.is_hard_rule ? "硬规则" : item.importance}
                     text={item.description}
+                    onEdit={() => setEditWorld(item)}
                   />
                 ))
               )}
@@ -320,7 +404,618 @@ export function BiblePage({ projectId }: { projectId: string }) {
           </Card>
         </>
       )}
+
+      {/* 编辑弹窗 */}
+      {specEditing && spec ? (
+        <SpecEditDialog
+          projectId={projectId}
+          spec={spec}
+          onClose={() => setSpecEditing(false)}
+          onSaved={() => {
+            setSpecEditing(false);
+            invalidateAll();
+          }}
+        />
+      ) : null}
+      {editChar ? (
+        <CharacterEditDialog
+          projectId={projectId}
+          character={editChar === "new" ? null : editChar}
+          onClose={() => setEditChar(null)}
+          onSaved={() => {
+            setEditChar(null);
+            invalidateAll();
+          }}
+        />
+      ) : null}
+      {editWorld ? (
+        <WorldItemEditDialog
+          projectId={projectId}
+          item={editWorld === "new" ? null : editWorld}
+          onClose={() => setEditWorld(null)}
+          onSaved={() => {
+            setEditWorld(null);
+            invalidateAll();
+          }}
+        />
+      ) : null}
+      {editThread ? (
+        <PlotThreadEditDialog
+          projectId={projectId}
+          thread={editThread === "new" ? null : editThread}
+          onClose={() => setEditThread(null)}
+          onSaved={() => {
+            setEditThread(null);
+            invalidateAll();
+          }}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function CreativePrefsCard({
+  prefs,
+  onChange,
+}: {
+  prefs: CreativePrefs;
+  onChange: (next: CreativePrefs) => void;
+}) {
+  const update = <K extends keyof CreativePrefs>(key: K, value: CreativePrefs[K]) => {
+    onChange({ ...prefs, [key]: value });
+  };
+  return (
+    <div className="space-y-4 rounded-2xl border border-indigo-100 bg-indigo-50/40 p-4">
+      <p className="text-sm font-bold text-indigo-900">
+        创作偏好（可选，全部留空走默认）
+      </p>
+      <label className="block text-sm font-semibold text-slate-700">
+        创作意图 / 主题
+        <textarea
+          rows={2}
+          value={prefs.topic}
+          onChange={(e) => update("topic", e.target.value)}
+          placeholder="比如：在记忆可以被买卖的城市里，一名档案修复师追查妹妹失踪案。"
+          className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+        />
+      </label>
+      <label className="block text-sm font-semibold text-slate-700">
+        主角原型 / 期望
+        <textarea
+          rows={2}
+          value={prefs.protagonist_archetype}
+          onChange={(e) => update("protagonist_archetype", e.target.value)}
+          placeholder="比如：失忆的天才档案管理员，内敛、对真相有偏执的执念。"
+          className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+        />
+      </label>
+      <div className="grid gap-4 md:grid-cols-2">
+        <label className="block text-sm font-semibold text-slate-700">
+          参考作品（逗号分隔，仅做风格参考）
+          <input
+            value={prefs.reference_works}
+            onChange={(e) => update("reference_works", e.target.value)}
+            placeholder="盗梦空间, 银翼杀手"
+            className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
+          />
+        </label>
+        <label className="block text-sm font-semibold text-slate-700">
+          禁忌主题（逗号分隔，绝对不要出现）
+          <input
+            value={prefs.forbidden_themes}
+            onChange={(e) => update("forbidden_themes", e.target.value)}
+            placeholder="血腥, 政治隐喻"
+            className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
+          />
+        </label>
+      </div>
+      <label className="block text-sm font-semibold text-slate-700">
+        创作温度（0 = 保守稳定，1.5 = 高发挥）：{prefs.temperature.toFixed(2)}
+        <input
+          type="range"
+          min={0}
+          max={1.5}
+          step={0.05}
+          value={prefs.temperature}
+          onChange={(e) => update("temperature", Number(e.target.value))}
+          className="mt-2 w-full"
+        />
+      </label>
+    </div>
+  );
+}
+
+function EditableItem({
+  title,
+  badge,
+  text,
+  onEdit,
+}: {
+  title: string;
+  badge?: string;
+  text: string;
+  onEdit: () => void;
+}) {
+  return (
+    <div className="group relative rounded-2xl border border-slate-200 bg-white p-4">
+      <div className="flex items-start justify-between gap-3">
+        <p className="font-bold text-slate-950">{title}</p>
+        <div className="flex items-center gap-2">
+          {badge ? <Badge tone="slate">{badge}</Badge> : null}
+          <button
+            type="button"
+            onClick={onEdit}
+            className="rounded-md p-1 text-slate-400 opacity-0 transition group-hover:opacity-100 hover:bg-slate-100 hover:text-slate-700"
+            aria-label="编辑"
+          >
+            <Pencil className="size-3.5" />
+          </button>
+        </div>
+      </div>
+      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-500">{text || "—"}</p>
+    </div>
+  );
+}
+
+function Modal({
+  title,
+  onClose,
+  children,
+}: {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-lg font-black text-slate-950">{title}</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg p-1 text-slate-500 hover:bg-slate-100"
+            aria-label="关闭"
+          >
+            <X className="size-5" />
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function TextField({
+  label,
+  value,
+  onChange,
+  rows,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  rows?: number;
+  placeholder?: string;
+}) {
+  return (
+    <label className="block text-sm font-semibold text-slate-700">
+      {label}
+      {rows ? (
+        <textarea
+          rows={rows}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+        />
+      ) : (
+        <input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
+        />
+      )}
+    </label>
+  );
+}
+
+function ListField({
+  label,
+  values,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  values: string[];
+  onChange: (v: string[]) => void;
+  placeholder?: string;
+}) {
+  return (
+    <TextField
+      label={`${label}（一行一条）`}
+      rows={3}
+      value={values.join("\n")}
+      onChange={(v) => onChange(v.split("\n").map((s) => s.trim()).filter(Boolean))}
+      placeholder={placeholder}
+    />
+  );
+}
+
+function SpecEditDialog({
+  projectId,
+  spec,
+  onClose,
+  onSaved,
+}: {
+  projectId: string;
+  spec: NonNullable<Bible["spec"]>;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [form, setForm] = useState<NovelSpecPayload>({
+    premise: spec.premise,
+    theme: spec.theme,
+    genre: spec.genre,
+    tone: spec.tone,
+    target_reader: spec.target_reader,
+    narrative_pov: spec.narrative_pov,
+    style_guide: spec.style_guide,
+    constraints: spec.constraints,
+    continuity_rules: [],
+  });
+  const save = useMutation({
+    mutationFn: () => specApi.upsert(projectId, form),
+    onSuccess: () => {
+      toast.success("核心设定已更新");
+      onSaved();
+    },
+    onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "保存失败"),
+  });
+  const set = <K extends keyof NovelSpecPayload>(k: K, v: NovelSpecPayload[K]) =>
+    setForm((p) => ({ ...p, [k]: v }));
+  return (
+    <Modal title="编辑核心设定" onClose={onClose}>
+      <div className="space-y-3">
+        <TextField label="Premise" rows={3} value={form.premise ?? ""} onChange={(v) => set("premise", v)} />
+        <div className="grid gap-3 md:grid-cols-2">
+          <TextField label="Theme" value={form.theme ?? ""} onChange={(v) => set("theme", v)} />
+          <TextField label="Genre" value={form.genre ?? ""} onChange={(v) => set("genre", v)} />
+          <TextField label="Tone" value={form.tone ?? ""} onChange={(v) => set("tone", v)} />
+          <TextField
+            label="POV"
+            value={form.narrative_pov ?? ""}
+            onChange={(v) => set("narrative_pov", v)}
+          />
+          <TextField
+            label="Target Reader"
+            value={form.target_reader ?? ""}
+            onChange={(v) => set("target_reader", v)}
+          />
+        </div>
+        <TextField
+          label="Style Guide"
+          rows={3}
+          value={form.style_guide ?? ""}
+          onChange={(v) => set("style_guide", v)}
+        />
+        <ListField
+          label="约束 / 规则"
+          values={form.constraints ?? []}
+          onChange={(v) => set("constraints", v)}
+        />
+        <ListField
+          label="连贯性规则"
+          values={form.continuity_rules ?? []}
+          onChange={(v) => set("continuity_rules", v)}
+        />
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="ghost" onClick={onClose}>
+            取消
+          </Button>
+          <Button onClick={() => save.mutate()} disabled={save.isPending}>
+            {save.isPending ? "保存中…" : "保存"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function CharacterEditDialog({
+  projectId,
+  character,
+  onClose,
+  onSaved,
+}: {
+  projectId: string;
+  character: BibleCharacter | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [form, setForm] = useState<CharacterPayload>({
+    name: character?.name ?? "",
+    role: character?.role ?? "",
+    description: character?.description ?? "",
+    motivation: character?.motivation ?? "",
+    arc: character?.arc ?? "",
+    secret: "",
+    personality: "",
+  });
+  const save = useMutation({
+    mutationFn: () =>
+      character
+        ? charactersApi.update(projectId, character.id, form)
+        : charactersApi.create(projectId, form),
+    onSuccess: () => {
+      toast.success(character ? "人物已更新" : "人物已创建");
+      onSaved();
+    },
+    onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "保存失败"),
+  });
+  const remove = useMutation({
+    mutationFn: () => {
+      if (!character) throw new Error("no character");
+      return charactersApi.remove(projectId, character.id);
+    },
+    onSuccess: () => {
+      toast.success("人物已删除");
+      onSaved();
+    },
+    onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "删除失败"),
+  });
+  const set = <K extends keyof CharacterPayload>(k: K, v: CharacterPayload[K]) =>
+    setForm((p) => ({ ...p, [k]: v }));
+  return (
+    <Modal title={character ? "编辑人物" : "新增人物"} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="grid gap-3 md:grid-cols-2">
+          <TextField label="姓名" value={form.name} onChange={(v) => set("name", v)} />
+          <TextField label="定位（protagonist / antagonist / ...）" value={form.role ?? ""} onChange={(v) => set("role", v)} />
+        </div>
+        <TextField label="外貌 / 描写" rows={3} value={form.description ?? ""} onChange={(v) => set("description", v)} />
+        <TextField label="动机" rows={2} value={form.motivation ?? ""} onChange={(v) => set("motivation", v)} />
+        <TextField label="人物弧光" rows={2} value={form.arc ?? ""} onChange={(v) => set("arc", v)} />
+        <div className="flex justify-between gap-2 pt-2">
+          {character ? (
+            <Button
+              variant="ghost"
+              onClick={() => {
+                if (window.confirm(`确认删除人物「${character.name}」？`)) remove.mutate();
+              }}
+              disabled={remove.isPending}
+              className="text-red-600 hover:bg-red-50"
+            >
+              <Trash2 className="size-4" /> 删除
+            </Button>
+          ) : (
+            <span />
+          )}
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={onClose}>
+              取消
+            </Button>
+            <Button onClick={() => save.mutate()} disabled={save.isPending || !form.name.trim()}>
+              {save.isPending ? "保存中…" : "保存"}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function WorldItemEditDialog({
+  projectId,
+  item,
+  onClose,
+  onSaved,
+}: {
+  projectId: string;
+  item: BibleWorldItem | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [form, setForm] = useState<WorldItemPayload>({
+    type: item?.type ?? "rule",
+    name: item?.name ?? "",
+    description: item?.description ?? "",
+    importance: item?.importance ?? "medium",
+    is_hard_rule: item?.is_hard_rule ?? false,
+  });
+  const save = useMutation({
+    mutationFn: () =>
+      item
+        ? worldItemsApi.update(projectId, item.id, form)
+        : worldItemsApi.create(projectId, form),
+    onSuccess: () => {
+      toast.success(item ? "世界观条目已更新" : "已创建");
+      onSaved();
+    },
+    onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "保存失败"),
+  });
+  const remove = useMutation({
+    mutationFn: () => {
+      if (!item) throw new Error("no item");
+      return worldItemsApi.remove(projectId, item.id);
+    },
+    onSuccess: () => {
+      toast.success("已删除");
+      onSaved();
+    },
+    onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "删��失败"),
+  });
+  const set = <K extends keyof WorldItemPayload>(k: K, v: WorldItemPayload[K]) =>
+    setForm((p) => ({ ...p, [k]: v }));
+  return (
+    <Modal title={item ? "编辑世界观条目" : "新增世界观条目"} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="grid gap-3 md:grid-cols-2">
+          <TextField label="类型（rule / location / faction ...）" value={form.type} onChange={(v) => set("type", v)} />
+          <TextField label="名称" value={form.name} onChange={(v) => set("name", v)} />
+        </div>
+        <TextField label="描述" rows={5} value={form.description ?? ""} onChange={(v) => set("description", v)} />
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="block text-sm font-semibold text-slate-700">
+            重要性
+            <select
+              value={form.importance ?? "medium"}
+              onChange={(e) => set("importance", e.target.value)}
+              className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
+            >
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+            </select>
+          </label>
+          <label className="mt-6 flex items-center gap-2 text-sm font-semibold text-slate-700">
+            <input
+              type="checkbox"
+              checked={form.is_hard_rule ?? false}
+              onChange={(e) => set("is_hard_rule", e.target.checked)}
+            />
+            硬规则（违反会触发审稿）
+          </label>
+        </div>
+        <div className="flex justify-between gap-2 pt-2">
+          {item ? (
+            <Button
+              variant="ghost"
+              onClick={() => {
+                if (window.confirm(`确认删除世界观条目「${item.name}」？`)) remove.mutate();
+              }}
+              disabled={remove.isPending}
+              className="text-red-600 hover:bg-red-50"
+            >
+              <Trash2 className="size-4" /> 删除
+            </Button>
+          ) : (
+            <span />
+          )}
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={onClose}>
+              取消
+            </Button>
+            <Button
+              onClick={() => save.mutate()}
+              disabled={save.isPending || !form.name.trim() || !form.type.trim()}
+            >
+              {save.isPending ? "保存中…" : "保存"}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function PlotThreadEditDialog({
+  projectId,
+  thread,
+  onClose,
+  onSaved,
+}: {
+  projectId: string;
+  thread: BiblePlotThread | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [form, setForm] = useState<PlotThreadPayload>({
+    title: thread?.title ?? "",
+    thread_type: thread?.thread_type ?? "main",
+    description: thread?.description ?? "",
+    status: thread?.status ?? "open",
+  });
+  const save = useMutation({
+    mutationFn: () =>
+      thread
+        ? plotThreadsApi.update(projectId, thread.id, form)
+        : plotThreadsApi.create(projectId, form),
+    onSuccess: () => {
+      toast.success(thread ? "剧情线已更新" : "已创建");
+      onSaved();
+    },
+    onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "保存失败"),
+  });
+  const remove = useMutation({
+    mutationFn: () => {
+      if (!thread) throw new Error("no thread");
+      return plotThreadsApi.remove(projectId, thread.id);
+    },
+    onSuccess: () => {
+      toast.success("已删除");
+      onSaved();
+    },
+    onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "删除失败"),
+  });
+  const set = <K extends keyof PlotThreadPayload>(k: K, v: PlotThreadPayload[K]) =>
+    setForm((p) => ({ ...p, [k]: v }));
+  return (
+    <Modal title={thread ? "编辑剧情线" : "新增剧情线"} onClose={onClose}>
+      <div className="space-y-3">
+        <TextField label="名称" value={form.title} onChange={(v) => set("title", v)} />
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="block text-sm font-semibold text-slate-700">
+            类型
+            <select
+              value={form.thread_type ?? "main"}
+              onChange={(e) => set("thread_type", e.target.value)}
+              className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
+            >
+              <option value="main">main 主线</option>
+              <option value="sub">sub 副线</option>
+              <option value="foreshadow">foreshadow 伏笔</option>
+              <option value="background">background 背景</option>
+            </select>
+          </label>
+          <label className="block text-sm font-semibold text-slate-700">
+            状态
+            <select
+              value={form.status ?? "open"}
+              onChange={(e) => set("status", e.target.value)}
+              className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
+            >
+              <option value="open">open 进行中</option>
+              <option value="closed">closed 已闭合</option>
+              <option value="paused">paused 暂停</option>
+            </select>
+          </label>
+        </div>
+        <TextField label="描述" rows={4} value={form.description ?? ""} onChange={(v) => set("description", v)} />
+        <div className="flex justify-between gap-2 pt-2">
+          {thread ? (
+            <Button
+              variant="ghost"
+              onClick={() => {
+                if (window.confirm(`确认删除剧情线「${thread.title}」？`)) remove.mutate();
+              }}
+              disabled={remove.isPending}
+              className="text-red-600 hover:bg-red-50"
+            >
+              <Trash2 className="size-4" /> 删除
+            </Button>
+          ) : (
+            <span />
+          )}
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={onClose}>
+              取消
+            </Button>
+            <Button onClick={() => save.mutate()} disabled={save.isPending || !form.title.trim()}>
+              {save.isPending ? "保存中…" : "保存"}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
