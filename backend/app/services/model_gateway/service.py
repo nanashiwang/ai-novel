@@ -1,12 +1,10 @@
 """模型网关。
 
-默认走真实模型。MockProvider 只保留给自动化测试或显式开启的本地隔离测试，
-避免生产链路静默生成固定占位内容。
+生产链路只调用真实模型 provider；测试替身只存在于 tests 中。
 """
 from __future__ import annotations
 
 import json
-import re
 import time
 from typing import Any, Protocol
 
@@ -54,204 +52,19 @@ class ModelProvider(Protocol):
     ) -> str: ...
 
 
-class _MockProvider:
-    """开发用：返回结构化但确定性的内容，避免烧 token。
-
-    Story Bible 路径下会从 user_prompt 中解析出项目标题 / 类型 / 主角原型 /
-    禁忌主题等字段，按字段动态拼出 fixture——不同项目得到不同人物名、
-    premise 描述与世界规则，避免"每个项目长得一样"的体验问题。
-    """
-
-    @staticmethod
-    def _parse_prompt_fields(user_prompt: str) -> dict[str, Any]:
-        """从 novel_planner 拼装的 user_prompt 里反解关键字段。
-
-        novel_planner 用固定模板 `xxx：value` 输出，因此可以直接抓"中文冒号
-        + 后续到换行"的内容。失败时返回空字符串，让上层取兜底值。
-        """
-        patterns = {
-            "title": r"项目标题：([^\n]*)",
-            "genre": r"类型：([^\n]*)",
-            "target_reader": r"目标读者：([^\n]*)",
-            "style": r"文风：([^\n]*)",
-            "topic": r"初始题材/topic：([^\n]*)",
-            "protagonist": r"主角原型/期望：([^\n]*)",
-            "references": r"参考作品[^\n]*：([^\n]*)",
-            "forbidden": r"禁忌主题[^\n]*：([^\n]*)",
-        }
-        out: dict[str, Any] = {}
-        for key, pat in patterns.items():
-            m = re.search(pat, user_prompt)
-            out[key] = (m.group(1).strip() if m else "")
-        return out
-
-    @staticmethod
-    def _seed_int(text: str) -> int:
-        """用 title 做稳定 hash，让同一项目每次 mock 结果一致，方便测试。"""
-        seed = 0
-        for ch in text:
-            seed = (seed * 131 + ord(ch)) & 0xFFFFFFFF
-        return seed
-
-    def _mock_story_bible(self, user_prompt: str) -> dict[str, Any]:
-        fields = self._parse_prompt_fields(user_prompt)
-        title = fields.get("title") or "未命名小说"
-        genre = fields.get("genre") or "悬疑幻想"
-        style = fields.get("style") or "画面清晰、冲突明确"
-        target_reader = fields.get("target_reader") or "中文长篇类型小说读者"
-        topic = fields.get("topic") or title
-        protagonist = fields.get("protagonist") or ""
-        forbidden = fields.get("forbidden") or ""
-
-        # 用 title 做种子在 3 套人物名 / 3 套世界规则模板间选择，
-        # 不同项目得到不同基线
-        seed = self._seed_int(title)
-        name_packs = [
-            ("林澈", "沈砚"),
-            ("江昼", "苏怀玦"),
-            ("沈白川", "宋鹤川"),
-        ]
-        world_packs = [
-            [
-                "记忆可以被交易，但会留下情绪残影",
-                "城市档案馆记录每一次被篡改的过去",
-            ],
-            [
-                "灵能波动会暴露使用者的真实情感",
-                "禁区入口每隔七日会随机迁移一次",
-            ],
-            [
-                "契约印记一旦缔结便会侵蚀缔约者的寿命",
-                "梦境与现实在月相满圆时会暂时同步",
-            ],
-        ]
-        protagonist_name, antagonist_name = name_packs[seed % len(name_packs)]
-        world_rules = world_packs[seed % len(world_packs)]
-
-        protagonist_desc = (
-            protagonist or f"在『{title}』中追逐真相的核心角色，专长契合本作题材。"
-        )
-
-        constraints = ["保持世界规则前后一致", "避免无铺垫反转"]
-        if forbidden:
-            constraints.append(f"严禁出现：{forbidden}")
-
-        return {
-            "premise": f"围绕『{topic}』展开，{protagonist_name}在{genre}舞台上追查真相。",
-            "theme": "选择、代价与自我救赎",
-            "genre": genre,
-            "tone": "冷峻、克制、逐步升温",
-            "target_reader": target_reader,
-            "narrative_pov": "第三人称有限视角",
-            "style_guide": style,
-            "constraints": constraints,
-            "world_rules": world_rules,
-            "main_characters": [
-                {
-                    "name": protagonist_name,
-                    "role": "protagonist",
-                    "description": protagonist_desc,
-                    "motivation": f"揭开『{topic}』背后被掩盖的真相。",
-                    "arc": "从被动卷入到主动承担抉择的代价。",
-                },
-                {
-                    "name": antagonist_name,
-                    "role": "antagonist",
-                    "description": f"掌控本作核心冲突源头的对立面，{style}下的反派形象。",
-                    "motivation": "用自己的方式维护被打破的旧秩序。",
-                    "arc": "从秩序维护者滑向掌控一切的人。",
-                },
-            ],
-            "continuity_rules": [
-                f"{protagonist_name}不能直接想起核心真相",
-                "关键设定必须付出等价代价",
-            ],
-            "plot_threads": [
-                f"{topic}的真相追查",
-                "对立面的隐藏布局",
-                "世界规则的边界探索",
-            ],
-        }
-
-    async def complete_json(
-        self,
-        *,
-        model: str,
-        system_prompt: str,
-        user_prompt: str,
-        schema: dict[str, Any],
-        temperature: float,
-    ) -> dict[str, Any]:
-        if "StoryBibleContract" in str(schema) or "main_characters" in schema.get("properties", {}):
-            return self._mock_story_bible(user_prompt)
-        schema_str = str(schema)
-        # AuditResultContract: 含 issues 数组的 schema
-        if "AuditIssueItem" in schema_str or (
-            "issues" in schema.get("properties", {})
-            and "premise" not in schema.get("properties", {})
-        ):
-            return {
-                "issues": [
-                    {
-                        "issue_type": "continuity",
-                        "severity": "medium",
-                        "description": "场景结尾出现的关键道具与上一章描述不一致。",
-                        "suggested_fix": "在场景中部加一句明确道具属性，再让其在结尾出现。",
-                    },
-                    {
-                        "issue_type": "character",
-                        "severity": "low",
-                        "description": "主角在高压下的语气过于冷静，与设定的'急于求成'弧光不符。",
-                        "suggested_fix": "把主角的关键对白改为更急促的短句。",
-                    },
-                ]
-            }
-        # SceneDraftContract: 含 scene_id + content
-        if "SceneDraftContract" in schema_str or "unresolved_threads" in schema.get(
-            "properties", {}
-        ):
-            return {
-                "scene_id": "",
-                "title": "测试重写场景",
-                "content": (
-                    "雾笼罩档案馆的清晨，林澈推开门，发现门禁锁芯比昨晚多了一道刻痕。"
-                    "他蹲下，指尖蹭过冰凉的金属，记忆里浮起一段被篡改过的画面——"
-                    "妹妹的笑声、关上的门、和那枚他从未真正见过的钥匙。"
-                    "（测试正文：已基于待修复问题润色，保留原场景目标与钩子。）"
-                ),
-                "word_count": 96,
-                "continuity_notes": ["测试重写：已按 issues 修订关键道具描述"],
-                "unresolved_threads": [],
-            }
-        return {
-            "mock": True,
-            "model": model,
-            "schema_keys": list(schema.keys()),
-        }
-
-    async def complete_text(
-        self,
-        *,
-        model: str,
-        system_prompt: str,
-        user_prompt: str,
-        temperature: float,
-    ) -> str:
-        return f"[MOCK:{model}] 根据上下文生成 scene 级正文（提示约 {len(user_prompt)} 字）。"
-
 
 class _RealProviderPlaceholder:
     """真实 provider 占位：触发时显式报错，提示部署方注入实际实现。"""
 
     async def complete_json(self, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
         raise NotImplementedError(
-            "MODEL_GATEWAY_MODE=real 但未注入 provider。请在启动脚本中调用 "
+            "真实模型 provider 未配置。请在启动脚本中调用 "
             "model_gateway.set_provider(...) 设置 OpenAI/Anthropic/自托管 client。"
         )
 
     async def complete_text(self, **kwargs: Any) -> str:  # noqa: ANN401
         raise NotImplementedError(
-            "MODEL_GATEWAY_MODE=real 但未注入 provider。"
+            "真实模型 provider 未配置。"
         )
 
 
@@ -265,12 +78,7 @@ class ModelGateway:
     def __init__(self) -> None:
         self.settings = get_settings()
         self._default_model = self.settings.default_model
-        self._provider: ModelProvider = (
-            _MockProvider()
-            if self.settings.model_gateway_allow_mock
-            and self.settings.model_gateway_mode == "mock"
-            else _RealProviderPlaceholder()
-        )
+        self._provider: ModelProvider = _RealProviderPlaceholder()
         self._settings_cache_at: float = 0.0  # monotonic 时间；0 = 强制首次刷新
 
     def set_provider(self, provider: ModelProvider) -> None:
@@ -279,13 +87,13 @@ class ModelGateway:
 
     def configure(self, config: ModelGatewayConfig) -> None:
         self._default_model = config.default_model
-        if config.mode == "mock" and self.settings.model_gateway_allow_mock:
-            self._provider = _MockProvider()
-        elif config.provider == "openai" and config.openai_api_key:
+        if config.provider == "openai" and config.openai_api_key:
             self._provider = OpenAIChatProvider(
                 api_key=config.openai_api_key,
                 base_url=config.openai_base_url,
                 timeout=self.settings.model_gateway_timeout_seconds,
+                # 中转网关强制 stream=true；OpenAI 官方亦兼容
+                stream=True,
             )
         elif config.provider == "anthropic" and config.anthropic_api_key:
             self._provider = AnthropicMessagesProvider(

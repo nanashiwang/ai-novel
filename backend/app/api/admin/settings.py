@@ -8,7 +8,6 @@ from fastapi import APIRouter, HTTPException
 from pydantic import Field, field_validator
 
 from app.api.deps import CurrentUserDep, DbDep
-from app.core.config import get_settings
 from app.core.permissions import require_permission, require_platform_admin
 from app.repositories import AuditLogRepository
 from app.schemas.common import APIModel
@@ -23,7 +22,6 @@ router = APIRouter(prefix="/admin/settings", tags=["admin-settings"])
 
 
 class ModelGatewaySettingsResponse(APIModel):
-    mode: Literal["mock", "real"]
     provider: Literal["openai", "anthropic"]
     default_model: str
     openai_base_url: str
@@ -35,7 +33,6 @@ class ModelGatewaySettingsResponse(APIModel):
 
 
 class ModelGatewaySettingsUpdate(APIModel):
-    mode: Literal["mock", "real"] = "real"
     provider: Literal["openai", "anthropic"] = "openai"
     default_model: str = Field(min_length=1, max_length=120)
     openai_base_url: str = Field(min_length=1, max_length=500)
@@ -61,11 +58,8 @@ class ModelGatewaySettingsUpdate(APIModel):
 
 
 def _to_response(config: ModelGatewayConfig) -> ModelGatewaySettingsResponse:
-    settings = get_settings()
     active_key = config.active_api_key
-    mode = config.mode if settings.model_gateway_allow_mock else "real"
     return ModelGatewaySettingsResponse(
-        mode=mode if mode in {"mock", "real"} else "real",
         provider=config.provider if config.provider in {"openai", "anthropic"} else "openai",
         default_model=config.default_model,
         openai_base_url=config.openai_base_url,
@@ -73,7 +67,7 @@ def _to_response(config: ModelGatewayConfig) -> ModelGatewaySettingsResponse:
         anthropic_base_url=config.anthropic_base_url,
         anthropic_api_key_configured=bool(config.anthropic_api_key),
         active_base_url=config.active_base_url,
-        ready=bool(active_key) if mode == "real" else settings.model_gateway_allow_mock,
+        ready=bool(active_key),
     )
 
 
@@ -91,13 +85,10 @@ async def update_model_gateway_settings(
     db: DbDep,
 ):
     require_permission(user, "admin:system:update")
-    if payload.mode == "mock" and not get_settings().model_gateway_allow_mock:
-        raise HTTPException(status_code=400, detail="mock_model_gateway_disabled")
 
     # 记录变更前的配置（不含敏感字段），用于审计 before/after 对比
     before = await system_settings_service.get_model_config(db)
     before_snapshot = {
-        "mode": before.mode,
         "provider": before.provider,
         "default_model": before.default_model,
         "openai_base_url": before.openai_base_url,
@@ -108,7 +99,6 @@ async def update_model_gateway_settings(
 
     config = await system_settings_service.upsert_model_config(
         db,
-        mode=payload.mode,
         provider=payload.provider,
         default_model=payload.default_model,
         openai_base_url=payload.openai_base_url,
@@ -116,12 +106,11 @@ async def update_model_gateway_settings(
         anthropic_base_url=payload.anthropic_base_url,
         anthropic_api_key=payload.anthropic_api_key,
     )
-    if config.mode == "real" and not config.active_api_key:
+    if not config.active_api_key:
         raise HTTPException(status_code=400, detail="active_provider_api_key_required")
     model_gateway.configure(config)
 
     after_snapshot = {
-        "mode": config.mode,
         "provider": config.provider,
         "default_model": config.default_model,
         "openai_base_url": config.openai_base_url,
@@ -242,6 +231,9 @@ async def test_model_gateway(
             api_key=api_key,
             base_url=base_url,
             timeout=15.0,
+            # 测试连接默认走 stream，兼容强制要求 stream=true 的中转网关
+            # （如 nan.meta-api.vip / xx.api2d.net 等）。OpenAI 官方也兼容。
+            stream=True,
         )
 
     started = time.perf_counter()

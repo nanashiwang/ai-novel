@@ -24,14 +24,14 @@ settings = get_settings()
 
 def _wire_model_provider() -> None:
     """启动时按环境变量选择 provider；数据库设置会在运行时覆盖。"""
-    if settings.model_gateway_mode != "real":
-        return
     if settings.model_gateway_provider == "openai" and settings.openai_api_key:
         model_gateway.set_provider(
             OpenAIChatProvider(
                 api_key=settings.openai_api_key,
                 base_url=settings.openai_base_url,
                 timeout=settings.model_gateway_timeout_seconds,
+                # 中转网关常强制 stream=true；OpenAI 官方亦兼容
+                stream=True,
             )
         )
     elif settings.model_gateway_provider == "anthropic" and settings.anthropic_api_key:

@@ -57,6 +57,61 @@ async def _post_json(
     raise TimeoutError(f"model_gateway_timeout_after_{timeout_seconds:g}s") from last_timeout
 
 
+async def _stream_chat_completion(
+    client: httpx.AsyncClient,
+    path: str,
+    *,
+    payload: dict[str, Any],
+) -> str:
+    """以 SSE 方式调用 OpenAI 兼容的 /chat/completions 并拼出完整文本。
+
+    很多 OpenAI 中转网关（如 nan.meta-api.vip）**强制要求 stream=true**，
+    非流式请求会被 400 拒。此处保证 payload 必带 stream=true，并把
+    `choices[0].delta.content` 拼成完整 text 返回，对调用方透明。
+
+    错误处理：
+    - 4xx/5xx 不会自动 raise（httpx stream 模式特性），手动读 body 抛错；
+    - 上游中途断流：当前实现以"已经收到的片段"作为结果返回，但若没有任何
+      content 又没有 [DONE]，视为异常抛 ValueError。
+    """
+    chunks: list[str] = []
+    received_done = False
+    async with client.stream("POST", path, json={**payload, "stream": True}) as resp:
+        if resp.status_code >= 400:
+            body = (await resp.aread()).decode("utf-8", errors="replace")[:1000]
+            raise httpx.HTTPStatusError(
+                f"upstream_returned_{resp.status_code} body={body}",
+                request=resp.request,
+                response=resp,
+            )
+        async for raw_line in resp.aiter_lines():
+            if not raw_line:
+                continue
+            # 兼容 OpenAI 官方格式：每条数据行以 "data: " 开头
+            line = raw_line.strip()
+            if not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if data == "[DONE]":
+                received_done = True
+                break
+            try:
+                obj = json.loads(data)
+            except json.JSONDecodeError:
+                # 个别中转网关可能塞 keep-alive 噪音，忽略
+                continue
+            try:
+                delta = obj["choices"][0].get("delta") or {}
+            except (KeyError, IndexError):
+                continue
+            piece = delta.get("content")
+            if piece:
+                chunks.append(piece)
+    if not chunks and not received_done:
+        raise ValueError("stream_returned_empty_response")
+    return "".join(chunks)
+
+
 def _parse_json_from_text(text: str) -> dict[str, Any]:
     text = text.strip()
     if text.startswith("```"):
@@ -103,6 +158,13 @@ class OpenAIChatProvider:
     """OpenAI Chat Completions API provider。
 
     依赖：仅 httpx，不依赖官方 SDK，以减小镜像体积。
+
+    stream 参数：
+    - False（默认）：走非流式 /chat/completions
+    - True：走 SSE 流式。**许多 OpenAI 中转网关强制要求 stream=true**，
+      非流式请求会被 400 `Stream must be set to true` 拒。生产环境对接
+      中转 API 时建议开启。OpenAI 官方也兼容 stream，开了不会有副作用
+      （除了响应延迟稍高几十毫秒）。
     """
 
     def __init__(
@@ -111,10 +173,12 @@ class OpenAIChatProvider:
         api_key: str,
         base_url: str = "https://api.openai.com/v1",
         timeout: float = 300.0,
+        stream: bool = False,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.stream = stream
         self._use_response_format = "api.openai.com" in self.base_url
 
     def _client(self) -> httpx.AsyncClient:
@@ -135,18 +199,23 @@ class OpenAIChatProvider:
         user_prompt: str,
         temperature: float,
     ) -> str:
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": temperature,
+        }
         async with self._client() as client:
+            if self.stream:
+                return await _stream_chat_completion(
+                    client, "/chat/completions", payload=payload
+                )
             response = await _post_json(
                 client,
                 "/chat/completions",
-                payload={
-                    "model": model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "temperature": temperature,
-                },
+                payload=payload,
                 timeout_seconds=self.timeout,
             )
             _raise_for_status(response)
@@ -186,6 +255,22 @@ class OpenAIChatProvider:
             payload["response_format"] = {"type": "json_object"}
 
         async with self._client() as client:
+            if self.stream:
+                # 流式分支：拼出完整文本后走原有 _parse_json_from_text；
+                # response_format 在中转 API 上常不支持，stream 失败时摘掉它再试一次。
+                try:
+                    text = await _stream_chat_completion(
+                        client, "/chat/completions", payload=payload
+                    )
+                except httpx.HTTPStatusError:
+                    if "response_format" not in payload:
+                        raise
+                    fallback = dict(payload)
+                    fallback.pop("response_format", None)
+                    text = await _stream_chat_completion(
+                        client, "/chat/completions", payload=fallback
+                    )
+                return _parse_json_from_text(text)
             response = await _post_json(
                 client,
                 "/chat/completions",
