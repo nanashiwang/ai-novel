@@ -184,7 +184,10 @@ export function BiblePage({ projectId }: { projectId: string }) {
     mutationFn: () => {
       const payload: GenerateBiblePayload = {
         estimate_words: 2000,
-        force_regenerate: !bible?.spec,
+        // 已有 spec 时点击的按钮文案是「重新生成」，用户预期就是覆盖式重生成。
+        // 之前传 `!bible?.spec`（已有就 false）导致后端走 reused 分支，
+        // 用户感觉"点了没反应"——内容根本没变。
+        force_regenerate: Boolean(bible?.spec),
         topic: prefs.topic.trim() || undefined,
         protagonist_archetype: prefs.protagonist_archetype.trim() || undefined,
         reference_works: splitTags(prefs.reference_works),
