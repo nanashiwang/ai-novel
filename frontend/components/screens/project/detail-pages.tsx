@@ -1503,6 +1503,10 @@ export function OutlinePage({ projectId }: { projectId: string }) {
     queryKey: chaptersKey,
     queryFn: () => chaptersApi.list(projectId),
   });
+  const { data: project } = useQuery({
+    queryKey: projectKey,
+    queryFn: () => projectsApi.get(projectId),
+  });
 
   // 找出本项目的 generate_outline 任务最近一条（jobs.list 默认 created_at desc）。
   // 用于驱动生成按钮的 loading 态与轮询刷新。
@@ -1531,15 +1535,34 @@ export function OutlinePage({ projectId }: { projectId: string }) {
     (j) => j.project_id === projectId && j.job_type === "generate_outline",
   );
   const isGenerating = latestJob?.status === "queued" || latestJob?.status === "running";
+  const targetChapterCount = project?.target_chapter_count ?? 0;
+  const shouldAppendOutline =
+    chapters.length > 0 && targetChapterCount > chapters.length;
+  const outlineProgress =
+    targetChapterCount > 0
+      ? `已生成 ${chapters.length}/${targetChapterCount} 章`
+      : chapters.length > 0
+        ? `已生成 ${chapters.length} 章`
+        : "未生成";
+  const generateOutlineLabel = isGenerating
+    ? "生成中"
+    : chapters.length === 0
+      ? "启动生成"
+      : shouldAppendOutline
+        ? `补全至 ${targetChapterCount} 章`
+        : "重新生成大纲";
 
   const generate = useMutation({
     mutationFn: () =>
       projectsApi.generateOutline(projectId, {
+        target_chapters: targetChapterCount || undefined,
         estimate_words: 3000,
-        force_regenerate: chapters.length > 0,
+        force_regenerate: chapters.length > 0 && !shouldAppendOutline,
       }),
     onSuccess: () => {
-      toast.success("已提交章节大纲生成任务");
+      toast.success(
+        shouldAppendOutline ? "已提交后续章节大纲补全任务" : "已提交章节大纲生成任务",
+      );
       queryClient.invalidateQueries({ queryKey: chaptersKey });
       queryClient.invalidateQueries({ queryKey: projectKey });
       queryClient.invalidateQueries({ queryKey: jobsKey });
@@ -1606,7 +1629,7 @@ export function OutlinePage({ projectId }: { projectId: string }) {
           <div className="flex items-center gap-2">
             {latestJob ? <StatusBadge status={latestJob.status as never} /> : null}
             <Badge tone={chapters.length > 0 ? "blue" : "slate"}>
-              {chapters.length > 0 ? `已生成 ${chapters.length} 章` : "未生成"}
+              {outlineProgress}
             </Badge>
           </div>
         </CardHeader>
@@ -1615,7 +1638,9 @@ export function OutlinePage({ projectId }: { projectId: string }) {
             <div>
               <p className="font-bold text-slate-950">Sprint 2 大纲闭环</p>
               <p className="text-sm text-slate-500">
-                调用模型规划三幕推进，每章产出标题、摘要、目标、冲突、结尾钩子。
+                {shouldAppendOutline
+                  ? "当前少于项目目标章节数，点击补全会只追加缺失的后续章节。"
+                  : "调用模型规划三幕推进，每章产出标题、摘要、目标、冲突、结尾钩子。"}
               </p>
             </div>
             <Button
@@ -1627,7 +1652,7 @@ export function OutlinePage({ projectId }: { projectId: string }) {
               ) : (
                 <Sparkles className="size-4" />
               )}
-              {chapters.length > 0 ? "重新生成大纲" : "启动生成"}
+              {generateOutlineLabel}
             </Button>
           </div>
           {latestJob ? (

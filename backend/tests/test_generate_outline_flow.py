@@ -310,7 +310,7 @@ async def test_generate_outline_reuses_existing_chapters_when_force_false(
     res = await client.post(
         f"/api/v1/projects/{project_id}/outline/generate",
         headers=headers,
-        json={"target_chapters": 5, "force_regenerate": False},
+        json={"target_chapters": 2, "force_regenerate": False},
     )
     assert res.status_code == 202, res.text
     job_id = res.json()["id"]
@@ -332,6 +332,62 @@ async def test_generate_outline_reuses_existing_chapters_when_force_false(
     ).scalar_one()
     assert quota.used_value == 0
     assert quota.reserved_value == 0
+
+
+@pytest.mark.asyncio
+async def test_generate_outline_appends_missing_chapters_when_target_is_larger(
+    client, db_engine, db_session, monkeypatch
+):
+    """已有部分 chapters 且目标更大时，force=false 应补齐后续章节而不是直接复用。"""
+    Session = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+    monkeypatch.setattr(activities, "AsyncSessionLocal", Session)
+
+    org_id, project_id, headers = await _setup_org_project_and_spec(
+        client, db_session, email="outline-append@example.com"
+    )
+
+    for idx in range(1, 3):
+        db_session.add(
+            Chapter(
+                id=new_id("chapter"),
+                organization_id=org_id,
+                project_id=project_id,
+                volume_id=None,
+                chapter_index=idx,
+                title=f"已存在的第{idx}章",
+                summary="预置摘要",
+                goal="预置目标",
+                conflict="预置冲突",
+                ending_hook="预置钩子",
+                status="planned",
+            )
+        )
+    await db_session.commit()
+
+    res = await client.post(
+        f"/api/v1/projects/{project_id}/outline/generate",
+        headers=headers,
+        json={"target_chapters": 5, "force_regenerate": False},
+    )
+    assert res.status_code == 202, res.text
+    job = await _await_job_terminal(db_session, res.json()["id"])
+    assert job.status == "succeeded"
+    assert job.consumed_quota == 3000
+    assert (job.output_payload or {}).get("appended") is True
+    assert (job.output_payload or {}).get("chapter_count") == 5
+    assert (job.output_payload or {}).get("created_chapter_count") == 3
+
+    db_session.expire_all()
+    rows = (
+        await db_session.execute(
+            select(Chapter).where(Chapter.project_id == project_id).order_by(
+                Chapter.chapter_index.asc()
+            )
+        )
+    ).scalars().all()
+    assert [row.chapter_index for row in rows] == [1, 2, 3, 4, 5]
+    assert rows[0].title == "已存在的第1章"
+    assert rows[1].title == "已存在的第2章"
 
 
 @pytest.mark.asyncio
