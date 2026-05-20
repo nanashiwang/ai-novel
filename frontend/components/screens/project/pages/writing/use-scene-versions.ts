@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
 
-import type { Chapter, DraftVersion, Scene } from "@/lib/api";
+import type { Chapter, ContentFormat, DraftVersion, Scene } from "@/lib/api";
 import { versionsApi } from "@/lib/api";
 import { ApiError } from "@/lib/http";
 import { useScopedKey } from "@/lib/use-scoped-key";
@@ -56,7 +56,7 @@ export function useSceneVersions({ projectId, activeChapter, activeScene }: UseS
   const isComparing = !!compareWithVersion;
 
   const saveVersion = useMutation({
-    mutationFn: (content: string) => {
+    mutationFn: ({ content, format }: { content: string; format: ContentFormat }) => {
       if (!activeScene || !activeChapter) {
         return Promise.reject(new Error("no_active_scene"));
       }
@@ -65,6 +65,7 @@ export function useSceneVersions({ projectId, activeChapter, activeScene }: UseS
         scene_id: activeScene.id,
         version_type: "user",
         content,
+        content_format: format,
         word_count: content.length,
         status: "draft",
         parent_version_id: displayedVersion?.id ?? null,
@@ -82,7 +83,7 @@ export function useSceneVersions({ projectId, activeChapter, activeScene }: UseS
 
   const autoSave = useMutation({
     // autosave 默默成功；与手动保存的差别：不弹 toast、version_type=autosave。
-    mutationFn: (content: string) => {
+    mutationFn: ({ content, format }: { content: string; format: ContentFormat }) => {
       if (!activeScene || !activeChapter) {
         return Promise.reject(new Error("no_active_scene"));
       }
@@ -91,6 +92,7 @@ export function useSceneVersions({ projectId, activeChapter, activeScene }: UseS
         scene_id: activeScene.id,
         version_type: "autosave",
         content,
+        content_format: format,
         word_count: content.length,
         status: "draft",
         parent_version_id: displayedVersion?.id ?? null,

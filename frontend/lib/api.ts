@@ -100,6 +100,57 @@ export type BiblePlotThread = {
   status: string;
 };
 
+export type RevisionTargetType =
+  | "project_settings"
+  | "story_bible"
+  | "character"
+  | "world_item"
+  | "plot_thread";
+
+export type RevisionProposal = {
+  id: string;
+  session_id: string;
+  project_id: string;
+  target_type: RevisionTargetType;
+  target_id: string | null;
+  action: "update" | "create";
+  title: string;
+  patch: Record<string, unknown>;
+  reason: string;
+  impact: string[];
+  status: string;
+};
+
+export type RevisionMessage = {
+  id: string;
+  session_id: string;
+  role: "user" | "assistant" | string;
+  content: string;
+};
+
+export type RevisionSession = {
+  id: string;
+  project_id: string;
+  scope: string;
+  title: string;
+  status: string;
+};
+
+export type RevisionChatRequest = {
+  message: string;
+  session_id?: string | null;
+  scope?: string;
+  target_type?: RevisionTargetType | null;
+  target_id?: string | null;
+};
+
+export type RevisionChatResponse = {
+  session: RevisionSession;
+  reply: string;
+  messages: RevisionMessage[];
+  proposals: RevisionProposal[];
+};
+
 export type Bible = {
   project_id: string;
   project_status: string;
@@ -241,6 +292,8 @@ export type ContinuityIssue = {
   description: string;
   suggested_fix: string;
   status: string;
+  created_at?: string;
+  updated_at?: string;
 };
 
 export const continuityIssuesApi = {
@@ -303,6 +356,17 @@ export const projectsApi = {
     ),
   generateFullNovel: (id: string, estimate_words: number) =>
     http.post<GenerationJob>(`/projects/${id}/generate-full-novel`, { estimate_words }),
+};
+
+export const revisionApi = {
+  chat: (projectId: string, payload: RevisionChatRequest) =>
+    http.post<RevisionChatResponse>(`/projects/${projectId}/revisions/chat`, payload),
+  getSession: (projectId: string, sessionId: string) =>
+    http.get<RevisionChatResponse>(`/projects/${projectId}/revisions/sessions/${sessionId}`),
+  applyProposal: (projectId: string, proposalId: string) =>
+    http.post<{ proposal: RevisionProposal; applied_change_id: string }>(
+      `/projects/${projectId}/revisions/proposals/${proposalId}/apply`,
+    ),
 };
 
 // ----- Generation Jobs -----
@@ -532,6 +596,9 @@ export const specApi = {
 };
 
 // 与 backend/app/api/project_extra.py::DraftVersionResponse 对齐
+/** content 字段的序列化格式。'text' = 历史纯文本，'markdown' = 新写入路径。 */
+export type ContentFormat = "text" | "markdown";
+
 export type DraftVersion = {
   id: string;
   organization_id: string;
@@ -540,10 +607,13 @@ export type DraftVersion = {
   scene_id: string | null;
   version_type: string;
   content: string;
+  content_format: ContentFormat;
   word_count: number;
   status: string;
   parent_version_id: string | null;
   created_by: string;
+  created_at?: string;
+  updated_at?: string;
 };
 
 export type DraftVersionCreate = {
@@ -551,6 +621,7 @@ export type DraftVersionCreate = {
   scene_id?: string | null;
   version_type?: string;
   content?: string;
+  content_format?: ContentFormat;
   word_count?: number;
   status?: string;
   parent_version_id?: string | null;

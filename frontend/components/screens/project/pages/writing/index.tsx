@@ -16,6 +16,7 @@ import { Badge, StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DiffView } from "@/components/ui/diff-view";
+import { toPlainText } from "@/components/ui/markdown";
 import { ProjectHeader } from "@/components/screens/project/project-frame";
 import { BibleBlock } from "@/components/screens/project/shared/bible-block";
 import { PreflightCard } from "@/components/screens/project/shared/preflight-card";
@@ -293,8 +294,8 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
                   </Button>
                 </div>
                 <DiffView
-                  oldContent={compareWithVersion.content}
-                  newContent={displayedVersion.content}
+                  oldContent={toPlainText(compareWithVersion.content, compareWithVersion.content_format)}
+                  newContent={toPlainText(displayedVersion.content, displayedVersion.content_format)}
                   oldLabel={labelForVersion(versions, compareWithVersion.id)}
                   newLabel={labelForVersion(versions, displayedVersion.id)}
                 />
@@ -305,8 +306,8 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
                 version={displayedVersion}
                 editable={isShowingLatest}
                 isSaving={saveVersion.isPending}
-                onSave={(content) => saveVersion.mutate(content)}
-                onAutoSave={(content) => autoSave.mutate(content)}
+                onSave={(content, format) => saveVersion.mutate({ content, format })}
+                onAutoSave={(content, format) => autoSave.mutate({ content, format })}
               />
             )}
             {/* Sprint 5-A：审稿与重写面板。仅当 scene 已有 draft 且非对比模式时显示 */}
