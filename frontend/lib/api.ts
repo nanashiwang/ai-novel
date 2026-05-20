@@ -119,6 +119,54 @@ export type GenerateBiblePayload = {
   reference_works?: string[];
   forbidden_themes?: string[];
   temperature?: number | null;
+  // 高级偏好（仅在 prompt 拼接时生效，后端不强校验）
+  target_reader?: string;
+  story_tone?: string;
+  pacing?: string;
+  ending_lean?: string;
+  automation_level?: string;
+  audit_strictness?: string;
+};
+
+// 与 backend/app/api/projects.py::PreflightResponse 对齐
+export type PreflightCheckItem = {
+  label: string;
+  level: "ok" | "warn" | "block";
+  detail: string;
+};
+export type PreflightNextAction = {
+  kind: string;
+  label: string;
+  href_suffix: string;
+};
+export type PreflightReport = {
+  project_status: string;
+  plan_code: string;
+  quota_key: string;
+  quota_limit: number;
+  quota_used: number;
+  quota_reserved: number;
+  quota_available: number;
+  estimate_words: number;
+  target_chapter_count: number;
+  is_long_novel: boolean;
+  can_generate: boolean;
+  checks: PreflightCheckItem[];
+  next_action: PreflightNextAction | null;
+};
+
+export type StoryDirection = {
+  name: string;
+  summary: string;
+  selling_points: string[];
+  risk: string;
+  recommended: boolean;
+};
+export type DirectionPreviewPayload = {
+  topic?: string;
+  protagonist_archetype?: string;
+  reference_works?: string[];
+  forbidden_themes?: string[];
 };
 
 // 与 backend/app/schemas/story_generation.py::ChapterPlanItem 对齐
@@ -206,6 +254,13 @@ export const projectsApi = {
   create: (payload: ProjectCreate) => http.post<Project>("/projects", payload),
   delete: (id: string) => http.delete<void>(`/projects/${id}`),
   getBible: (id: string) => http.get<Bible>(`/projects/${id}/bible`),
+  preflight: (id: string, jobType: string = "generate_bible") =>
+    http.get<PreflightReport>(`/projects/${id}/preflight`, { job_type: jobType }),
+  previewDirections: (id: string, payload: DirectionPreviewPayload) =>
+    http.post<{ directions: StoryDirection[] }>(
+      `/projects/${id}/bible/preview-directions`,
+      payload,
+    ),
   generateBible: (id: string, payload: GenerateBiblePayload) =>
     http.post<GenerationJob>(`/projects/${id}/bible/generate`, payload),
   generateOutline: (id: string, payload: GenerateOutlinePayload = {}) =>

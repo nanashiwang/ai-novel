@@ -34,6 +34,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { ProjectHeader } from "./project-frame";
+import { useAuth } from "@/components/providers/auth-provider";
 import { ActionCard } from "@/components/ui/action-card";
 import { Badge, StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -42,6 +43,7 @@ import { DataTable } from "@/components/ui/data-table";
 import { ProgressBar } from "@/components/ui/progress";
 import { DiffView } from "@/components/ui/diff-view";
 import { SceneEditor } from "@/components/ui/scene-editor";
+import { isPlatformAdmin } from "@/lib/permissions";
 import {
   chaptersApi,
   charactersApi,
@@ -66,6 +68,8 @@ import type {
   GenerationJob,
   NovelSpecPayload,
   PlotThreadPayload,
+  PreflightReport,
+  StoryDirection,
   WorldItemPayload,
 } from "@/lib/api";
 import { ApiError } from "@/lib/http";
@@ -129,18 +133,32 @@ function BibleItem({
 
 // =========== 故事圣经 ===========
 type CreativePrefs = {
+  // 基础：默认展开
   topic: string;
   protagonist_archetype: string;
-  reference_works: string;
+  target_reader: string;
+  story_tone: string;
   forbidden_themes: string;
+  // 高级：默认收起
+  reference_works: string;
+  pacing: string;
+  ending_lean: string;
+  automation_level: string;
+  audit_strictness: string;
   temperature: number;
 };
 
 const DEFAULT_PREFS: CreativePrefs = {
   topic: "",
   protagonist_archetype: "",
-  reference_works: "",
+  target_reader: "",
+  story_tone: "",
   forbidden_themes: "",
+  reference_works: "",
+  pacing: "",
+  ending_lean: "",
+  automation_level: "standard",
+  audit_strictness: "standard",
   temperature: 0.7,
 };
 
@@ -153,12 +171,16 @@ function splitTags(value: string): string[] {
 
 export function BiblePage({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const isAdmin = isPlatformAdmin(user);
   const projectKey = useScopedKey("project", projectId);
   const bibleKey = useScopedKey("project", projectId, "bible");
   const charactersKey = useScopedKey("project", projectId, "characters");
   const worldItemsKey = useScopedKey("project", projectId, "world-items");
   const plotThreadsKey = useScopedKey("project", projectId, "plot-threads");
+  const preflightKey = useScopedKey("project", projectId, "preflight", "generate_bible");
   const jobsKey = useScopedKey("jobs");
+
   const { data: bible, isPending } = useQuery({
     queryKey: bibleKey,
     queryFn: () => projectsApi.getBible(projectId),
@@ -170,11 +192,18 @@ export function BiblePage({ projectId }: { projectId: string }) {
       return waitingForJob || waitingForResult ? 1500 : false;
     },
   });
+  const { data: preflight } = useQuery({
+    queryKey: preflightKey,
+    queryFn: () => projectsApi.preflight(projectId, "generate_bible"),
+  });
   const latestJob = bible?.latest_job;
   const isGenerating = latestJob?.status === "queued" || latestJob?.status === "running";
 
   const [prefsOpen, setPrefsOpen] = useState(false);
+  const [prefsAdvanced, setPrefsAdvanced] = useState(false);
+  const [defaultsExplain, setDefaultsExplain] = useState(false);
   const [prefs, setPrefs] = useState<CreativePrefs>(DEFAULT_PREFS);
+  const [directionPreviewOpen, setDirectionPreviewOpen] = useState(false);
   const [specEditing, setSpecEditing] = useState(false);
   const [editChar, setEditChar] = useState<BibleCharacter | "new" | null>(null);
   const [editWorld, setEditWorld] = useState<BibleWorldItem | "new" | null>(null);
@@ -183,16 +212,20 @@ export function BiblePage({ projectId }: { projectId: string }) {
   const generate = useMutation({
     mutationFn: () => {
       const payload: GenerateBiblePayload = {
-        estimate_words: 2000,
-        // 已有 spec 时点击的按钮文案是「重新生成」，用户预期就是覆盖式重生成。
-        // 之前传 `!bible?.spec`（已有就 false）导致后端走 reused 分支，
-        // 用户感觉"点了没反应"——内容根本没变。
+        estimate_words: preflight?.estimate_words ?? 2000,
+        // 已有 spec 时按钮文案是「重新生成」，用户预期就是覆盖式重生成
         force_regenerate: Boolean(bible?.spec),
         topic: prefs.topic.trim() || undefined,
         protagonist_archetype: prefs.protagonist_archetype.trim() || undefined,
         reference_works: splitTags(prefs.reference_works),
         forbidden_themes: splitTags(prefs.forbidden_themes),
         temperature: prefs.temperature,
+        target_reader: prefs.target_reader.trim() || undefined,
+        story_tone: prefs.story_tone.trim() || undefined,
+        pacing: prefs.pacing.trim() || undefined,
+        ending_lean: prefs.ending_lean.trim() || undefined,
+        automation_level: prefs.automation_level || undefined,
+        audit_strictness: prefs.audit_strictness || undefined,
       };
       return projectsApi.generateBible(projectId, payload);
     },
@@ -203,6 +236,7 @@ export function BiblePage({ projectId }: { projectId: string }) {
       queryClient.invalidateQueries({ queryKey: charactersKey });
       queryClient.invalidateQueries({ queryKey: worldItemsKey });
       queryClient.invalidateQueries({ queryKey: plotThreadsKey });
+      queryClient.invalidateQueries({ queryKey: preflightKey });
       queryClient.invalidateQueries({ queryKey: jobsKey });
     },
     onError: (e: unknown) => {
@@ -222,15 +256,28 @@ export function BiblePage({ projectId }: { projectId: string }) {
   const worldItems = bible?.world_items ?? [];
   const plotThreads = bible?.plot_threads ?? [];
 
+  const canGenerate = preflight?.can_generate !== false;
+  const disableGenerate = generate.isPending || isGenerating || !canGenerate;
+
   return (
     <div className="space-y-6">
       <ProjectHeader projectId={projectId} />
+
+      <ProjectStageCard
+        projectId={projectId}
+        projectStatus={preflight?.project_status ?? bible?.project_status ?? "created"}
+        hasSpec={Boolean(spec)}
+        characterCount={characters.length}
+        worldItemCount={worldItems.length}
+        plotThreadCount={plotThreads.length}
+      />
+
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <div>
-            <CardTitle>故事圣经 Story Bible</CardTitle>
+            <CardTitle>故事启动中心 Story Setup Center</CardTitle>
             <p className="mt-1 text-sm text-slate-500">
-              生成后会同步写入设定、人物、世界观与主线。可填写「创作偏好」约束 LLM 的方向。
+              系统的第一步是生成故事圣经。可选择「预览创作方向」先确认大方向，或直接填「创作偏好」启动生成。
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -239,31 +286,62 @@ export function BiblePage({ projectId }: { projectId: string }) {
           </div>
         </CardHeader>
         <CardContent className="space-y-5">
+          {preflight ? <PreflightCard report={preflight} /> : null}
+
+          <WillGenerateList />
+
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-slate-50 p-4">
             <div>
-              <p className="font-bold text-slate-950">Sprint 1 生成闭环</p>
+              <p className="font-bold text-slate-950">本次生成</p>
               <p className="text-sm text-slate-500">
-                提交任务后会预留额度，调用模型，完成后自动展示结果。
+                提交后会预留额度，调用模型，完成后自动展示结果。
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
+              <Button variant="ghost" onClick={() => setDirectionPreviewOpen(true)}>
+                <Wand2 className="size-4" /> 预览创作方向
+              </Button>
               <Button variant="ghost" onClick={() => setPrefsOpen((v) => !v)}>
                 <Settings2 className="size-4" /> {prefsOpen ? "收起创作偏好" : "创作偏好"}
               </Button>
-              <Button onClick={() => generate.mutate()} disabled={generate.isPending || isGenerating}>
+              <Button onClick={() => generate.mutate()} disabled={disableGenerate}>
                 {isGenerating ? <RefreshCw className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
                 {spec ? "重新生成" : "启动生成"}
               </Button>
             </div>
           </div>
+
           {prefsOpen ? (
-            <CreativePrefsCard prefs={prefs} onChange={setPrefs} />
+            <CreativePrefsCard
+              prefs={prefs}
+              onChange={setPrefs}
+              advanced={prefsAdvanced}
+              onToggleAdvanced={() => setPrefsAdvanced((v) => !v)}
+              defaultsExplain={defaultsExplain}
+              onToggleDefaultsExplain={() => setDefaultsExplain((v) => !v)}
+            />
           ) : null}
+
           {latestJob ? (
             <div className="grid gap-3 md:grid-cols-3">
-              <BibleBlock title="任务类型" text={latestJob.job_type} />
-              <BibleBlock title="额度" text={`${latestJob.consumed_quota}/${latestJob.reserved_quota}`} />
-              <BibleBlock title="Workflow" text={latestJob.workflow_id ?? "—"} />
+              <BibleBlock title="任务类型" text={taskTypeLabel(latestJob.job_type)} />
+              <BibleBlock
+                title="本次额度"
+                text={
+                  latestJob.consumed_quota > 0
+                    ? `预估 ${latestJob.reserved_quota} 字 · 实际 ${latestJob.consumed_quota} 字`
+                    : `预估 ${latestJob.reserved_quota} 字 · 等待结算`
+                }
+              />
+              <BibleBlock
+                title="任务状态"
+                text={latestJob.status === "succeeded" ? "已完成" : latestJob.status}
+              />
+              {isAdmin && latestJob.workflow_id ? (
+                <p className="md:col-span-3 truncate text-xs text-slate-400">
+                  Workflow ID（仅管理员可见）：{latestJob.workflow_id}
+                </p>
+              ) : null}
             </div>
           ) : null}
         </CardContent>
@@ -383,7 +461,6 @@ export function BiblePage({ projectId }: { projectId: string }) {
             </CardContent>
           </Card>
 
-          {/* Sprint 2 衔接：bible 已生成 → 引导用户到大纲页生成章节大纲 */}
           <Card>
             <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
               <div className="flex items-center gap-3">
@@ -391,24 +468,39 @@ export function BiblePage({ projectId }: { projectId: string }) {
                   <Layers3 className="size-5" />
                 </div>
                 <div>
-                  <p className="font-bold text-slate-950">下一步：生成章节大纲</p>
+                  <p className="font-bold text-slate-950">
+                    下一步：{preflight?.next_action?.label ?? "生成章节大纲"}
+                  </p>
                   <p className="text-sm text-slate-500">
                     根据故事圣经规划三幕推进，逐章产出标题、目标、冲突、钩子。
                   </p>
                 </div>
               </div>
               <Link
-                href={`/studio/projects/${projectId}/outline`}
+                href={`/studio/projects/${projectId}${preflight?.next_action?.href_suffix ?? "/outline"}`}
                 className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-800 transition hover:bg-slate-50"
               >
-                前往大纲页 <Sparkles className="size-4" />
+                前往 <Sparkles className="size-4" />
               </Link>
             </CardContent>
           </Card>
         </>
       )}
 
-      {/* 编辑弹窗 */}
+      {/* 编辑 / 预览弹窗 */}
+      {directionPreviewOpen ? (
+        <DirectionPreviewDialog
+          projectId={projectId}
+          prefs={prefs}
+          onClose={() => setDirectionPreviewOpen(false)}
+          onPick={(d) => {
+            setPrefs((p) => ({ ...p, topic: d.summary }));
+            setPrefsOpen(true);
+            setDirectionPreviewOpen(false);
+            toast.success(`已选定方向：${d.name}`);
+          }}
+        />
+      ) : null}
       {specEditing && spec ? (
         <SpecEditDialog
           projectId={projectId}
@@ -457,21 +549,271 @@ export function BiblePage({ projectId }: { projectId: string }) {
   );
 }
 
+function taskTypeLabel(jobType: string): string {
+  const m: Record<string, string> = {
+    generate_bible: "故事圣经生成",
+    generate_outline: "章节大纲生成",
+    generate_scene_plan: "场景拆分",
+    write_scene: "场景正文写作",
+    audit_scene: "审稿",
+    rewrite_scene: "重写",
+    full_novel: "全书生成",
+  };
+  return m[jobType] ?? jobType;
+}
+
+/** 项目阶段卡片：展示当前里程碑 + 推荐下一步。 */
+function ProjectStageCard({
+  projectId,
+  projectStatus,
+  hasSpec,
+  characterCount,
+  worldItemCount,
+  plotThreadCount,
+}: {
+  projectId: string;
+  projectStatus: string;
+  hasSpec: boolean;
+  characterCount: number;
+  worldItemCount: number;
+  plotThreadCount: number;
+}) {
+  // 里程碑顺序：created → bible → outline → scenes → drafting → completed
+  const milestones = [
+    { key: "bible", label: "故事圣经", done: hasSpec },
+    {
+      key: "outline",
+      label: "章节大纲",
+      done: ["outlined", "scenes_planning", "scenes_planned", "drafting", "completed"].includes(
+        projectStatus,
+      ),
+    },
+    {
+      key: "scenes",
+      label: "场景计划",
+      done: ["scenes_planned", "drafting", "completed"].includes(projectStatus),
+    },
+    {
+      key: "drafting",
+      label: "章节正文",
+      done: ["drafting", "completed"].includes(projectStatus),
+    },
+    { key: "completed", label: "全书完结", done: projectStatus === "completed" },
+  ];
+  return (
+    <Card>
+      <CardContent className="space-y-4 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-sm text-slate-500">当前阶段</p>
+            <p className="mt-1 text-lg font-black text-slate-950">
+              {projectStatus} {hasSpec ? "·  圣经就绪" : ""}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3 text-sm text-slate-600">
+            <span>人物 {characterCount}</span>
+            <span>世界观 {worldItemCount}</span>
+            <span>剧情线 {plotThreadCount}</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 overflow-x-auto">
+          {milestones.map((m, i) => (
+            <div key={m.key} className="flex items-center gap-2">
+              <div
+                className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-bold ${
+                  m.done
+                    ? "bg-emerald-100 text-emerald-800"
+                    : "bg-slate-100 text-slate-500"
+                }`}
+              >
+                {m.done ? <CheckCircle2 className="size-3.5" /> : <TimerReset className="size-3.5" />}
+                {m.label}
+              </div>
+              {i < milestones.length - 1 ? (
+                <span className="text-slate-300">›</span>
+              ) : null}
+            </div>
+          ))}
+        </div>
+        <p className="text-xs text-slate-400">
+          项目 ID: {projectId}
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** 生成前检查卡片：套餐 / 额度 / 风险。 */
+function PreflightCard({ report }: { report: PreflightReport }) {
+  const remaining = report.quota_available;
+  const limit = report.quota_limit;
+  const pct = limit > 0 ? Math.min(100, Math.round(((limit - remaining) / limit) * 100)) : 0;
+  return (
+    <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm font-bold text-slate-950">生成前检查</p>
+        <div className="flex items-center gap-2 text-xs">
+          <Badge tone="violet">{report.plan_code}</Badge>
+          <span className="text-slate-500">
+            剩余 {remaining.toLocaleString()} / {limit.toLocaleString()} 字
+          </span>
+        </div>
+      </div>
+      <ProgressBar value={pct} tone={remaining >= report.estimate_words ? "green" : "orange"} />
+      <ul className="space-y-2 text-sm">
+        {report.checks.map((c, i) => (
+          <li key={i} className="flex items-start gap-2">
+            {c.level === "ok" ? (
+              <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-600" />
+            ) : c.level === "warn" ? (
+              <TimerReset className="mt-0.5 size-4 shrink-0 text-amber-600" />
+            ) : (
+              <XCircle className="mt-0.5 size-4 shrink-0 text-rose-600" />
+            )}
+            <div>
+              <p className="font-semibold text-slate-800">{c.label}</p>
+              {c.detail ? <p className="text-slate-500">{c.detail}</p> : null}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** 列出本次生成会产出什么，给用户预期感。 */
+function WillGenerateList() {
+  const items = [
+    "故事前提（Premise）",
+    "核心主题（Theme）",
+    "主线冲突 / 张力源",
+    "主角与关键人物原型",
+    "世界观基础规则",
+    "剧情线 / 主要伏笔",
+    "文风规则与叙事视角",
+    "禁忌与硬约束",
+  ];
+  return (
+    <div className="rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4">
+      <p className="text-sm font-bold text-emerald-900">本次将生成</p>
+      <ul className="mt-2 grid gap-1.5 text-sm text-emerald-900/80 md:grid-cols-2">
+        {items.map((it) => (
+          <li key={it} className="flex items-center gap-2">
+            <CheckCircle2 className="size-3.5" /> {it}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function DirectionPreviewDialog({
+  projectId,
+  prefs,
+  onClose,
+  onPick,
+}: {
+  projectId: string;
+  prefs: CreativePrefs;
+  onClose: () => void;
+  onPick: (d: StoryDirection) => void;
+}) {
+  const { data, isPending, isError } = useQuery({
+    queryKey: ["preview-directions", projectId, prefs.topic, prefs.protagonist_archetype],
+    queryFn: () =>
+      projectsApi.previewDirections(projectId, {
+        topic: prefs.topic || undefined,
+        protagonist_archetype: prefs.protagonist_archetype || undefined,
+        reference_works: splitTags(prefs.reference_works),
+        forbidden_themes: splitTags(prefs.forbidden_themes),
+      }),
+  });
+  return (
+    <Modal title="预览 3 个创作方向" onClose={onClose}>
+      <p className="mb-3 text-sm text-slate-500">
+        从下面 3 个方向中挑一个最贴近你的预期，点「选用」后会自动回填到「创作意图」字段。
+      </p>
+      {isPending ? (
+        <p className="py-6 text-center text-sm text-slate-500">加载中…</p>
+      ) : isError || !data ? (
+        <p className="py-6 text-center text-sm text-rose-500">加载失败</p>
+      ) : (
+        <div className="space-y-3">
+          {data.directions.map((d) => (
+            <div
+              key={d.name}
+              className={`rounded-2xl border p-4 ${
+                d.recommended ? "border-indigo-300 bg-indigo-50/40" : "border-slate-200"
+              }`}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <p className="font-bold text-slate-950">
+                  {d.name} {d.recommended ? <Badge tone="violet">推荐</Badge> : null}
+                </p>
+                <Button size="sm" onClick={() => onPick(d)}>
+                  选用
+                </Button>
+              </div>
+              <p className="mt-2 text-sm text-slate-700">{d.summary}</p>
+              {d.selling_points.length > 0 ? (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {d.selling_points.map((sp) => (
+                    <Badge key={sp} tone="green">
+                      {sp}
+                    </Badge>
+                  ))}
+                </div>
+              ) : null}
+              {d.risk ? <p className="mt-2 text-xs text-amber-700">⚠ {d.risk}</p> : null}
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 function CreativePrefsCard({
   prefs,
   onChange,
+  advanced,
+  onToggleAdvanced,
+  defaultsExplain,
+  onToggleDefaultsExplain,
 }: {
   prefs: CreativePrefs;
   onChange: (next: CreativePrefs) => void;
+  advanced: boolean;
+  onToggleAdvanced: () => void;
+  defaultsExplain: boolean;
+  onToggleDefaultsExplain: () => void;
 }) {
   const update = <K extends keyof CreativePrefs>(key: K, value: CreativePrefs[K]) => {
     onChange({ ...prefs, [key]: value });
   };
   return (
     <div className="space-y-4 rounded-2xl border border-indigo-100 bg-indigo-50/40 p-4">
-      <p className="text-sm font-bold text-indigo-900">
-        创作偏好（可选，全部留空走默认）
-      </p>
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm font-bold text-indigo-900">创作偏好（可选，全部留空走默认）</p>
+        <Button size="sm" variant="ghost" onClick={onToggleDefaultsExplain}>
+          {defaultsExplain ? "隐藏默认说明" : "查看默认策略"}
+        </Button>
+      </div>
+      {defaultsExplain ? (
+        <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600 leading-6">
+          <p className="font-bold text-slate-700">字段全部留空时，系统会按以下默认策略推断：</p>
+          <ul className="ml-4 mt-1 list-disc">
+            <li>从项目标题 / 类型 / 目标章节数推断故事类型</li>
+            <li>主角原型基于通用文学范式，偏内敛 + 有明确动机</li>
+            <li>避免血腥、政治隐喻、色情等高风险内容</li>
+            <li>温度默认 0.7，平衡稳定与发挥</li>
+            <li>自动化默认「标准」：关键里程碑（圣经 / 大纲 / 前 3 章）会要求确认</li>
+            <li>审稿默认「标准」严格度</li>
+          </ul>
+        </div>
+      ) : null}
+
+      {/* 基础偏好 */}
       <label className="block text-sm font-semibold text-slate-700">
         创作意图 / 主题
         <textarea
@@ -494,36 +836,133 @@ function CreativePrefsCard({
       </label>
       <div className="grid gap-4 md:grid-cols-2">
         <label className="block text-sm font-semibold text-slate-700">
-          参考作品（逗号分隔，仅做风格参考）
-          <input
-            value={prefs.reference_works}
-            onChange={(e) => update("reference_works", e.target.value)}
-            placeholder="盗梦空间, 银翼杀手"
+          目标读者
+          <select
+            value={prefs.target_reader}
+            onChange={(e) => update("target_reader", e.target.value)}
             className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
-          />
+          >
+            <option value="">默认</option>
+            <option value="男频读者">男频读者</option>
+            <option value="女频读者">女频读者</option>
+            <option value="青少年">青少年</option>
+            <option value="成人悬疑读者">成人悬疑读者</option>
+            <option value="轻小说读者">轻小说读者</option>
+          </select>
         </label>
         <label className="block text-sm font-semibold text-slate-700">
-          禁忌主题（逗号分隔，绝对不要出现）
-          <input
-            value={prefs.forbidden_themes}
-            onChange={(e) => update("forbidden_themes", e.target.value)}
-            placeholder="血腥, 政治隐喻"
+          故事基调
+          <select
+            value={prefs.story_tone}
+            onChange={(e) => update("story_tone", e.target.value)}
             className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
-          />
+          >
+            <option value="">默认</option>
+            <option value="轻松">轻松</option>
+            <option value="治愈">治愈</option>
+            <option value="热血">热血</option>
+            <option value="悬疑">悬疑</option>
+            <option value="黑暗">黑暗</option>
+            <option value="史诗">史诗</option>
+            <option value="压抑">压抑</option>
+          </select>
         </label>
       </div>
       <label className="block text-sm font-semibold text-slate-700">
-        创作温度（0 = 保守稳定，1.5 = 高发挥）：{prefs.temperature.toFixed(2)}
+        禁忌主题（逗号分隔，绝对不要出现）
         <input
-          type="range"
-          min={0}
-          max={1.5}
-          step={0.05}
-          value={prefs.temperature}
-          onChange={(e) => update("temperature", Number(e.target.value))}
-          className="mt-2 w-full"
+          value={prefs.forbidden_themes}
+          onChange={(e) => update("forbidden_themes", e.target.value)}
+          placeholder="血腥, 政治隐喻"
+          className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
         />
       </label>
+
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-bold text-slate-500">高级偏好</p>
+        <Button size="sm" variant="ghost" onClick={onToggleAdvanced}>
+          {advanced ? "收起" : "展开"}
+        </Button>
+      </div>
+      {advanced ? (
+        <div className="space-y-4">
+          <label className="block text-sm font-semibold text-slate-700">
+            参考作品（逗号分隔，仅做风格参考）
+            <input
+              value={prefs.reference_works}
+              onChange={(e) => update("reference_works", e.target.value)}
+              placeholder="盗梦空间, 银翼杀手"
+              className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
+            />
+          </label>
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="block text-sm font-semibold text-slate-700">
+              节奏偏好
+              <select
+                value={prefs.pacing}
+                onChange={(e) => update("pacing", e.target.value)}
+                className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
+              >
+                <option value="">默认</option>
+                <option value="快节奏强钩子">快节奏强钩子</option>
+                <option value="中等节奏">中等节奏</option>
+                <option value="慢热铺垫">慢热铺垫</option>
+              </select>
+            </label>
+            <label className="block text-sm font-semibold text-slate-700">
+              结局倾向
+              <select
+                value={prefs.ending_lean}
+                onChange={(e) => update("ending_lean", e.target.value)}
+                className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
+              >
+                <option value="">默认</option>
+                <option value="开放式">开放式</option>
+                <option value="圆满">圆满</option>
+                <option value="悲剧">悲剧</option>
+                <option value="反转">反转</option>
+                <option value="系列续作">系列续作</option>
+              </select>
+            </label>
+            <label className="block text-sm font-semibold text-slate-700">
+              自动化程度
+              <select
+                value={prefs.automation_level}
+                onChange={(e) => update("automation_level", e.target.value)}
+                className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
+              >
+                <option value="cautious">谨慎 · 每步都确认</option>
+                <option value="standard">标准 · 关键节点确认</option>
+                <option value="auto">全自动 · 系统自动推进</option>
+              </select>
+            </label>
+            <label className="block text-sm font-semibold text-slate-700">
+              审稿严格度
+              <select
+                value={prefs.audit_strictness}
+                onChange={(e) => update("audit_strictness", e.target.value)}
+                className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
+              >
+                <option value="loose">宽松</option>
+                <option value="standard">标准</option>
+                <option value="strict">严格</option>
+              </select>
+            </label>
+          </div>
+          <label className="block text-sm font-semibold text-slate-700">
+            创作温度（0 = 保守稳定，1.5 = 高发挥）：{prefs.temperature.toFixed(2)}
+            <input
+              type="range"
+              min={0}
+              max={1.5}
+              step={0.05}
+              value={prefs.temperature}
+              onChange={(e) => update("temperature", Number(e.target.value))}
+              className="mt-2 w-full"
+            />
+          </label>
+        </div>
+      ) : null}
     </div>
   );
 }

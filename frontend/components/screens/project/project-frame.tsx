@@ -15,10 +15,74 @@ import { useScopedKey } from "@/lib/use-scoped-key";
 /**
  * 项目页通用头部：面包屑 + 标题 + 状态徽标 + 顶部操作。
  *
- * 历史上这里曾有 9-tab 项目内导航，但当 StudioSidebar 在项目上下文中
- * 自动展开项目级菜单后，顶部 Tab 与侧边二级菜单重复且让视觉重心分散，
- * 已移除。导航完全由侧边栏承担。
+ * 主操作按钮根据 project.status 动态选择 CTA，避免在 bible_ready 阶段
+ * 仍硬编码"继续生成下一章"造成误导。
  */
+
+type CtaConfig = {
+  label: string;
+  hint: string;
+  /** "submit" 走 generateFullNovel；"link" 单纯跳转。 */
+  kind: "submit" | "link";
+  href_suffix?: string;
+};
+
+const STATUS_CTA: Record<string, CtaConfig> = {
+  created: {
+    label: "生成故事圣经",
+    hint: "去启动 generate_bible 任务",
+    kind: "link",
+    href_suffix: "/bible",
+  },
+  bible_generating: {
+    label: "查看任务进度",
+    hint: "故事圣经生成中",
+    kind: "link",
+    href_suffix: "/jobs",
+  },
+  bible_ready: {
+    label: "生成章节大纲",
+    hint: "去启动 generate_outline 任务",
+    kind: "link",
+    href_suffix: "/outline",
+  },
+  outline_generating: {
+    label: "查看任务进度",
+    hint: "章节大纲生成中",
+    kind: "link",
+    href_suffix: "/jobs",
+  },
+  outlined: {
+    label: "拆分第 1 章场景",
+    hint: "去启动 generate_scene_plan",
+    kind: "link",
+    href_suffix: "/outline",
+  },
+  scenes_planning: {
+    label: "查看任务进度",
+    hint: "场景计划生成中",
+    kind: "link",
+    href_suffix: "/jobs",
+  },
+  scenes_planned: {
+    label: "生成第 1 个场景",
+    hint: "去写作工作台",
+    kind: "link",
+    href_suffix: "/write",
+  },
+  drafting: {
+    label: "继续生成下一章",
+    hint: "立刻调度全书生成 pipeline",
+    kind: "submit",
+  },
+  completed: {
+    label: "导出全书",
+    hint: "项目已完成",
+    kind: "link",
+    href_suffix: "/export",
+  },
+};
+
 export function ProjectHeader({ projectId = "demo-project" }: { projectId?: string }) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -54,6 +118,8 @@ export function ProjectHeader({ projectId = "demo-project" }: { projectId?: stri
     );
   }
 
+  const cta = STATUS_CTA[project.status] ?? STATUS_CTA.created;
+
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2 text-sm text-slate-500">
@@ -77,9 +143,17 @@ export function ProjectHeader({ projectId = "demo-project" }: { projectId?: stri
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button onClick={() => generate.mutate()} disabled={generate.isPending}>
-            <Play className="size-4" /> {generate.isPending ? "提交中…" : "继续生成下一章"}
-          </Button>
+          {cta.kind === "submit" ? (
+            <Button onClick={() => generate.mutate()} disabled={generate.isPending}>
+              <Play className="size-4" /> {generate.isPending ? "提交中…" : cta.label}
+            </Button>
+          ) : (
+            <Link href={`/studio/projects/${project.id}${cta.href_suffix ?? ""}`}>
+              <Button>
+                <Play className="size-4" /> {cta.label}
+              </Button>
+            </Link>
+          )}
           <Link href={`/studio/projects/${project.id}/jobs`}>
             <Button variant="secondary">
               <ScrollText className="size-4" /> 查看 Workflow 日志
@@ -90,6 +164,7 @@ export function ProjectHeader({ projectId = "demo-project" }: { projectId?: stri
           </Button>
         </div>
       </div>
+      <p className="text-xs text-slate-400">{cta.hint}</p>
     </div>
   );
 }
