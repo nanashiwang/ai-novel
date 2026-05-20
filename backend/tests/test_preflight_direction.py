@@ -140,6 +140,48 @@ async def test_preflight_blocks_outline_without_bible(client, db_engine):
 
 
 @pytest.mark.asyncio
+async def test_preflight_free_plan_allows_write_scene(client, db_engine):
+    """Free 套餐应能跑 write_scene（entitlement 已解锁，受字数额度限制即可）。"""
+    Session = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+    token, org_id, project_id = await _register_with_project(client, "pf-free-write@example.com")
+    async with Session() as s:
+        await _seed_quota(s, org_id, limit=50000)
+
+    res = await client.get(
+        f"/api/v1/projects/{project_id}/preflight",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"job_type": "write_scene"},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    # entitlement 现在已解锁；唯一可能阻挡的是状态机，但 write_scene 无状态约束
+    ent_blocks = [c for c in body["checks"] if "未解锁" in c["label"]]
+    assert not ent_blocks, "Free 套餐应已解锁 generation:scene"
+
+
+@pytest.mark.asyncio
+async def test_preflight_blocks_full_novel_on_free(client, db_engine):
+    """Free 套餐 generation:full_novel 仍未解锁，应该 block + 提示可升级套餐。"""
+    Session = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+    token, org_id, project_id = await _register_with_project(client, "pf-free-full@example.com")
+    async with Session() as s:
+        await _seed_quota(s, org_id, limit=200000)
+
+    res = await client.get(
+        f"/api/v1/projects/{project_id}/preflight",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"job_type": "full_novel"},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["can_generate"] is False
+    ent_blocks = [c for c in body["checks"] if "未解锁" in c["label"]]
+    assert ent_blocks, "Free 套餐不应该能跑 full_novel"
+    # 提示中应该列出可升级的套餐
+    assert "Pro" in ent_blocks[0]["detail"]
+
+
+@pytest.mark.asyncio
 async def test_direction_preview_returns_three_for_suspense_genre(client):
     token, _, project_id = await _register_with_project(
         client, "dir-sus@example.com", genre="悬疑"

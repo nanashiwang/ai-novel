@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.tenancy import TenantContext
 from app.models.project import Project
 from app.repositories import QuotaBalanceRepository
+from app.services.entitlement.service import PLAN_ENTITLEMENTS, has_entitlement
 from app.services.quota.service import _resolve_plan_limit
 
 
@@ -30,6 +31,14 @@ DEFAULT_ESTIMATE_WORDS: dict[str, int] = {
     "audit_scene": 800,
     "rewrite_scene": 4000,
     "full_novel": 20000,
+}
+
+# job_type → 对应的 entitlement key。generation_service 中调
+# require_entitlement 的位置必须与本表保持一致。
+JOB_ENTITLEMENT: dict[str, str] = {
+    "write_scene": "generation:scene",
+    "rewrite_scene": "generation:scene",
+    "full_novel": "generation:full_novel",
 }
 
 # 长篇模式阈值：>= 这个数视为"超长篇"，提示用户分批策略
@@ -199,6 +208,26 @@ class PreflightService:
         status_blocker = self._status_blocker(project.status, job_type)
         if status_blocker:
             checks.append(status_blocker)
+
+        # 5) entitlement 检查（套餐档位是否解锁此功能入口）
+        ent_key = JOB_ENTITLEMENT.get(job_type)
+        if ent_key and not has_entitlement(tenant, ent_key):
+            # 找出最低能用此 entitlement 的套餐，给升级方向
+            upgradable = [
+                code
+                for code, ents in PLAN_ENTITLEMENTS.items()
+                if "*" in ents or ent_key in ents
+            ]
+            checks.append(
+                CheckItem(
+                    label="当前套餐未解锁此功能",
+                    level="block",
+                    detail=(
+                        f"当前 {tenant.plan_code} 套餐没有 {ent_key} 权限。"
+                        + (f" 可升级到：{' / '.join(upgradable)}。" if upgradable else "")
+                    ),
+                )
+            )
 
         can_generate = not any(c.level == "block" for c in checks)
 

@@ -2000,10 +2000,15 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
   const chaptersKey = useScopedKey("project", projectId, "chapters");
   const jobsKey = useScopedKey("jobs");
+  const preflightKey = useScopedKey("project", projectId, "preflight", "write_scene");
 
   const { data: chapters = [] } = useQuery({
     queryKey: chaptersKey,
     queryFn: () => chaptersApi.list(projectId),
+  });
+  const { data: preflight } = useQuery({
+    queryKey: preflightKey,
+    queryFn: () => projectsApi.preflight(projectId, "write_scene"),
   });
 
   const [activeChapterId, setActiveChapterId] = useState<string | null>(null);
@@ -2096,6 +2101,7 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
       queryClient.invalidateQueries({ queryKey: jobsKey });
       queryClient.invalidateQueries({ queryKey: scenesKey });
       queryClient.invalidateQueries({ queryKey: versionsKey });
+      queryClient.invalidateQueries({ queryKey: preflightKey });
       setDisplayedVersionId(null);
     },
     onError: (e: unknown) => {
@@ -2253,7 +2259,12 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
         </div>
         <Button
           onClick={() => write.mutate()}
-          disabled={write.isPending || isWriting || !activeScene}
+          disabled={
+            write.isPending ||
+            isWriting ||
+            !activeScene ||
+            (preflight?.can_generate === false)
+          }
         >
           {isWriting ? (
             <RefreshCw className="size-4 animate-spin" />
@@ -2263,6 +2274,9 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
           {latestDraft ? "重新生成场景" : "生成当前场景"}
         </Button>
       </div>
+      {preflight && preflight.can_generate === false ? (
+        <PreflightCard report={preflight} />
+      ) : null}
       <div className="grid min-h-[420px] gap-4 xl:grid-cols-[280px_minmax(520px,1fr)_340px]">
         <Card>
           <CardHeader>
