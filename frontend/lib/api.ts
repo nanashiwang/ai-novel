@@ -184,7 +184,7 @@ export type Chapter = {
 };
 
 export type GenerateOutlinePayload = {
-  // null/undefined 时由 activity 回落到 project.target_chapter_count 或 6
+  // null/undefined 时由 activity 回落到 project.target_chapter_count 或 6；服务端上限 200
   target_chapters?: number | null;
   estimate_words?: number;
   force_regenerate?: boolean;

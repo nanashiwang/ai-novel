@@ -6,6 +6,7 @@ from pydantic import Field
 
 from app.api.deps import CurrentUserDep, DbDep, TenantDep
 from app.api.pagination import Pagination, paginate
+from app.contracts import MAX_OUTLINE_CHAPTERS
 from app.core.exceptions import NotFoundError
 from app.core.permissions import require_permission
 from app.repositories import (
@@ -45,7 +46,7 @@ class GenerateBibleRequest(APIModel):
 
 class GenerateOutlineRequest(APIModel):
     # None → 由 activity 回落到 project.target_chapter_count 或 6
-    target_chapters: int | None = Field(default=None, ge=1, le=12)
+    target_chapters: int | None = Field(default=None, ge=1, le=MAX_OUTLINE_CHAPTERS)
     estimate_words: int = Field(default=3000, ge=1, le=20000)
     force_regenerate: bool = False
 

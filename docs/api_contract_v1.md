@@ -182,7 +182,7 @@
 
 ```json
 {
-  "target_chapters": 12,
+  "target_chapters": 48,
   "force_regenerate": false,
   "estimate_words": 3000
 }
@@ -190,7 +190,7 @@
 
 | 字段 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
-| `target_chapters` | int | 否 | project.target_chapter_count 或 6 | 期望章节数，clamp 到 [1, 12] |
+| `target_chapters` | int | 否 | project.target_chapter_count 或 6 | 期望章节数，服务端上限 200 |
 | `force_regenerate` | bool | 否 | false | 若已有 chapters 且未设为 true，走 reuse 分支 |
 | `estimate_words` | int | 否 | 3000 | 用于 quota 预留 |
 

@@ -183,7 +183,7 @@ class GenerationService:
         前置：项目必须已经有 NovelSpec（即 generate_bible 已完成）。
         参数：
             target_chapters: 期望章节数，None 时回落到 project.target_chapter_count 或 6；
-                activity 内 clamp 到 [1, 12]。
+                activity 内 clamp 到服务端大纲章节上限。
             estimate_words: 用于 quota 预留；与 outline 本身的成本估算相关，
                 而非实际章节字数。
             force_regenerate: True 时即使已有 chapters 也重新生成，绕过 reuse 分支。

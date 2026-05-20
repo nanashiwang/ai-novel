@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio import activity
 
+from app.contracts import MAX_OUTLINE_CHAPTERS
 from app.core.database import AsyncSessionLocal
 from app.core.exceptions import NotFoundError
 from app.core.metrics import JOBS_CREATED
@@ -474,7 +475,7 @@ async def generate_chapter_outline(job: dict[str, Any]) -> dict[str, Any]:
             await session.flush()
 
         requested = payload.get("target_chapters") or project.target_chapter_count or 6
-        target_chapters = max(1, min(int(requested), 12))
+        target_chapters = max(1, min(int(requested), MAX_OUTLINE_CHAPTERS))
         contract = await novel_planner_service.plan_chapters(
             session,
             organization_id=job_row.organization_id,

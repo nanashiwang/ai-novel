@@ -37,6 +37,7 @@ async def _setup_org_project_and_spec(
     *,
     email: str,
     limit_value: int = 10000,
+    target_chapter_count: int = 6,
     with_spec: bool = True,
 ) -> tuple[str, str, dict]:
     """通用准备流程。
@@ -64,7 +65,11 @@ async def _setup_org_project_and_spec(
     project_res = await client.post(
         "/api/v1/projects",
         headers=headers,
-        json={"title": "雾城记忆案", "target_chapter_count": 6, "target_word_count": 60000},
+        json={
+            "title": "雾城记忆案",
+            "target_chapter_count": target_chapter_count,
+            "target_word_count": 60000,
+        },
     )
     assert project_res.status_code == 201, project_res.text
     project_id = project_res.json()["id"]
@@ -154,6 +159,37 @@ async def test_generate_outline_happy_path(client, db_engine, db_session, monkey
 
     project = await db_session.get(Project, project_id)
     assert project.status == "outlined"
+
+
+@pytest.mark.asyncio
+async def test_generate_outline_uses_project_target_above_12(
+    client, db_engine, db_session, monkeypatch
+):
+    """未显式传 target_chapters 时，应按项目目标章节数生成，不再截断到 12。"""
+    Session = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+    monkeypatch.setattr(activities, "AsyncSessionLocal", Session)
+
+    _, project_id, headers = await _setup_org_project_and_spec(
+        client,
+        db_session,
+        email="outline-target-24@example.com",
+        target_chapter_count=24,
+    )
+
+    res = await client.post(
+        f"/api/v1/projects/{project_id}/outline/generate",
+        headers=headers,
+        json={"estimate_words": 3000},
+    )
+    assert res.status_code == 202, res.text
+    job = await _await_job_terminal(db_session, res.json()["id"])
+    assert job.status == "succeeded"
+
+    db_session.expire_all()
+    chapters = (
+        await db_session.execute(select(Chapter).where(Chapter.project_id == project_id))
+    ).scalars().all()
+    assert len(chapters) == 24
 
 
 @pytest.mark.asyncio
