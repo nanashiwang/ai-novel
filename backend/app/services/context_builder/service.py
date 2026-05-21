@@ -29,7 +29,9 @@ from app.repositories import (
     DraftVersionRepository,
     MemoryRepository,
     PlotThreadRepository,
+    PlotThreadRevisionRepository,
     WorldItemRepository,
+    WorldItemRevisionRepository,
 )
 from app.services.model_gateway.service import _estimate_tokens
 
@@ -39,7 +41,9 @@ SegmentLabel = Literal[
     "characters",
     "character_actions",
     "world_rules",
+    "world_actions",
     "plot_threads",
+    "plot_actions",
     "recent_summary",
     "memory_recall",
 ]
@@ -48,14 +52,18 @@ SegmentLabel = Literal[
 # ContextBuilder(total_budget=...) 注入。
 _DEFAULT_TOTAL_BUDGET = 8000
 
-# 每段占总预算的百分比。trusted 段加起来 85%，untrusted 15%。
+# 每段占总预算的百分比。trusted 段加起来 86%，untrusted 14%。
+# Sprint 13-B2：新增 world_actions / plot_actions 用于注入世界观条目与
+# 剧情线的最近演进，避免长篇生成时世界设定 / 主副线发生漂移。
 _SEGMENT_BUDGET_PCT: dict[SegmentLabel, float] = {
-    "hard_constraints": 0.18,
-    "task": 0.18,
-    "characters": 0.12,
-    "character_actions": 0.12,
-    "world_rules": 0.10,
-    "plot_threads": 0.08,
+    "hard_constraints": 0.16,
+    "task": 0.16,
+    "characters": 0.10,
+    "character_actions": 0.10,
+    "world_rules": 0.08,
+    "world_actions": 0.06,
+    "plot_threads": 0.06,
+    "plot_actions": 0.06,
     "recent_summary": 0.08,
     "memory_recall": 0.14,
 }
@@ -66,7 +74,9 @@ _TRUSTED_LABELS: set[SegmentLabel] = {
     "characters",
     "character_actions",
     "world_rules",
+    "world_actions",
     "plot_threads",
+    "plot_actions",
     "recent_summary",
 }
 
@@ -169,8 +179,18 @@ class ContextBuilder:
                 True,
             ),
             (
+                "world_actions",
+                await self._fmt_world_actions(session, organization_id, project_id),
+                True,
+            ),
+            (
                 "plot_threads",
                 await self._fmt_plot_threads(session, organization_id, project_id),
+                True,
+            ),
+            (
+                "plot_actions",
+                await self._fmt_plot_actions(session, organization_id, project_id),
                 True,
             ),
             (
@@ -237,8 +257,18 @@ class ContextBuilder:
                 True,
             ),
             (
+                "world_actions",
+                await self._fmt_world_actions(session, organization_id, project_id),
+                True,
+            ),
+            (
                 "plot_threads",
                 await self._fmt_plot_threads(session, organization_id, project_id),
+                True,
+            ),
+            (
+                "plot_actions",
+                await self._fmt_plot_actions(session, organization_id, project_id),
                 True,
             ),
             (
@@ -426,8 +456,9 @@ class ContextBuilder:
             return ""
 
         # 一次性拉所有 scenes 和 latest drafts，避免 N+1。
-        from app.models.chapter import Chapter as ChapterModel
         from sqlalchemy import select
+
+        from app.models.chapter import Chapter as ChapterModel
 
         scene_stmt = (
             select(Scene, ChapterModel.chapter_index)
@@ -516,6 +547,115 @@ class ContextBuilder:
         if not sections:
             return ""
         return "\n".join(sections)
+
+    async def _fmt_world_actions(
+        self,
+        session: AsyncSession,
+        organization_id: str,
+        project_id: str,
+        *,
+        limit: int = 8,
+    ) -> str:
+        """召回最近 N 条已应用的世界观条目变更。
+
+        Sprint 13-B2：把"主城被攻陷 / 某势力新增条款 / 地点状态变化"
+        塞回 scene 写作提示，避免长篇生成出现"先说被毁、后又完好"。
+
+        策略：只取 status='applied' 的 revision，按 created_at desc，
+        渲染 `<world_item.name>·<field>:<old> → <new>（reason）`。
+        item 名字通过另一次轻量查询补全。
+        """
+        from sqlalchemy import select  # noqa: PLC0415
+
+        from app.models.world_item import WorldItem  # noqa: PLC0415
+
+        repo = WorldItemRevisionRepository(session)
+        revs = list(
+            await repo.list(
+                organization_id=organization_id,
+                project_id=project_id,
+                status="applied",
+                limit=limit,
+            )
+        )
+        if not revs:
+            return ""
+        item_ids = {r.item_id for r in revs}
+        name_rows = (
+            await session.execute(
+                select(WorldItem.id, WorldItem.name).where(WorldItem.id.in_(item_ids))
+            )
+        ).all()
+        name_by_id = {row[0]: row[1] for row in name_rows}
+        lines = ["世界观演进："]
+        for rev in revs:
+            name = name_by_id.get(rev.item_id, "<已删除>")
+            old = self._stringify_value(rev.old_value)
+            new = self._stringify_value(rev.new_value)
+            note = f"（{rev.reason}）" if rev.reason else ""
+            lines.append(f"· {name} · {rev.field}：{old} → {new}{note}")
+        return "\n".join(lines)
+
+    async def _fmt_plot_actions(
+        self,
+        session: AsyncSession,
+        organization_id: str,
+        project_id: str,
+        *,
+        limit: int = 8,
+    ) -> str:
+        """召回最近 N 条已应用的剧情线变更。
+
+        Sprint 13-B2：把"伏笔已埋下 / 主线推进到了 X / 副线闭合"喂回
+        scene 写作提示，避免后续章节漏接或重复闭合。
+        """
+        from sqlalchemy import select  # noqa: PLC0415
+
+        from app.models.plot_thread import PlotThread  # noqa: PLC0415
+
+        repo = PlotThreadRevisionRepository(session)
+        revs = list(
+            await repo.list(
+                organization_id=organization_id,
+                project_id=project_id,
+                status="applied",
+                limit=limit,
+            )
+        )
+        if not revs:
+            return ""
+        item_ids = {r.item_id for r in revs}
+        name_rows = (
+            await session.execute(
+                select(PlotThread.id, PlotThread.title, PlotThread.thread_type).where(
+                    PlotThread.id.in_(item_ids)
+                )
+            )
+        ).all()
+        meta_by_id = {row[0]: (row[1], row[2]) for row in name_rows}
+        lines = ["剧情线演进："]
+        for rev in revs:
+            title, thread_type = meta_by_id.get(rev.item_id, ("<已删除>", "?"))
+            old = self._stringify_value(rev.old_value)
+            new = self._stringify_value(rev.new_value)
+            note = f"（{rev.reason}）" if rev.reason else ""
+            lines.append(f"· [{thread_type}] {title} · {rev.field}：{old} → {new}{note}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _stringify_value(value: object) -> str:
+        """把 JSON 字段值渲染成单行短串，避免 dict / list 直接 repr 占太多 token。"""
+        if value is None:
+            return "∅"
+        if isinstance(value, str):
+            return value[:80].replace("\n", " ")
+        if isinstance(value, (int, float, bool)):
+            return str(value)
+        # dict / list：取 json.dumps 截断
+        import json  # noqa: PLC0415
+
+        text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        return text[:120]
 
     async def _fmt_plot_threads(
         self, session: AsyncSession, organization_id: str, project_id: str

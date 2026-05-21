@@ -509,14 +509,16 @@ async def test_context_builder_assemble_basic_segments(db_session):
         db_session, project=project, spec=spec, chapter=chapter
     )
 
-    # 必须是 7 段顺序
+    # 段顺序：B2 在 world_rules / plot_threads 后各加一段 actions
     labels = [s.label for s in ctx.segments]
     assert labels == [
         "hard_constraints",
         "task",
         "characters",
         "world_rules",
+        "world_actions",
         "plot_threads",
+        "plot_actions",
         "recent_summary",
         "memory_recall",
     ]
