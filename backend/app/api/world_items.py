@@ -8,6 +8,7 @@ from app.core.exceptions import NotFoundError
 from app.core.permissions import require_permission
 from app.repositories import WorldItemRepository
 from app.schemas.common import APIModel
+from app.services import world_tracker
 
 router = APIRouter(prefix="/projects/{project_id}/world-items", tags=["world-items"])
 
@@ -65,11 +66,27 @@ async def update_world_item(
     db: DbDep,
 ):
     require_permission(user, "project:update", tenant)
-    item = await WorldItemRepository(db).update(
-        item_id, payload.model_dump(), organization_id=tenant.organization_id
-    )
+    repo = WorldItemRepository(db)
+    item = await repo.get(item_id, organization_id=tenant.organization_id)
     if not item or item.project_id != project_id:
         raise NotFoundError("world_item_not_found")
+    # Sprint 12-C: 用户级编辑走 tracker，每个变化字段都会写一条 applied revision，
+    # 并把同字段的旧 applied 标 superseded。非白名单字段直接写到 ORM，不进 revision。
+    values = payload.model_dump()
+    for field, new_value in values.items():
+        if field in world_tracker.WORLD_ITEM_TRACKABLE_FIELDS:
+            await world_tracker.record_user_edit(
+                db,
+                organization_id=tenant.organization_id,
+                project_id=project_id,
+                item=item,
+                field=field,
+                new_value=new_value,
+                user_id=user.id,
+            )
+        else:
+            setattr(item, field, new_value)
+    await db.flush()
     await db.commit()
     return item
 

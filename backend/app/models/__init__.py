@@ -12,6 +12,7 @@ from .model_call import ModelCall
 from .organization import Organization, OrganizationMember
 from .plan import Plan, PlanFeature
 from .plot_thread import PlotThread
+from .plot_thread_revision import PlotThreadRevision
 from .project import NovelSpec, Project
 from .quota import QuotaBalance, QuotaReservation
 from .revision import RevisionAppliedChange, RevisionMessage, RevisionProposal, RevisionSession
@@ -20,6 +21,7 @@ from .system_setting import SystemSetting
 from .usage import UsageEvent
 from .user import User
 from .world_item import WorldItem
+from .world_item_revision import WorldItemRevision
 
 __all__ = [
     "AdminAuditLog",
@@ -39,6 +41,7 @@ __all__ = [
     "Plan",
     "PlanFeature",
     "PlotThread",
+    "PlotThreadRevision",
     "Project",
     "QuotaBalance",
     "QuotaReservation",
@@ -52,4 +55,5 @@ __all__ = [
     "User",
     "Volume",
     "WorldItem",
+    "WorldItemRevision",
 ]

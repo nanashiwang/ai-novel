@@ -13,6 +13,7 @@ from app.core.exceptions import NotFoundError
 from app.core.permissions import require_permission
 from app.repositories import PlotThreadRepository
 from app.schemas.common import APIModel
+from app.services import plot_thread_tracker
 
 router = APIRouter(prefix="/projects/{project_id}/plot-threads", tags=["plot-threads"])
 
@@ -88,8 +89,20 @@ async def update_plot_thread(
     if not entry or entry.project_id != project_id:
         raise NotFoundError("plot_thread_not_found", code="plot_thread_not_found")
     patch = payload.model_dump(exclude_unset=True)
-    for key, value in patch.items():
-        setattr(entry, key, value)
+    # Sprint 12-C: 用户级编辑走 tracker，白名单字段写 applied revision。
+    for field, new_value in patch.items():
+        if field in plot_thread_tracker.PLOT_THREAD_TRACKABLE_FIELDS:
+            await plot_thread_tracker.record_user_edit(
+                db,
+                organization_id=tenant.organization_id,
+                project_id=project_id,
+                item=entry,
+                field=field,
+                new_value=new_value,
+                user_id=user.id,
+            )
+        else:
+            setattr(entry, field, new_value)
     await db.flush()
     await db.commit()
     return entry

@@ -29,7 +29,9 @@ import {
   type BibleWorldItem,
   type GenerateBiblePayload,
   characterRevisionsApi,
+  plotThreadRevisionsApi,
   projectsApi,
+  worldItemRevisionsApi,
 } from "@/lib/api";
 import { useProjectEvents, type ProjectEvent } from "@/lib/hooks/use-event-source";
 import { ApiError } from "@/lib/http";
@@ -93,6 +95,19 @@ export function BiblePage({ projectId }: { projectId: string }) {
   const pendingByCharacter = new Map(
     pendingCounts.map((c) => [c.character_id, c.pending_count]),
   );
+  // Sprint 12-C: 拉取 world / plot pending 角标。失败静默，不影响主流程。
+  const worldPendingKey = useScopedKey("project", projectId, "world-item-pending");
+  const plotPendingKey = useScopedKey("project", projectId, "plot-thread-pending");
+  const { data: worldPending } = useQuery({
+    queryKey: worldPendingKey,
+    queryFn: () => worldItemRevisionsApi.pendingCount(projectId),
+    refetchInterval: 30_000,
+  });
+  const { data: plotPending } = useQuery({
+    queryKey: plotPendingKey,
+    queryFn: () => plotThreadRevisionsApi.pendingCount(projectId),
+    refetchInterval: 30_000,
+  });
   const latestJob = bible?.latest_job;
   const isGenerating = latestJob?.status === "queued" || latestJob?.status === "running";
 
@@ -195,6 +210,8 @@ export function BiblePage({ projectId }: { projectId: string }) {
     queryClient.invalidateQueries({ queryKey: worldItemsKey });
     queryClient.invalidateQueries({ queryKey: plotThreadsKey });
     queryClient.invalidateQueries({ queryKey: pendingCountsKey });
+    queryClient.invalidateQueries({ queryKey: worldPendingKey });
+    queryClient.invalidateQueries({ queryKey: plotPendingKey });
   };
 
   const spec = bible?.spec;
@@ -440,15 +457,23 @@ export function BiblePage({ projectId }: { projectId: string }) {
                 {plotThreads.length === 0 ? (
                   <p className="text-sm text-slate-500">暂无剧情线。</p>
                 ) : (
-                  plotThreads.map((thread: BiblePlotThread) => (
-                    <EditableItem
-                      key={thread.id}
-                      title={thread.title}
-                      badge={`${thread.thread_type} · ${thread.status}`}
-                      text={thread.description}
-                      onEdit={() => setEditThread(thread)}
-                    />
-                  ))
+                  plotThreads.map((thread: BiblePlotThread) => {
+                    const pending = plotPending?.by_item?.[thread.id] ?? 0;
+                    return (
+                      <EditableItem
+                        key={thread.id}
+                        title={thread.title}
+                        badge={`${thread.thread_type} · ${thread.status}`}
+                        extraBadge={
+                          pending > 0 ? (
+                            <Badge tone="violet">{pending} 项待审核</Badge>
+                          ) : null
+                        }
+                        text={thread.description}
+                        onEdit={() => setEditThread(thread)}
+                      />
+                    );
+                  })
                 )}
               </CardContent>
             </Card>
@@ -465,15 +490,23 @@ export function BiblePage({ projectId }: { projectId: string }) {
               {worldItems.length === 0 ? (
                 <p className="text-sm text-slate-500">暂无世界观条目。</p>
               ) : (
-                worldItems.map((item: BibleWorldItem) => (
-                  <EditableItem
-                    key={item.id}
-                    title={item.name}
-                    badge={item.is_hard_rule ? "硬规则" : item.importance}
-                    text={item.description}
-                    onEdit={() => setEditWorld(item)}
-                  />
-                ))
+                worldItems.map((item: BibleWorldItem) => {
+                  const pending = worldPending?.by_item?.[item.id] ?? 0;
+                  return (
+                    <EditableItem
+                      key={item.id}
+                      title={item.name}
+                      badge={item.is_hard_rule ? "硬规则" : item.importance}
+                      extraBadge={
+                        pending > 0 ? (
+                          <Badge tone="violet">{pending} 项待审核</Badge>
+                        ) : null
+                      }
+                      text={item.description}
+                      onEdit={() => setEditWorld(item)}
+                    />
+                  );
+                })
               )}
             </CardContent>
           </Card>

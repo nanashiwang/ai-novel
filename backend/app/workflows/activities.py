@@ -1864,3 +1864,113 @@ ALL_ACTIVITIES = [
     write_chapter_scenes_for_full_novel,
     finalize_full_novel,
 ]
+
+
+# ---------------------------------------------------------------------------
+# Sprint 12-C: world / plot 演进推演 activities
+# ---------------------------------------------------------------------------
+# fire-and-forget：write_scene / rewrite_scene 完成后由 workflow 异步触发，
+# 失败 swallow + warn，绝不阻塞主链路。
+@activity.defn(name="extract_world_changes_from_scene")
+async def extract_world_changes_from_scene(payload: dict[str, Any]) -> dict[str, Any]:
+    """对单 scene 反推 world_item 字段变化，写 pending revision。
+
+    payload 必填字段：scene_id；可选：job_id（用于 model_call 关联）。
+    返回 {"pending_count": N, "considered_count": M}。任何异常都被吞掉，
+    workflow 不会因此失败。
+    """
+    from app.services.world_tracker.extract import (  # noqa: PLC0415
+        extract_world_changes_from_scene as _do,
+    )
+
+    scene_id = payload.get("scene_id")
+    job_id = payload.get("job_id")
+    if not scene_id:
+        return {"pending_count": 0, "skipped": True, "reason": "scene_id_missing"}
+
+    try:
+        async with _activity_session() as session:
+            scene = await SceneRepository(session).get(scene_id)
+            if not scene:
+                return {"pending_count": 0, "skipped": True, "reason": "scene_not_found"}
+            chapter = await ChapterRepository(session).get(
+                scene.chapter_id, organization_id=scene.organization_id
+            )
+            if not chapter:
+                return {"pending_count": 0, "skipped": True, "reason": "chapter_not_found"}
+            drafts = list(
+                await DraftVersionRepository(session).list(
+                    organization_id=scene.organization_id,
+                    project_id=scene.project_id,
+                    scene_id=scene.id,
+                    limit=1,
+                )
+            )
+            if not drafts:
+                return {"pending_count": 0, "skipped": True, "reason": "draft_missing"}
+            return await _do(
+                session,
+                organization_id=scene.organization_id,
+                project_id=scene.project_id,
+                job_id=job_id,
+                chapter=chapter,
+                scene=scene,
+                draft=drafts[0],
+            )
+    except Exception:  # noqa: BLE001
+        _logger.warning("extract_world_changes_activity_failed", exc_info=True)
+        return {"pending_count": 0, "error": "swallowed"}
+
+
+@activity.defn(name="extract_plot_thread_changes_from_scene")
+async def extract_plot_thread_changes_from_scene(payload: dict[str, Any]) -> dict[str, Any]:
+    """对单 scene 反推 plot_thread 字段变化，写 pending revision。"""
+    from app.services.plot_thread_tracker.extract import (  # noqa: PLC0415
+        extract_plot_thread_changes_from_scene as _do,
+    )
+
+    scene_id = payload.get("scene_id")
+    job_id = payload.get("job_id")
+    if not scene_id:
+        return {"pending_count": 0, "skipped": True, "reason": "scene_id_missing"}
+
+    try:
+        async with _activity_session() as session:
+            scene = await SceneRepository(session).get(scene_id)
+            if not scene:
+                return {"pending_count": 0, "skipped": True, "reason": "scene_not_found"}
+            chapter = await ChapterRepository(session).get(
+                scene.chapter_id, organization_id=scene.organization_id
+            )
+            if not chapter:
+                return {"pending_count": 0, "skipped": True, "reason": "chapter_not_found"}
+            drafts = list(
+                await DraftVersionRepository(session).list(
+                    organization_id=scene.organization_id,
+                    project_id=scene.project_id,
+                    scene_id=scene.id,
+                    limit=1,
+                )
+            )
+            if not drafts:
+                return {"pending_count": 0, "skipped": True, "reason": "draft_missing"}
+            return await _do(
+                session,
+                organization_id=scene.organization_id,
+                project_id=scene.project_id,
+                job_id=job_id,
+                chapter=chapter,
+                scene=scene,
+                draft=drafts[0],
+            )
+    except Exception:  # noqa: BLE001
+        _logger.warning("extract_plot_thread_changes_activity_failed", exc_info=True)
+        return {"pending_count": 0, "error": "swallowed"}
+
+
+ALL_ACTIVITIES.extend(
+    [
+        extract_world_changes_from_scene,
+        extract_plot_thread_changes_from_scene,
+    ]
+)

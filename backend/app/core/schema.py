@@ -322,6 +322,63 @@ _POSTGRES_SCHEMA_FIXES = [
       END IF;
     END $$;
     """,
+    # Sprint 12-C: 世界观条目 + 剧情线 revision 链
+    """
+    CREATE TABLE IF NOT EXISTS world_item_revisions (
+      id TEXT PRIMARY KEY,
+      organization_id TEXT NOT NULL,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      item_id TEXT NOT NULL REFERENCES world_items(id) ON DELETE CASCADE,
+      field TEXT NOT NULL,
+      old_value JSONB,
+      new_value JSONB,
+      reason TEXT NOT NULL DEFAULT '',
+      source TEXT NOT NULL DEFAULT 'user_edit',
+      scene_id TEXT,
+      status TEXT NOT NULL DEFAULT 'applied',
+      created_by TEXT,
+      applied_by TEXT,
+      applied_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    (
+        "CREATE INDEX IF NOT EXISTS ix_world_item_revisions_item_status "
+        "ON world_item_revisions(item_id, status, created_at)"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_world_item_revisions_project_status "
+        "ON world_item_revisions(project_id, status)"
+    ),
+    """
+    CREATE TABLE IF NOT EXISTS plot_thread_revisions (
+      id TEXT PRIMARY KEY,
+      organization_id TEXT NOT NULL,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      item_id TEXT NOT NULL REFERENCES plot_threads(id) ON DELETE CASCADE,
+      field TEXT NOT NULL,
+      old_value JSONB,
+      new_value JSONB,
+      reason TEXT NOT NULL DEFAULT '',
+      source TEXT NOT NULL DEFAULT 'user_edit',
+      scene_id TEXT,
+      status TEXT NOT NULL DEFAULT 'applied',
+      created_by TEXT,
+      applied_by TEXT,
+      applied_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    (
+        "CREATE INDEX IF NOT EXISTS ix_plot_thread_revisions_item_status "
+        "ON plot_thread_revisions(item_id, status, created_at)"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_plot_thread_revisions_project_status "
+        "ON plot_thread_revisions(project_id, status)"
+    ),
 ]
 
 

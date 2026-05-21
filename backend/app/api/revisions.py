@@ -156,8 +156,66 @@ def _public_row(row: Any, fields: set[str]) -> dict[str, Any]:
     return {field: getattr(row, field) for field in fields if hasattr(row, field)}
 
 
-def _filter_patch(patch: dict[str, Any], allowed: set[str]) -> dict[str, Any]:
-    return {key: value for key, value in (patch or {}).items() if key in allowed}
+_NULL_VALUE = object()
+
+
+def _drop_nulls(value: Any) -> Any:
+    if value is None:
+        return _NULL_VALUE
+    if isinstance(value, list):
+        cleaned_items = []
+        for item in value:
+            cleaned = _drop_nulls(item)
+            if cleaned is not _NULL_VALUE:
+                cleaned_items.append(cleaned)
+        return cleaned_items
+    if isinstance(value, dict):
+        cleaned_dict = {}
+        for key, item in value.items():
+            cleaned = _drop_nulls(item)
+            if cleaned is not _NULL_VALUE:
+                cleaned_dict[key] = cleaned
+        return cleaned_dict
+    return value
+
+
+def _filter_patch(patch: Any, allowed: set[str]) -> dict[str, Any]:
+    if not isinstance(patch, dict):
+        return {}
+    values: dict[str, Any] = {}
+    for key, value in patch.items():
+        if key not in allowed:
+            continue
+        cleaned = _drop_nulls(value)
+        if cleaned is _NULL_VALUE:
+            continue
+        values[key] = cleaned
+    return values
+
+
+def _require_effective_patch(values: dict[str, Any]) -> None:
+    if not values:
+        raise ConflictError(
+            "提案没有可应用的有效修改，请重新生成 AI 优化。",
+            code="revision_patch_empty",
+        )
+
+
+def _target_fields(target_type: Any) -> set[str] | None:
+    return {
+        "project_settings": PROJECT_FIELDS,
+        "story_bible": SPEC_FIELDS,
+        "character": CHARACTER_FIELDS,
+        "world_item": WORLD_ITEM_FIELDS,
+        "plot_thread": PLOT_THREAD_FIELDS,
+    }.get(str(target_type or ""))
+
+
+def _filter_patch_for_target(target_type: Any, patch: Any) -> dict[str, Any]:
+    fields = _target_fields(target_type)
+    if fields is None:
+        return {}
+    return _filter_patch(patch, fields)
 
 
 def _json_text(value: Any) -> str:
@@ -274,15 +332,13 @@ def _fallback_proposals_from_advice(
         SPEC_FIELDS,
     )
     if not story_patch:
-        story_patch = {
-            "continuity_rules": [
-                _join_text(
-                    item.get("core_adjustment"),
-                    item.get("application_notes"),
-                    item.get("long_form_value"),
-                )
-            ]
-        }
+        continuity_rule = _join_text(
+            item.get("core_adjustment"),
+            item.get("application_notes"),
+            item.get("long_form_value"),
+        )
+        if continuity_rule:
+            story_patch = {"continuity_rules": [continuity_rule]}
     if story_patch:
         proposals.append(
             RevisionProposalPayload(
@@ -430,8 +486,9 @@ def _normalize_proposals(
     for item in raw.get("proposals") or []:
         if not isinstance(item, dict):
             continue
-        patch = item.get("patch") if isinstance(item.get("patch"), dict) else {}
-        if not item.get("target_type") or not patch:
+        target_type = item.get("target_type")
+        patch = _filter_patch_for_target(target_type, item.get("patch"))
+        if not target_type or not patch:
             proposals.extend(
                 _fallback_proposals_from_advice(item, context=context or {})
             )
@@ -439,7 +496,7 @@ def _normalize_proposals(
         try:
             proposal = RevisionProposalPayload.model_validate(
                 {
-                    "target_type": item.get("target_type"),
+                    "target_type": target_type,
                     "target_id": item.get("target_id") or None,
                     "action": item.get("action") or "update",
                     "title": str(item.get("title") or "设定优化提案")[:200],
@@ -632,6 +689,7 @@ async def chat_revision(
 
 async def _apply_project_patch(project: Project, patch: dict[str, Any]) -> tuple[dict, dict, str]:
     values = _filter_patch(patch, PROJECT_FIELDS)
+    _require_effective_patch(values)
     before = _public_row(project, PROJECT_FIELDS | {"id"})
     for key, value in values.items():
         setattr(project, key, value)
@@ -649,6 +707,7 @@ async def _apply_spec_patch(
     repo = NovelSpecRepository(db)
     spec = await repo.get_by(organization_id=organization_id, project_id=project_id)
     values = _filter_patch(patch, SPEC_FIELDS)
+    _require_effective_patch(values)
     if spec is None:
         spec = await repo.create(organization_id=organization_id, project_id=project_id, **values)
         return {}, _public_row(spec, SPEC_FIELDS | {"id"}), spec.id
@@ -672,7 +731,10 @@ async def _apply_entity_patch(
     fields: set[str],
     defaults: dict[str, Any],
 ) -> tuple[dict, dict, str]:
-    values = {**defaults, **_filter_patch(patch, fields)}
+    patch_values = _filter_patch(patch, fields)
+    if action != "create":
+        _require_effective_patch(patch_values)
+    values = {**defaults, **patch_values}
     if action == "create":
         entity = await repo.create(
             organization_id=organization_id,
@@ -686,7 +748,7 @@ async def _apply_entity_patch(
     if not entity or entity.project_id != project_id:
         raise NotFoundError(f"{model_name}_not_found", code=f"{model_name}_not_found")
     before = _public_row(entity, fields | {"id"})
-    for key, value in _filter_patch(patch, fields).items():
+    for key, value in patch_values.items():
         setattr(entity, key, value)
     after = _public_row(entity, fields | {"id"})
     return before, after, entity.id
@@ -706,6 +768,7 @@ async def _apply_character_patch(
     values = _filter_patch(patch, CHARACTER_FIELDS)
     repo = CharacterRepository(db)
     if action == "create":
+        _require_effective_patch(values)
         create_values = {"name": "未命名角色", **values}
         entity = await repo.create(
             organization_id=organization_id,
@@ -719,6 +782,7 @@ async def _apply_character_patch(
     if not entity or entity.project_id != project_id:
         raise NotFoundError("character_not_found", code="character_not_found")
 
+    _require_effective_patch(values)
     before = _public_row(entity, CHARACTER_FIELDS | {"id"})
     for field, value in values.items():
         revision = await character_tracker.record_copilot_proposal(

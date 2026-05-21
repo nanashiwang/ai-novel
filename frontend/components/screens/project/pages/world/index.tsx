@@ -7,8 +7,10 @@ import { useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Modal } from "@/components/ui/modal";
 import { ProjectHeader } from "@/components/screens/project/project-frame";
-import { worldItemsApi } from "@/lib/api";
+import { WorldItemRevisionHistory } from "@/components/screens/project/pages/bible/world-item-revision-history";
+import { type WorldItem, worldItemRevisionsApi, worldItemsApi } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { useScopedKey } from "@/lib/use-scoped-key";
 
@@ -67,9 +69,17 @@ function worldTypeLabel(type: string) {
 
 export function WorldPage({ projectId }: { projectId: string }) {
   const [activeFilter, setActiveFilter] = useState<WorldFilter>("all");
+  const [detailItem, setDetailItem] = useState<WorldItem | null>(null);
   const { data: items = [] } = useQuery({
     queryKey: useScopedKey("project", projectId, "world-items"),
     queryFn: () => worldItemsApi.list(projectId),
+  });
+  // Sprint 12-C: 拉取每个 world_item 的 pending 数，用于卡片右上角角标。
+  // 失败静默，无 pending 时空对象不显示徽章。
+  const { data: pending } = useQuery({
+    queryKey: useScopedKey("project", projectId, "world-item-pending"),
+    queryFn: () => worldItemRevisionsApi.pendingCount(projectId),
+    refetchInterval: 30_000,
   });
   const filteredItems = useMemo(
     () =>
@@ -137,6 +147,14 @@ export function WorldPage({ projectId }: { projectId: string }) {
         </CardContent>
       </Card>
 
+      {pending && pending.total > 0 ? (
+        <Card>
+          <CardContent className="p-4 text-sm text-violet-700">
+            目前有 <strong>{pending.total}</strong> 项 AI 推演的设定变更待审核。点开对应卡片可查看与处理。
+          </CardContent>
+        </Card>
+      ) : null}
+
       {items.length === 0 ? (
         <Card>
           <CardContent className="p-12 text-center text-slate-500">
@@ -151,19 +169,55 @@ export function WorldPage({ projectId }: { projectId: string }) {
         </Card>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          {filteredItems.map((item) => (
-            <Card key={item.id}>
-              <CardContent>
-                <Badge tone="blue">{worldTypeLabel(item.type)}</Badge>
-                <h3 className="mt-3 text-lg font-black text-slate-950">{item.name}</h3>
-                <p className="mt-2 text-sm leading-6 text-slate-500">
-                  {item.description.slice(0, 120)}
-                </p>
-              </CardContent>
-            </Card>
-          ))}
+          {filteredItems.map((item) => {
+            const pendingCount = pending?.by_item?.[item.id] ?? 0;
+            return (
+              <Card
+                key={item.id}
+                onClick={() => setDetailItem(item)}
+                className="cursor-pointer transition hover:-translate-y-0.5 hover:shadow-md"
+              >
+                <CardContent>
+                  <div className="flex items-start justify-between gap-2">
+                    <Badge tone="blue">{worldTypeLabel(item.type)}</Badge>
+                    {pendingCount > 0 ? (
+                      <Badge tone="violet">{pendingCount} 项待审核</Badge>
+                    ) : null}
+                  </div>
+                  <h3 className="mt-3 text-lg font-black text-slate-950">{item.name}</h3>
+                  <p className="mt-2 text-sm leading-6 text-slate-500">
+                    {item.description.slice(0, 120)}
+                  </p>
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       )}
+
+      {detailItem ? (
+        <Modal
+          title={detailItem.name || worldTypeLabel(detailItem.type)}
+          onClose={() => setDetailItem(null)}
+        >
+          <div className="space-y-4">
+            <div className="flex flex-wrap gap-2 text-xs">
+              <Badge tone="blue">{worldTypeLabel(detailItem.type)}</Badge>
+              {detailItem.is_hard_rule ? <Badge tone="violet">硬规则</Badge> : null}
+              {detailItem.importance ? <Badge tone="slate">{detailItem.importance}</Badge> : null}
+            </div>
+            <p className="whitespace-pre-wrap text-sm leading-6 text-slate-700">
+              {detailItem.description || "暂无描述"}
+            </p>
+            <div className="border-t border-slate-200 pt-3">
+              <p className="mb-2 text-sm font-semibold text-slate-950">历史版本</p>
+              <div className="max-h-[50vh] overflow-y-auto">
+                <WorldItemRevisionHistory projectId={projectId} itemId={detailItem.id} />
+              </div>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
     </div>
   );
 }

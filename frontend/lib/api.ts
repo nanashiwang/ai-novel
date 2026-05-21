@@ -744,6 +744,107 @@ export const plotThreadsApi = {
   remove: (projectId: string, threadId: string) =>
     http.delete<void>(`/projects/${projectId}/plot-threads/${threadId}`),
 };
+
+// ----- Sprint 12-C: 世界观条目 + 剧情线版本链 -----
+// 后端 backend/app/api/world_item_revisions.py / plot_thread_revisions.py
+// 字段与 character_revision 同构，复用同一套类型签名。
+
+/** revision 来源：用户手动编辑 / AI 设定共创 / AI 从 scene 反推。 */
+export type RevisionSource = "user_edit" | "copilot" | "ai_inferred";
+/** revision 状态机：pending → applied/rejected/superseded。 */
+export type RevisionStatus = "applied" | "pending" | "rejected" | "superseded";
+
+export type WorldItemRevision = {
+  id: string;
+  organization_id: string;
+  project_id: string;
+  item_id: string;
+  field: string;
+  old_value: unknown;
+  new_value: unknown;
+  reason: string;
+  source: RevisionSource;
+  scene_id: string | null;
+  status: RevisionStatus;
+  created_by: string | null;
+  applied_by: string | null;
+  applied_at: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type PlotThreadRevision = {
+  id: string;
+  organization_id: string;
+  project_id: string;
+  item_id: string;
+  field: string;
+  old_value: unknown;
+  new_value: unknown;
+  reason: string;
+  source: RevisionSource;
+  scene_id: string | null;
+  status: RevisionStatus;
+  created_by: string | null;
+  applied_by: string | null;
+  applied_at: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type RevisionPendingCount = {
+  total: number;
+  by_item: Record<string, number>;
+};
+
+export const worldItemRevisionsApi = {
+  list: (projectId: string, itemId: string, params?: { status?: string }) =>
+    http.get<WorldItemRevision[]>(
+      `/projects/${projectId}/world-items/${itemId}/revisions`,
+      params,
+    ),
+  apply: (projectId: string, itemId: string, revisionId: string) =>
+    http.post<WorldItemRevision>(
+      `/projects/${projectId}/world-items/${itemId}/revisions/${revisionId}/apply`,
+    ),
+  reject: (projectId: string, itemId: string, revisionId: string) =>
+    http.post<WorldItemRevision>(
+      `/projects/${projectId}/world-items/${itemId}/revisions/${revisionId}/reject`,
+    ),
+  rollback: (projectId: string, itemId: string, revisionId: string) =>
+    http.post<WorldItemRevision>(
+      `/projects/${projectId}/world-items/${itemId}/revisions/${revisionId}/rollback`,
+    ),
+  pendingCount: (projectId: string) =>
+    http.get<RevisionPendingCount>(
+      `/projects/${projectId}/world-items/pending-count`,
+    ),
+};
+
+export const plotThreadRevisionsApi = {
+  list: (projectId: string, threadId: string, params?: { status?: string }) =>
+    http.get<PlotThreadRevision[]>(
+      `/projects/${projectId}/plot-threads/${threadId}/revisions`,
+      params,
+    ),
+  apply: (projectId: string, threadId: string, revisionId: string) =>
+    http.post<PlotThreadRevision>(
+      `/projects/${projectId}/plot-threads/${threadId}/revisions/${revisionId}/apply`,
+    ),
+  reject: (projectId: string, threadId: string, revisionId: string) =>
+    http.post<PlotThreadRevision>(
+      `/projects/${projectId}/plot-threads/${threadId}/revisions/${revisionId}/reject`,
+    ),
+  rollback: (projectId: string, threadId: string, revisionId: string) =>
+    http.post<PlotThreadRevision>(
+      `/projects/${projectId}/plot-threads/${threadId}/revisions/${revisionId}/rollback`,
+    ),
+  pendingCount: (projectId: string) =>
+    http.get<RevisionPendingCount>(
+      `/projects/${projectId}/plot-threads/pending-count`,
+    ),
+};
+
 export const memoryApi = {
   list: (
     projectId: string,

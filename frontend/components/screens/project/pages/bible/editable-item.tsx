@@ -8,10 +8,10 @@ import { Badge } from "@/components/ui/badge";
 export type EditableItemProps = {
   title: string;
   badge?: string;
+  /** Sprint 12-C: 额外角标（如"N 项待审"），在 badge 右侧并排显示。 */
+  extraBadge?: ReactNode;
   text: string;
   onEdit: () => void;
-  /** 额外的 badge，渲染在 role badge 右侧。用于人物卡显示"N 项待审核"等。 */
-  extraBadge?: ReactNode;
 };
 
 export function EditableItem({ title, badge, text, onEdit, extraBadge }: EditableItemProps) {

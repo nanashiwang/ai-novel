@@ -21,6 +21,7 @@ from app.models.model_call import ModelCall
 from app.models.organization import Organization, OrganizationMember
 from app.models.plan import Plan, PlanFeature
 from app.models.plot_thread import PlotThread
+from app.models.plot_thread_revision import PlotThreadRevision
 from app.models.project import NovelSpec, Project
 from app.models.quota import QuotaBalance, QuotaReservation
 from app.models.revision import (
@@ -34,6 +35,7 @@ from app.models.system_setting import SystemSetting
 from app.models.usage import UsageEvent
 from app.models.user import User
 from app.models.world_item import WorldItem
+from app.models.world_item_revision import WorldItemRevision
 from app.repositories.base import BaseRepository
 
 
@@ -110,6 +112,16 @@ class CharacterRevisionRepository(BaseRepository[CharacterRevision]):
 class WorldItemRepository(BaseRepository[WorldItem]):
     model = WorldItem
     id_prefix = "world"
+
+
+class WorldItemRevisionRepository(BaseRepository[WorldItemRevision]):
+    model = WorldItemRevision
+    id_prefix = "wir"
+
+
+class PlotThreadRevisionRepository(BaseRepository[PlotThreadRevision]):
+    model = PlotThreadRevision
+    id_prefix = "ptr"
 
 
 class MemoryRepository(BaseRepository[MemoryEntry]):
@@ -225,6 +237,7 @@ __all__ = [
     "PlanFeatureRepository",
     "PlanRepository",
     "PlotThreadRepository",
+    "PlotThreadRevisionRepository",
     "ProjectRepository",
     "QuotaBalanceRepository",
     "QuotaReservationRepository",
@@ -238,4 +251,5 @@ __all__ = [
     "UserRepository",
     "VolumeRepository",
     "WorldItemRepository",
+    "WorldItemRevisionRepository",
 ]

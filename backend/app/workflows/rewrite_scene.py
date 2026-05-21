@@ -14,6 +14,8 @@ from temporalio import workflow
 with workflow.unsafe.imports_passed_through():
     from app.workflows.activities import (
         extract_character_state_from_scene,
+        extract_plot_thread_changes_from_scene,
+        extract_world_changes_from_scene,
         mark_job_status,
         rewrite_scene,
     )
@@ -60,6 +62,29 @@ class RewriteSceneWorkflow:
                 start_to_close_timeout=timedelta(minutes=1),
                 retry_policy=STATUS_ACTIVITY_RETRY,
             )
+            # Sprint 12-C: fire-and-forget — 主流程已成功；下列 activity 失败也
+            # 不应让 workflow 报错。activity 自身把异常吞掉，这里仅控制 timeout。
+            scene_id = (result or {}).get("scene_id")
+            if scene_id:
+                fan_out_payload = {"scene_id": scene_id, "job_id": job["id"]}
+                try:
+                    await workflow.execute_activity(
+                        extract_world_changes_from_scene,
+                        args=[fan_out_payload],
+                        start_to_close_timeout=timedelta(minutes=5),
+                        retry_policy=STATUS_ACTIVITY_RETRY,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    await workflow.execute_activity(
+                        extract_plot_thread_changes_from_scene,
+                        args=[fan_out_payload],
+                        start_to_close_timeout=timedelta(minutes=5),
+                        retry_policy=STATUS_ACTIVITY_RETRY,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
             return {"job_id": job["id"], "status": "succeeded", "result": result}
         except Exception as exc:  # noqa: BLE001
             await workflow.execute_activity(

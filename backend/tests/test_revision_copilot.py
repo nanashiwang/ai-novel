@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import select
 
-from app.models import Character, Project, RevisionAppliedChange
+from app.models import Character, Project, RevisionAppliedChange, RevisionProposal, RevisionSession
 
 
 async def _register_with_project(client, email: str) -> tuple[str, str]:
@@ -175,3 +175,104 @@ async def test_revision_chat_converts_advice_shape_to_applyable_proposals(
         "plot_thread",
     }
     assert all(p["patch"] for p in proposals)
+
+
+@pytest.mark.asyncio
+async def test_revision_chat_drops_all_null_standard_patch(client):
+    from app.services.model_gateway.service import model_gateway
+
+    class NullPatchProvider:
+        async def complete_json(self, **_: object) -> dict:
+            return {
+                "reply": "已生成优化。",
+                "proposals": [
+                    {
+                        "target_type": "story_bible",
+                        "target_id": None,
+                        "action": "update",
+                        "title": "空修改",
+                        "patch": {
+                            "premise": None,
+                            "theme": None,
+                            "genre": None,
+                            "tone": None,
+                            "target_reader": None,
+                            "narrative_pov": None,
+                            "style_guide": None,
+                            "constraints": None,
+                            "continuity_rules": None,
+                        },
+                        "reason": "模型没有给出真实修改。",
+                        "impact": ["story_bible"],
+                    }
+                ],
+            }
+
+        async def complete_text(self, **_: object) -> str:
+            return ""
+
+    token, project_id = await _register_with_project(client, "revision-null@example.com")
+    model_gateway.set_provider(NullPatchProvider())
+
+    chat = await client.post(
+        f"/api/v1/projects/{project_id}/revisions/chat",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"message": "请优化故事圣经。"},
+    )
+
+    assert chat.status_code == 200, chat.text
+    assert chat.json()["proposals"] == []
+
+
+@pytest.mark.asyncio
+async def test_apply_null_patch_proposal_returns_readable_conflict(client, db_session):
+    token, project_id = await _register_with_project(client, "revision-null-apply@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    project = await db_session.get(Project, project_id)
+    assert project is not None
+
+    session = RevisionSession(
+        id="rev_session_null_patch",
+        organization_id=project.organization_id,
+        project_id=project_id,
+        created_by=project.created_by,
+        scope="story_bible",
+        title="空修改测试",
+        status="active",
+    )
+    proposal = RevisionProposal(
+        id="rev_prop_null_patch",
+        organization_id=project.organization_id,
+        session_id=session.id,
+        project_id=project_id,
+        target_type="story_bible",
+        target_id=None,
+        action="update",
+        title="空修改",
+        reason="历史坏数据",
+        impact=["story_bible"],
+        patch={
+            "premise": None,
+            "theme": None,
+            "genre": None,
+            "tone": None,
+            "target_reader": None,
+            "narrative_pov": None,
+            "style_guide": None,
+            "constraints": None,
+            "continuity_rules": None,
+        },
+        status="pending",
+    )
+    db_session.add_all([session, proposal])
+    await db_session.commit()
+
+    applied = await client.post(
+        f"/api/v1/projects/{project_id}/revisions/proposals/{proposal.id}/apply",
+        headers=headers,
+    )
+
+    assert applied.status_code == 409, applied.text
+    error = applied.json()["error"]
+    assert error["code"] == "revision_patch_empty"
+    assert "重新生成 AI 优化" in error["message"]

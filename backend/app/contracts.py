@@ -121,6 +121,8 @@ ERROR_CODES: frozenset[str] = frozenset(
         "revision_proposal_already_applied",
         "revision_action_not_supported",
         "revision_target_not_supported",
+        "world_item_revision_not_found",
+        "plot_thread_revision_not_found",
         # 套餐 / 组织管理
         "plan_not_found",
         "plan_inactive",
