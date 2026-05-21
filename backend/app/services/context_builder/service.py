@@ -222,11 +222,16 @@ class ContextBuilder:
 
         task 段携带当前 scene plan 全字段；recent_summary 额外拼接前一场景结尾。
         Sprint 3 提供接口，Sprint 4 真正消费。
+
+        Sprint 14-C6：如果 scene.pov_character_name 非空，则把该名字传入
+        characters / character_actions 两段，对非 POV 角色隐藏 secret /
+        motivation / arc / current_state，并只展示其与 POV 已知的关系。
         """
         organization_id = project.organization_id
         project_id = project.id
 
         task_text = self._fmt_scene_task(project, chapter, scene, previous_excerpt)
+        pov_name = (scene.pov_character_name or "").strip() or None
 
         segments_data: list[tuple[SegmentLabel, str, bool]] = [
             ("hard_constraints", self._fmt_hard_constraints(spec), True),
@@ -238,6 +243,7 @@ class ContextBuilder:
                     organization_id,
                     project_id,
                     focus_names=list(scene.characters or []),
+                    pov_character_name=pov_name,
                 ),
                 True,
             ),
@@ -248,6 +254,7 @@ class ContextBuilder:
                     organization_id,
                     project_id,
                     focus_names=list(scene.characters or []),
+                    pov_character_name=pov_name,
                 ),
                 True,
             ),
@@ -363,6 +370,8 @@ class ContextBuilder:
         scene: Scene,
         previous_excerpt: str,
     ) -> str:
+        pov_name = (getattr(scene, "pov_character_name", None) or "").strip()
+        pov_line = f"POV 视角主角：{pov_name}\n" if pov_name else ""
         return (
             f"项目：{project.title}\n"
             f"章节：第 {chapter.chapter_index} 章《{chapter.title}》\n"
@@ -373,6 +382,7 @@ class ContextBuilder:
             f"当前场景 #{scene.scene_index}：{scene.title}\n"
             f"时间/地点：{scene.time_marker} / {scene.location}\n"
             f"出场人物：{', '.join(scene.characters or [])}\n"
+            f"{pov_line}"
             f"场景目的：{scene.scene_purpose}\n"
             f"入场状态：{scene.entry_state}\n"
             f"退场状态：{scene.exit_state}\n"
@@ -396,7 +406,17 @@ class ContextBuilder:
         organization_id: str,
         project_id: str,
         focus_names: list[str] | None = None,
+        *,
+        pov_character_name: str | None = None,
     ) -> str:
+        """渲染人物段。
+
+        Sprint 14-C6：当 pov_character_name 非空时，仅 POV 角色展示完整字段；
+        其它角色只展示 description + role，并附"POV 已知的关系
+        （`character.relationships.get(pov_name)`）"。secret / motivation /
+        arc / current_state 这些属于角色"内里"的字段对非 POV 一律隐藏，
+        避免在 prompt 阶段就把第三人称全知信息泄给模型。
+        """
         repo = CharacterRepository(session)
         rows = list(
             await repo.list(
@@ -412,19 +432,34 @@ class ContextBuilder:
             focused = [r for r in rows if r.name in focus_set]
             # 没匹配到时回落到全量，避免误把"所有人都不相关"喂给模型
             rows = focused or rows
+        pov = (pov_character_name or "").strip() or None
         parts: list[str] = []
         for ch in rows:
-            chunk = f"{ch.name}（{ch.role or '配角'}）：{ch.description or '—'}"
-            if ch.personality:
-                chunk += f" 性格：{ch.personality}"
-            if ch.motivation:
-                chunk += f" 动机：{ch.motivation}"
-            if ch.secret:
-                chunk += f" 秘密：{ch.secret}"
-            if ch.arc:
-                chunk += f" 弧光：{ch.arc}"
-            if ch.current_state:
-                chunk += f" 当前状态：{ch.current_state}"
+            is_pov = pov is not None and ch.name == pov
+            if pov is None or is_pov:
+                # 无 POV 锚定 → 退回原"全展示"行为；POV 自身也展示全字段
+                chunk = f"{ch.name}（{ch.role or '配角'}）：{ch.description or '—'}"
+                if ch.personality:
+                    chunk += f" 性格：{ch.personality}"
+                if ch.motivation:
+                    chunk += f" 动机：{ch.motivation}"
+                if ch.secret:
+                    chunk += f" 秘密：{ch.secret}"
+                if ch.arc:
+                    chunk += f" 弧光：{ch.arc}"
+                if ch.current_state:
+                    chunk += f" 当前状态：{ch.current_state}"
+                if is_pov:
+                    chunk = "[POV] " + chunk
+            else:
+                # 非 POV 角色：只暴露外显信息 + POV 已知的双边关系
+                chunk = f"{ch.name}（{ch.role or '配角'}）：{ch.description or '—'}"
+                rels = ch.relationships or {}
+                known = None
+                if isinstance(rels, dict) and pov in rels:
+                    known = rels[pov]
+                if known:
+                    chunk += f" 与 {pov} 的已知关系：{known}"
             parts.append(chunk)
         return "\n".join(parts)
 
@@ -437,11 +472,17 @@ class ContextBuilder:
         *,
         limit_per_character: int = 5,
         excerpt_chars: int = 160,
+        pov_character_name: str | None = None,
     ) -> str:
         """按角色召回最近 K 场出场的简短动作摘要。
 
         Sprint 10 Phase D：在 scene 写作 prompt 中注入「该角色最近做了什么」，
         减少长篇生成中"人物背叛设定 / 能力凭空消失"。
+
+        Sprint 14-C6：当 pov_character_name 非空时，标题区分"POV 自己最近
+        做过什么"与"其它已出场角色的外显行为"。draft 摘要本就是写出来的
+        正文片段，全部都是外显信息，因此摘要内容本身无须二次过滤；只在
+        渲染层面给 POV 加 [POV] 标记，提示模型注意视角归属。
 
         策略：
         - 只对 focus_names 内的角色查询（通常 = scene.characters）
@@ -504,12 +545,14 @@ class ContextBuilder:
                     per_character[name].append(entry)
 
         # 渲染
+        pov = (pov_character_name or "").strip() or None
         lines: list[str] = []
         for name in focus_set:
             entries = per_character.get(name) or []
             if not entries:
                 continue
-            lines.append(f"【{name}】最近 {len(entries)} 场动作：")
+            tag = "[POV] " if pov is not None and name == pov else ""
+            lines.append(f"{tag}【{name}】最近 {len(entries)} 场动作：")
             lines.extend(entries)
         return "\n".join(lines)
 
