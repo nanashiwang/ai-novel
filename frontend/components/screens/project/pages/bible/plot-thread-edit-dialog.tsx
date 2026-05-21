@@ -15,6 +15,8 @@ import {
 } from "@/lib/api";
 import { ApiError } from "@/lib/http";
 
+import { PlotThreadRevisionHistory } from "./plot-thread-revision-history";
+
 export type PlotThreadEditDialogProps = {
   projectId: string;
   thread: BiblePlotThread | null;
@@ -28,6 +30,7 @@ export function PlotThreadEditDialog({
   onClose,
   onSaved,
 }: PlotThreadEditDialogProps) {
+  const [tab, setTab] = useState<"edit" | "history">("edit");
   const [form, setForm] = useState<PlotThreadPayload>({
     title: thread?.title ?? "",
     thread_type: thread?.thread_type ?? "main",
@@ -60,61 +63,94 @@ export function PlotThreadEditDialog({
     setForm((p) => ({ ...p, [k]: v }));
   return (
     <Modal title={thread ? "编辑剧情线" : "新增剧情线"} onClose={onClose}>
-      <div className="space-y-3">
-        <TextField label="名称" value={form.title} onChange={(v) => set("title", v)} />
-        <div className="grid gap-3 md:grid-cols-2">
-          <label className="block text-sm font-semibold text-slate-700">
-            类型
-            <select
-              value={form.thread_type ?? "main"}
-              onChange={(e) => set("thread_type", e.target.value)}
-              className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
-            >
-              <option value="main">main 主线</option>
-              <option value="sub">sub 副线</option>
-              <option value="foreshadow">foreshadow 伏笔</option>
-              <option value="background">background 背景</option>
-            </select>
-          </label>
-          <label className="block text-sm font-semibold text-slate-700">
-            状态
-            <select
-              value={form.status ?? "open"}
-              onChange={(e) => set("status", e.target.value)}
-              className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
-            >
-              <option value="open">open 进行中</option>
-              <option value="closed">closed 已闭合</option>
-              <option value="paused">paused 暂停</option>
-            </select>
-          </label>
+      {thread ? (
+        <div className="mb-3 flex gap-2 border-b border-slate-200 text-sm">
+          <button
+            type="button"
+            onClick={() => setTab("edit")}
+            className={`-mb-px border-b-2 px-3 py-2 font-semibold transition ${
+              tab === "edit"
+                ? "border-slate-950 text-slate-950"
+                : "border-transparent text-slate-500 hover:text-slate-800"
+            }`}
+          >
+            编辑
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("history")}
+            className={`-mb-px border-b-2 px-3 py-2 font-semibold transition ${
+              tab === "history"
+                ? "border-slate-950 text-slate-950"
+                : "border-transparent text-slate-500 hover:text-slate-800"
+            }`}
+          >
+            历史版本
+          </button>
         </div>
-        <TextField label="描述" rows={4} value={form.description ?? ""} onChange={(v) => set("description", v)} />
-        <div className="flex justify-between gap-2 pt-2">
-          {thread ? (
-            <Button
-              variant="ghost"
-              onClick={() => {
-                if (window.confirm(`确认删除剧情线「${thread.title}」？`)) remove.mutate();
-              }}
-              disabled={remove.isPending}
-              className="text-red-600 hover:bg-red-50"
-            >
-              <Trash2 className="size-4" /> 删除
-            </Button>
-          ) : (
-            <span />
-          )}
-          <div className="flex gap-2">
-            <Button variant="ghost" onClick={onClose}>
-              取消
-            </Button>
-            <Button onClick={() => save.mutate()} disabled={save.isPending || !form.title.trim()}>
-              {save.isPending ? "保存中…" : "保存"}
-            </Button>
+      ) : null}
+
+      {tab === "edit" || !thread ? (
+        <div className="space-y-3">
+          <TextField label="名称" value={form.title} onChange={(v) => set("title", v)} />
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="block text-sm font-semibold text-slate-700">
+              类型
+              <select
+                value={form.thread_type ?? "main"}
+                onChange={(e) => set("thread_type", e.target.value)}
+                className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
+              >
+                <option value="main">main 主线</option>
+                <option value="sub">sub 副线</option>
+                <option value="foreshadow">foreshadow 伏笔</option>
+                <option value="background">background 背景</option>
+              </select>
+            </label>
+            <label className="block text-sm font-semibold text-slate-700">
+              状态
+              <select
+                value={form.status ?? "open"}
+                onChange={(e) => set("status", e.target.value)}
+                className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
+              >
+                <option value="open">open 进行中</option>
+                <option value="closed">closed 已闭合</option>
+                <option value="paused">paused 暂停</option>
+              </select>
+            </label>
+          </div>
+          <TextField label="描述" rows={4} value={form.description ?? ""} onChange={(v) => set("description", v)} />
+          <div className="flex justify-between gap-2 pt-2">
+            {thread ? (
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  if (window.confirm(`确认删除剧情线「${thread.title}」？`)) remove.mutate();
+                }}
+                disabled={remove.isPending}
+                className="text-red-600 hover:bg-red-50"
+              >
+                <Trash2 className="size-4" /> 删除
+              </Button>
+            ) : (
+              <span />
+            )}
+            <div className="flex gap-2">
+              <Button variant="ghost" onClick={onClose}>
+                取消
+              </Button>
+              <Button onClick={() => save.mutate()} disabled={save.isPending || !form.title.trim()}>
+                {save.isPending ? "保存中…" : "保存"}
+              </Button>
+            </div>
           </div>
         </div>
-      </div>
+      ) : (
+        <div className="max-h-[60vh] overflow-y-auto">
+          <PlotThreadRevisionHistory projectId={projectId} threadId={thread.id} />
+        </div>
+      )}
     </Modal>
   );
 }

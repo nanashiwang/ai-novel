@@ -15,6 +15,8 @@ import {
 } from "@/lib/api";
 import { ApiError } from "@/lib/http";
 
+import { WorldItemRevisionHistory } from "./world-item-revision-history";
+
 export type WorldItemEditDialogProps = {
   projectId: string;
   item: BibleWorldItem | null;
@@ -28,6 +30,7 @@ export function WorldItemEditDialog({
   onClose,
   onSaved,
 }: WorldItemEditDialogProps) {
+  const [tab, setTab] = useState<"edit" | "history">("edit");
   const [form, setForm] = useState<WorldItemPayload>({
     type: item?.type ?? "rule",
     name: item?.name ?? "",
@@ -61,62 +64,95 @@ export function WorldItemEditDialog({
     setForm((p) => ({ ...p, [k]: v }));
   return (
     <Modal title={item ? "编辑世界观条目" : "新增世界观条目"} onClose={onClose}>
-      <div className="space-y-3">
-        <div className="grid gap-3 md:grid-cols-2">
-          <TextField label="类型（rule 规则 / location 地点 / faction 势力）" value={form.type} onChange={(v) => set("type", v)} />
-          <TextField label="名称" value={form.name} onChange={(v) => set("name", v)} />
+      {item ? (
+        <div className="mb-3 flex gap-2 border-b border-slate-200 text-sm">
+          <button
+            type="button"
+            onClick={() => setTab("edit")}
+            className={`-mb-px border-b-2 px-3 py-2 font-semibold transition ${
+              tab === "edit"
+                ? "border-slate-950 text-slate-950"
+                : "border-transparent text-slate-500 hover:text-slate-800"
+            }`}
+          >
+            编辑
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("history")}
+            className={`-mb-px border-b-2 px-3 py-2 font-semibold transition ${
+              tab === "history"
+                ? "border-slate-950 text-slate-950"
+                : "border-transparent text-slate-500 hover:text-slate-800"
+            }`}
+          >
+            历史版本
+          </button>
         </div>
-        <TextField label="描述" rows={5} value={form.description ?? ""} onChange={(v) => set("description", v)} />
-        <div className="grid gap-3 md:grid-cols-2">
-          <label className="block text-sm font-semibold text-slate-700">
-            重要性
-            <select
-              value={form.importance ?? "medium"}
-              onChange={(e) => set("importance", e.target.value)}
-              className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
-            >
-              <option value="low">low</option>
-              <option value="medium">medium</option>
-              <option value="high">high</option>
-            </select>
-          </label>
-          <label className="mt-6 flex items-center gap-2 text-sm font-semibold text-slate-700">
-            <input
-              type="checkbox"
-              checked={form.is_hard_rule ?? false}
-              onChange={(e) => set("is_hard_rule", e.target.checked)}
-            />
-            硬规则（违反会触发审稿）
-          </label>
-        </div>
-        <div className="flex justify-between gap-2 pt-2">
-          {item ? (
-            <Button
-              variant="ghost"
-              onClick={() => {
-                if (window.confirm(`确认删除世界观条目「${item.name}」？`)) remove.mutate();
-              }}
-              disabled={remove.isPending}
-              className="text-red-600 hover:bg-red-50"
-            >
-              <Trash2 className="size-4" /> 删除
-            </Button>
-          ) : (
-            <span />
-          )}
-          <div className="flex gap-2">
-            <Button variant="ghost" onClick={onClose}>
-              取消
-            </Button>
-            <Button
-              onClick={() => save.mutate()}
-              disabled={save.isPending || !form.name.trim() || !form.type.trim()}
-            >
-              {save.isPending ? "保存中…" : "保存"}
-            </Button>
+      ) : null}
+
+      {tab === "edit" || !item ? (
+        <div className="space-y-3">
+          <div className="grid gap-3 md:grid-cols-2">
+            <TextField label="类型（rule 规则 / location 地点 / faction 势力）" value={form.type} onChange={(v) => set("type", v)} />
+            <TextField label="名称" value={form.name} onChange={(v) => set("name", v)} />
+          </div>
+          <TextField label="描述" rows={5} value={form.description ?? ""} onChange={(v) => set("description", v)} />
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="block text-sm font-semibold text-slate-700">
+              重要性
+              <select
+                value={form.importance ?? "medium"}
+                onChange={(e) => set("importance", e.target.value)}
+                className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
+              >
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+              </select>
+            </label>
+            <label className="mt-6 flex items-center gap-2 text-sm font-semibold text-slate-700">
+              <input
+                type="checkbox"
+                checked={form.is_hard_rule ?? false}
+                onChange={(e) => set("is_hard_rule", e.target.checked)}
+              />
+              硬规则（违反会触发审稿）
+            </label>
+          </div>
+          <div className="flex justify-between gap-2 pt-2">
+            {item ? (
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  if (window.confirm(`确认删除世界观条目「${item.name}」？`)) remove.mutate();
+                }}
+                disabled={remove.isPending}
+                className="text-red-600 hover:bg-red-50"
+              >
+                <Trash2 className="size-4" /> 删除
+              </Button>
+            ) : (
+              <span />
+            )}
+            <div className="flex gap-2">
+              <Button variant="ghost" onClick={onClose}>
+                取消
+              </Button>
+              <Button
+                onClick={() => save.mutate()}
+                disabled={save.isPending || !form.name.trim() || !form.type.trim()}
+              >
+                {save.isPending ? "保存中…" : "保存"}
+              </Button>
+            </div>
           </div>
         </div>
-      </div>
+      ) : (
+        <div className="max-h-[60vh] overflow-y-auto">
+          <WorldItemRevisionHistory projectId={projectId} itemId={item.id} />
+        </div>
+      )}
     </Modal>
   );
 }

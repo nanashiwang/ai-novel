@@ -1,23 +1,27 @@
 "use client";
 
 import { Pencil } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 
 export type EditableItemProps = {
   title: string;
   badge?: string;
+  /** Sprint 12-C: 额外角标（如"N 项待审"），在 badge 右侧并排显示。 */
+  extraBadge?: ReactNode;
   text: string;
   onEdit: () => void;
 };
 
-export function EditableItem({ title, badge, text, onEdit }: EditableItemProps) {
+export function EditableItem({ title, badge, extraBadge, text, onEdit }: EditableItemProps) {
   return (
     <div className="group relative rounded-2xl border border-slate-200 bg-white p-4">
       <div className="flex items-start justify-between gap-3">
         <p className="font-bold text-slate-950">{title}</p>
         <div className="flex items-center gap-2">
           {badge ? <Badge tone="slate">{badge}</Badge> : null}
+          {extraBadge}
           <button
             type="button"
             onClick={onEdit}
