@@ -1,0 +1,86 @@
+{
+  "title": "AI Novel · Backend Overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Jobs · 5m rate（按 status）",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(novelflow_jobs_created_total[5m]))",
+          "legendFormat": "{{ status }}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Job failure ratio（5m）",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "expr": "sum(rate(novelflow_jobs_created_total{status=\"failed\"}[5m])) / clamp_min(sum(rate(novelflow_jobs_created_total[5m])), 1e-6)",
+          "legendFormat": "failed/total"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "percentunit", "max": 1, "min": 0 },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Model call latency p95（ms, 按 task_type）",
+      "gridPos": { "x": 0, "y": 6, "w": 24, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, task_type) (rate(novelflow_model_call_latency_ms_bucket[5m])))",
+          "legendFormat": "{{ task_type }}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "API duration p95（ms, 按 route）",
+      "gridPos": { "x": 0, "y": 14, "w": 24, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(novelflow_api_request_duration_ms_bucket[5m])))",
+          "legendFormat": "{{ route }}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Quota consumed total（按 key）",
+      "gridPos": { "x": 0, "y": 22, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "expr": "sum by (quota_key) (novelflow_quota_consumed_total)",
+          "legendFormat": "{{ quota_key }}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Exports created total（按 type）",
+      "gridPos": { "x": 12, "y": 22, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "expr": "sum by (export_type) (novelflow_exports_created_total)",
+          "legendFormat": "{{ export_type }}"
+        }
+      ]
+    }
+  ]
+}

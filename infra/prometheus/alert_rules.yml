@@ -1,0 +1,126 @@
+# Prometheus 告警规则（Sprint 13-A4）。
+#
+# 基于 app/core/metrics.py 实际暴露的指标编写；新增指标时同步更新本文件。
+# 命名规则：novelflow.<group>.<symptom>，severity ∈ {warning, critical}
+#
+# 评估周期与触发窗：global.evaluation_interval=15s；多数 rule 用 5m 平滑窗口
+# 避免短暂尖峰误报。每条 rule 都带 summary + runbook hint。
+groups:
+  - name: novelflow.jobs
+    interval: 30s
+    rules:
+      - alert: JobFailureRateHigh
+        expr: |
+          sum(rate(novelflow_jobs_created_total{status="failed"}[5m]))
+            /
+          clamp_min(sum(rate(novelflow_jobs_created_total[5m])), 1e-6)
+            > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "生成任务失败率 > 10%（5 分钟）"
+          description: |
+            最近 5 分钟内 novelflow_jobs_created_total{status="failed"} 占比
+            超过 10%，可能模型 provider 异常、配额耗尽或 worker 故障。
+          runbook: "检查 generation_jobs 表 error_code 字段；查看 model_gateway 日志。"
+
+      - alert: JobFailureRateCritical
+        expr: |
+          sum(rate(novelflow_jobs_created_total{status="failed"}[5m]))
+            /
+          clamp_min(sum(rate(novelflow_jobs_created_total[5m])), 1e-6)
+            > 0.3
+        for: 3m
+        labels:
+          severity: critical
+          team: backend
+        annotations:
+          summary: "生成任务失败率 > 30%（critical）"
+          description: "失败率持续 3 分钟超过 30%，需立即介入排查。"
+
+  - name: novelflow.model_gateway
+    interval: 30s
+    rules:
+      - alert: ModelLatencyP95High
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, task_type) (rate(novelflow_model_call_latency_ms_bucket[5m]))
+          ) > 30000
+        for: 10m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "ModelGateway p95 延迟 > 30s（task_type={{ $labels.task_type }}）"
+          description: "可能 provider 拥塞、网络不通或 prompt 体量异常。"
+          runbook: "查 context_total_tokens 是否爆涨；切换备用 provider。"
+
+      - alert: ModelCallFailureSurge
+        expr: |
+          sum(rate(novelflow_model_call_latency_ms_count{status!="ok"}[5m])) > 1
+        for: 5m
+        labels:
+          severity: critical
+          team: backend
+        annotations:
+          summary: "ModelGateway 持续报错（>1 次/秒）"
+          description: "5 分钟内非 ok 状态的模型调用 QPS 超过 1，调查 provider 健康度。"
+
+  - name: novelflow.api
+    interval: 30s
+    rules:
+      - alert: APIErrorRateHigh
+        expr: |
+          sum(rate(novelflow_api_request_duration_ms_count{status_code=~"5.."}[5m]))
+            /
+          clamp_min(sum(rate(novelflow_api_request_duration_ms_count[5m])), 1e-6)
+            > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "API 5xx 错误率 > 5%"
+          description: "持续 5 分钟，需排查 FastAPI 异常处理与上游依赖。"
+
+      - alert: APILatencyP95High
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, route) (rate(novelflow_api_request_duration_ms_bucket[5m]))
+          ) > 1000
+        for: 10m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "API p95 延迟 > 1s（route={{ $labels.route }}）"
+          description: "可能 DB 慢查询、外部依赖延迟或 GIL 阻塞。"
+
+  - name: novelflow.infra
+    interval: 30s
+    rules:
+      - alert: BackendDown
+        expr: up{job="ai-novel-backend"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          team: backend
+        annotations:
+          summary: "Backend 服务不可达 >2 分钟"
+          description: "Prometheus 抓不到 backend /metrics。检查 readiness 探针。"
+
+      - alert: ExportsThroughputDropped
+        expr: |
+          sum(increase(novelflow_exports_created_total[1h])) == 0
+            and on() (hour() >= 9 and hour() <= 22)
+        for: 1h
+        labels:
+          severity: warning
+          team: product
+        annotations:
+          summary: "营业时间内 1 小时无导出生成"
+          description: "若处于业务高峰期但无导出动作，提示前端导出链路异常。"

@@ -2,11 +2,12 @@ SHELL := /bin/bash
 
 .PHONY: help install install-frontend install-backend check check-frontend check-backend \
 	docker-config deploy d update u restart r logs l status ps stop down infra-up infra-down \
-	migrate seed test test-backend
+	migrate seed test test-backend monitoring-up monitoring-down
 
 help:
 	@printf "\nAI Novel 快捷命令\n"
 	@printf "  make infra-up                启动 postgres / redis / temporal / minio\n"
+	@printf "  make monitoring-up           启动 prometheus + grafana（监控告警）\n"
 	@printf "  make migrate                 执行 alembic upgrade head\n"
 	@printf "  make seed                    注入种子数据（plans / admin / demo project）\n"
 	@printf "  make test                    运行后端 pytest\n"
@@ -85,3 +86,9 @@ infra-up:
 
 infra-down:
 	./scripts/compose.sh down
+
+monitoring-up:
+	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d prometheus grafana
+
+monitoring-down:
+	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml down prometheus grafana
