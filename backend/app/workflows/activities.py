@@ -45,6 +45,7 @@ from app.repositories import (
 from app.services.auditor.service import auditor_service
 from app.services.context_builder.service import context_builder
 from app.services.event_bus import build_event, publish_event_fire_and_forget
+from app.services.ledger import ledger_service
 from app.services.memory import memory_service
 from app.services.moderation import log_moderation_event, moderation_service
 from app.services.novel_planner.service import novel_planner_service
@@ -176,6 +177,55 @@ def _spawn_moderation_check(
     task = loop.create_task(_run())
     _moderation_tasks.add(task)
     task.add_done_callback(_moderation_tasks.discard)
+
+
+async def _run_ledger_check(
+    session: AsyncSession,
+    *,
+    organization_id: str,
+    project_id: str,
+    scene_id: str,
+    draft_content: str,
+    source: str,
+) -> None:
+    """同步运行信息释放校验（Sprint 14-C5）。
+
+    与 moderation 不同，ledger 校验需要读 db；为了避免和主 session 抢
+    SQLite 单连接锁（in-memory 测试场景常见），这里直接复用主 session
+    而不是 fire-and-forget 新 session。复用主 session 是 read-only 的，
+    主流程的 SQL 写入已经在前面完成，无副作用。
+
+    任何异常都被 swallow + warn，绝不影响 scene 写作的 commit 路径。
+    """
+    if not draft_content or not scene_id:
+        return
+    try:
+        scene = await SceneRepository(session).get(
+            scene_id, organization_id=organization_id
+        )
+        if not scene:
+            return
+        violations = await ledger_service.validate_reveal(
+            session,
+            project_id=project_id,
+            scene=scene,
+            draft_content=draft_content,
+        )
+        for v in violations:
+            _logger.warning(
+                "ledger_violation",
+                extra={
+                    "organization_id": organization_id,
+                    "project_id": project_id,
+                    "scene_id": scene_id,
+                    "source": source,
+                    "fact_id": v.fact_id,
+                    "severity": v.severity,
+                    "description": v.description,
+                },
+            )
+    except Exception:  # noqa: BLE001
+        _logger.warning("ledger_check_failed", exc_info=True)
 
 
 async def _delete_project_rows(
@@ -1099,6 +1149,13 @@ async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
                 scene_id=scene.id,
                 source="write_scene_drafts",
             )
+            await _run_ledger_check(session, 
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                scene_id=scene.id,
+                draft_content=draft.content,
+                source="write_scene_drafts",
+            )
             await memory_service.update_character_states_from_scene(
                 session,
                 organization_id=job_row.organization_id,
@@ -1196,6 +1253,13 @@ async def run_scene_writing(job: dict[str, Any]) -> dict[str, Any]:
             organization_id=job_row.organization_id,
             project_id=job_row.project_id,
             scene_id=scene.id,
+            source="run_scene_writing",
+        )
+        await _run_ledger_check(session, 
+            organization_id=job_row.organization_id,
+            project_id=job_row.project_id,
+            scene_id=scene.id,
+            draft_content=draft.content,
             source="run_scene_writing",
         )
         memory_result = await memory_service.update_character_states_from_scene(
@@ -1573,6 +1637,13 @@ async def write_chapter_scenes_for_full_novel(
                 scene_id=scene.id,
                 source="write_scene_drafts",
             )
+            await _run_ledger_check(session, 
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                scene_id=scene.id,
+                draft_content=draft.content,
+                source="write_scene_drafts",
+            )
             await memory_service.update_character_states_from_scene(
                 session,
                 organization_id=job_row.organization_id,
@@ -1827,6 +1898,13 @@ async def rewrite_scene(job: dict[str, Any]) -> dict[str, Any]:
             organization_id=job_row.organization_id,
             project_id=job_row.project_id,
             scene_id=scene.id,
+            source="rewrite_scene",
+        )
+        await _run_ledger_check(session, 
+            organization_id=job_row.organization_id,
+            project_id=job_row.project_id,
+            scene_id=scene.id,
+            draft_content=new_draft.content,
             source="rewrite_scene",
         )
 

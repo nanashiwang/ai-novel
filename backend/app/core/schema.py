@@ -388,6 +388,35 @@ _POSTGRES_SCHEMA_FIXES = [
         "WITH (m = 16, ef_construction = 64) "
         "WHERE embedding IS NOT NULL"
     ),
+    # Sprint 14-C5：信息释放 ledger
+    """
+    CREATE TABLE IF NOT EXISTS information_ledger (
+      id TEXT PRIMARY KEY,
+      organization_id TEXT NOT NULL,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      fact TEXT NOT NULL,
+      owners JSONB NOT NULL DEFAULT '[]',
+      disclosed_to JSONB NOT NULL DEFAULT '[]',
+      first_revealed_scene_id VARCHAR(64),
+      planned_reveal_chapter INTEGER,
+      status VARCHAR(16) NOT NULL DEFAULT 'secret',
+      importance INTEGER NOT NULL DEFAULT 3,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    (
+        "CREATE INDEX IF NOT EXISTS ix_information_ledger_organization_id "
+        "ON information_ledger(organization_id)"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_information_ledger_project_id "
+        "ON information_ledger(project_id)"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_information_ledger_status "
+        "ON information_ledger(status)"
+    ),
 ]
 
 
