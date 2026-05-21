@@ -670,8 +670,9 @@ async def generate_chapter_outline(job: dict[str, Any]) -> dict[str, Any]:
             job_id=job_row.id,
             project=project,
             bible=spec,
-            target_chapters=batch_target_chapters,
+            target_chapters=target_total_chapters,
             start_chapter_index=existing_count + 1,
+            end_chapter_index=batch_target_chapters,
             character_roster=await _character_roster_for_prompt(session, job_row),
         )
         existing_indices = {chapter.chapter_index for chapter in existing}
@@ -1427,6 +1428,36 @@ async def extract_character_state_from_scene(payload: dict[str, Any]) -> dict[st
         return {"changes_written": 0, "error": str(exc)}
 
 
+@activity.defn(name="refine_character_arcs_from_outline")
+async def refine_character_arcs_from_outline(payload: dict[str, Any]) -> dict[str, Any]:
+    """Outline 完成后基于 chapters 三幕结构精细化角色 motivation/arc/secret。
+
+    Sprint 11 Phase E：GenerateOutlineWorkflow 主 activity 完成后 fire-and-forget
+    调用本 activity；失败仅打日志，不影响 outline 已 succeeded 的状态。
+
+    payload 字段：
+      - organization_id (必填)
+      - project_id      (必填)
+      - created_by      (必填，用作 revision.created_by)
+    """
+    from app.services.character_tracker.refine_arcs import (
+        extract_character_arcs_from_outline,
+    )
+
+    try:
+        async with _activity_session() as session:
+            written = await extract_character_arcs_from_outline(
+                session,
+                organization_id=payload["organization_id"],
+                project_id=payload["project_id"],
+                created_by=payload["created_by"],
+            )
+            return {"refinements_written": written}
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("refine_character_arcs activity_failed: %s", exc)
+        return {"refinements_written": 0, "error": str(exc)}
+
+
 ALL_ACTIVITIES = [
     mark_job_status,
     generate_book_spec,
@@ -1439,4 +1470,5 @@ ALL_ACTIVITIES = [
     rewrite_scene,
     run_full_novel_pipeline,
     extract_character_state_from_scene,
+    refine_character_arcs_from_outline,
 ]

@@ -39,7 +39,7 @@ CHARACTER_REVISION_FIELDS: Final[set[str]] = {
     "current_state",
 }
 
-RevisionSource = str  # "user_edit" | "copilot" | "ai_inferred"
+RevisionSource = str  # "user_edit" | "copilot" | "ai_inferred" | "ai_arc_refine"
 
 
 def _read_field(character: Character, field: str) -> Any:
@@ -222,6 +222,52 @@ class CharacterTrackerService:
             new_value=new_value,
             reason=reason,
             source="copilot",
+            scene_id=None,
+            status="pending",
+            created_by=created_by,
+            applied_by=None,
+            applied_at=None,
+        )
+        await session.flush()
+        return revision
+
+    async def record_arc_refinement(
+        self,
+        session: AsyncSession,
+        *,
+        character: Character,
+        field: str,
+        new_value: Any,
+        reason: str,
+        created_by: str,
+    ) -> CharacterRevision | None:
+        """记录 Outline 后的 arc/motivation/secret 精细化：source='ai_arc_refine' status='pending'。
+
+        Sprint 11：Outline 完成后基于章节大纲三幕结构重写 v0 草稿；
+        用户在 BiblePage 审核应用。仅允许动 motivation/arc/secret。
+        """
+        ALLOWED_ARC_FIELDS = {"motivation", "arc", "secret"}
+        if field not in ALLOWED_ARC_FIELDS:
+            raise AppError(
+                message=f"character_arc_refine_field_not_allowed: {field}",
+                code="validation_error",
+            )
+        old_value = _read_field(character, field)
+        if old_value == new_value:
+            return None
+        await self._supersede_pending(
+            session, character_id=character.id, field=field
+        )
+        repo = CharacterRevisionRepository(session)
+        revision = await repo.create(
+            organization_id=character.organization_id,
+            project_id=character.project_id,
+            character_id=character.id,
+            field=field,
+            old_value=old_value,
+            new_value=new_value,
+            reason=reason,
+            source="ai_arc_refine",
             scene_id=None,
             status="pending",
             created_by=created_by,
