@@ -21,7 +21,8 @@ from app.services.model_gateway.service import model_gateway
 from app.services.prompt_manager.service import prompt_manager
 
 _PROMPT_REWRITE_SCENE = "writing/rewrite_scene"
-_PROMPT_VERSION = "v1"
+# Sprint 13-B3：与 write_scene v2 对齐，同样强化人物口吻 + 节奏 + show 优先。
+_PROMPT_VERSION = "v2"
 
 
 class RewriterService:

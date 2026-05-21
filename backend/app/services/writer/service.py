@@ -11,8 +11,9 @@ from app.services.model_gateway.service import model_gateway
 from app.services.prompt_manager.service import prompt_manager
 
 # 集中管理 prompt 路径与版本，便于升级时 model_calls 表同步记录真实版本。
+# Sprint 13-B3：写作 prompt v2 强化人物口吻 + 场景节奏 + show-don't-tell。
 _PROMPT_WRITE_SCENE = "writing/write_scene"
-_PROMPT_VERSION = "v1"
+_PROMPT_VERSION = "v2"
 
 
 class WriterService:
