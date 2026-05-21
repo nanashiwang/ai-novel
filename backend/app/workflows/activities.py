@@ -540,11 +540,20 @@ async def mark_job_status(
 
 @activity.defn(name="generate_book_spec")
 async def generate_book_spec(job: dict[str, Any]) -> dict[str, Any]:
-    """生成或补全 book spec，并落到 novel_specs。"""
+    """生成或补全 book spec，并落到 novel_specs。
+
+    quota settle 行为：
+    - 独立 generate_bible job：本 activity 负责把 reserved_quota 一次性 commit
+    - full_novel job：父 GenerateFullNovelWorkflow 统一在 finalize 阶段按实际
+      字数 settle；本 activity 跳过 settle 调用，避免提前 consume 父 reservation
+      导致 write 阶段无法再 commit
+    """
     async with _activity_session() as session:
         job_row = await _load_job(session, job["id"])
         project = await _load_project(session, job_row)
         payload = job_row.input_payload or {}
+        # 子 activity 被 full_novel 复用：父 workflow 统一 settle，子步骤跳过
+        skip_settle = job_row.job_type == "full_novel"
         spec_repo = NovelSpecRepository(session)
         existing = await spec_repo.get_by(
             organization_id=job_row.organization_id,
@@ -557,7 +566,8 @@ async def generate_book_spec(job: dict[str, Any]) -> dict[str, Any]:
             and not payload.get("force_regenerate_spec")
         ):
             project.status = "bible_ready"
-            await _settle_job_usage(session, job_row, amount=0)
+            if not skip_settle:
+                await _settle_job_usage(session, job_row, amount=0)
             return {"spec_id": existing.id, "reused": True, "premise": existing.premise}
 
         cleared_counts: dict[str, int] = {}
@@ -601,7 +611,8 @@ async def generate_book_spec(job: dict[str, Any]) -> dict[str, Any]:
         character_count = await _sync_bible_characters(session, job_row, bible)
         world_item_count = await _sync_bible_world_items(session, job_row, bible)
         plot_thread_count = await _sync_bible_plot_threads(session, job_row, bible)
-        await _settle_job_usage(session, job_row, amount=job_row.reserved_quota)
+        if not skip_settle:
+            await _settle_job_usage(session, job_row, amount=job_row.reserved_quota)
         return {
             "spec_id": spec.id,
             "reused": False,
@@ -620,12 +631,17 @@ async def generate_chapter_outline(job: dict[str, Any]) -> dict[str, Any]:
     独立 workflow 调用时负责结算 quota；full_novel pipeline 中也调用本 activity，
     但 generate_book_spec 已经在 happy path 一次性结算了整 job 的 quota，再次
     settle 由 quota_service.commit_quota 的 `status != 'reserved'` 守卫保证幂等。
+
+    GenerateFullNovelWorkflow（Sprint 12-B）路径下：父 workflow 在 finalize
+    阶段按实际写出字数 settle，子 activity（spec / outline）跳过 settle，
+    避免预先 consume 让 finalize 无 reservation 可写。
     """
     async with _activity_session() as session:
         job_row = await _load_job(session, job["id"])
         project = await _load_project(session, job_row)
         spec = await _load_spec(session, job_row)
         payload = job_row.input_payload or {}
+        skip_settle = job_row.job_type == "full_novel"
         chapter_repo = ChapterRepository(session)
         existing = list(
             await chapter_repo.list(
@@ -644,7 +660,8 @@ async def generate_chapter_outline(job: dict[str, Any]) -> dict[str, Any]:
         if existing and not payload.get("force_regenerate_outline"):
             if existing_count >= target_total_chapters:
                 project.status = "outlined"
-                await _settle_job_usage(session, job_row, amount=0)
+                if not skip_settle:
+                    await _settle_job_usage(session, job_row, amount=0)
                 return {
                     "chapter_count": existing_count,
                     "target_chapter_count": target_total_chapters,
@@ -697,7 +714,8 @@ async def generate_chapter_outline(job: dict[str, Any]) -> dict[str, Any]:
         else:
             project.target_chapter_count = project.target_chapter_count or total_chapters
         project.status = "outlined"
-        await _settle_job_usage(session, job_row, amount=job_row.reserved_quota)
+        if not skip_settle:
+            await _settle_job_usage(session, job_row, amount=job_row.reserved_quota)
         return {
             "chapter_count": total_chapters,
             "created_chapter_count": created,
@@ -1189,11 +1207,19 @@ async def run_full_novel_pipeline(job: dict[str, Any]) -> dict[str, Any]:
     用于 TEMPORAL_ENABLED=false 的 local fire-and-forget 路径（见
     workflow_starter._execute_local）。Temporal worker 路径走
     GenerateFullNovelWorkflow 的批/child workflow 编排，不调本函数。
+
+    quota settle：本函数是 full_novel job 的"独立结算者"——spec/outline 子
+    activity 在 full_novel job_type 下都已被改成 skip_settle，所以这里必须
+    在结束前显式调一次 _settle_job_usage 把父 reservation 提交，否则父 job
+    会一直停在 reserved 状态。
     """
     spec = await generate_book_spec(job)
     chapters = await generate_chapter_outline(job)
     scenes = await generate_scene_cards(job)
     drafts = await write_scene_drafts(job)
+    async with _activity_session() as session:
+        job_row = await _load_job(session, job["id"])
+        await _settle_job_usage(session, job_row, amount=job_row.reserved_quota)
     return {
         "book_spec": spec,
         "chapters": chapters,

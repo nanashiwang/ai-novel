@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pydantic import Field
+
 from .common import APIModel
 
 
@@ -34,11 +36,16 @@ class ProjectResponse(APIModel):
 
 class GenerateNovelRequest(APIModel):
     mode: str = "full_novel"
-    estimate_words: int = 20_000
+    # estimate_words 决定父 full_novel job 的 reserved_quota；上限按
+    # 1,500,000 字（约 50 章 × 3 万字）保守拉一些，避免 Free 误调爆配额。
+    # Pro+ 套餐若实际需求更大，可以分多个 full_novel job 串起来跑。
+    estimate_words: int = Field(default=20_000, ge=1_000, le=1_500_000)
     start_immediately: bool = True
     topic: str = ""
-    target_chapters: int | None = None
-    scenes_per_chapter: int = 3
+    # None → activity 内回落到 project.target_chapter_count；上限与
+    # MAX_OUTLINE_CHAPTERS 对齐（contracts.py = 2000）。
+    target_chapters: int | None = Field(default=None, ge=1, le=2000)
+    scenes_per_chapter: int = Field(default=3, ge=1, le=8)
     write_drafts: bool = True
 
 
