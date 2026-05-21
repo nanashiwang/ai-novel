@@ -6,7 +6,7 @@
   1. hard_constraints  — bible 圣经、风格、视角、连续性规则（trusted）
   2. task              — 当前章节/场景的目标、冲突、钩子（trusted）
   3. characters        — 与本任务相关的人物卡（trusted）
-  4. world_rules       — 硬规则世界条目（trusted）
+  4. world_rules       — Lorebook 地点/势力/硬规则（trusted）
   5. plot_threads      — 当前 open 的剧情线（trusted）
   6. recent_summary    — 最近 N 个 scenes 摘要（trusted）
   7. memory_recall     — pgvector top-k（**Sprint 3 不接入，占位**, untrusted）
@@ -372,10 +372,28 @@ class ContextBuilder:
             )
         )
         hard_rules = [r for r in rows if r.is_hard_rule]
-        # 只塞硬规则，软规则放到 untrusted/可选段（v2）
-        if not hard_rules:
+        locations = [r for r in rows if r.type == "location"]
+        factions = [r for r in rows if r.type in {"faction", "organization"}]
+        sections: list[str] = []
+        if locations:
+            sections.append(
+                "\n- ".join(
+                    ["重要地点："] + [f"{r.name}：{r.description or r.name}" for r in locations]
+                )
+            )
+        if factions:
+            sections.append(
+                "\n- ".join(
+                    ["势力机构："] + [f"{r.name}：{r.description or r.name}" for r in factions]
+                )
+            )
+        if hard_rules:
+            sections.append(
+                "\n- ".join(["世界规则："] + [r.description or r.name for r in hard_rules])
+            )
+        if not sections:
             return ""
-        return "\n- ".join(["世界规则："] + [r.description or r.name for r in hard_rules])
+        return "\n".join(sections)
 
     async def _fmt_plot_threads(
         self, session: AsyncSession, organization_id: str, project_id: str

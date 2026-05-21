@@ -63,7 +63,7 @@ export function WorldItemEditDialog({
     <Modal title={item ? "编辑世界观条目" : "新增世界观条目"} onClose={onClose}>
       <div className="space-y-3">
         <div className="grid gap-3 md:grid-cols-2">
-          <TextField label="类型（rule / location / faction ...）" value={form.type} onChange={(v) => set("type", v)} />
+          <TextField label="类型（rule 规则 / location 地点 / faction 势力）" value={form.type} onChange={(v) => set("type", v)} />
           <TextField label="名称" value={form.name} onChange={(v) => set("name", v)} />
         </div>
         <TextField label="描述" rows={5} value={form.description ?? ""} onChange={(v) => set("description", v)} />

@@ -92,14 +92,22 @@ class NovelPlannerService:
         project: Project,
         bible: StoryBibleContract | NovelSpec,
         target_chapters: int,
+        character_roster: str = "",
     ) -> ChapterPlanContract:
         prompt = prompt_manager.load(_PROMPT_PLAN_CHAPTERS, version=_PROMPT_VERSION)
         target_chapters = max(1, target_chapters)
+        roster_block = (
+            f"\n\n已登记人物名册（章节主线人物、同桌/师生等关系必须与这里一致；"
+            f"不要凭空替换主线角色姓名）：\n{character_roster}"
+            if character_roster
+            else ""
+        )
         user_prompt = (
             "请把故事圣经拆成章节大纲，采用三幕式推进，但不要输出幕名层级。\n"
             f"目标章节数：{target_chapters}\n"
             f"项目：{project.title}\n"
             f"故事圣经：\n{self._dump_contract(bible)}\n"
+            f"{roster_block}\n"
             "要求：每章必须有明确目标、冲突、结尾钩子；只返回 JSON。"
         )
         raw = await model_gateway.generate_json(
@@ -132,13 +140,21 @@ class NovelPlannerService:
         chapter: Chapter,
         scenes_per_chapter: int,
         expected_words: int,
+        character_roster: str = "",
     ) -> ScenePlanContract:
         prompt = prompt_manager.load(_PROMPT_PLAN_SCENES, version=_PROMPT_VERSION)
         scenes_per_chapter = max(1, scenes_per_chapter)
+        roster_block = (
+            f"\n已登记人物名册（scene 出场人物必须优先从这里选择，不要凭空替换主线角色姓名）：\n"
+            f"{character_roster}\n"
+            if character_roster
+            else ""
+        )
         user_prompt = (
             "请把指定章节拆成 scene cards。\n"
             f"项目：{project.title}\n"
             f"故事圣经：\n{self._dump_contract(bible)}\n"
+            f"{roster_block}"
             f"章节：第 {chapter.chapter_index} 章《{chapter.title}》\n"
             f"章节摘要：{chapter.summary}\n"
             f"章节目标：{chapter.goal}\n"
@@ -192,6 +208,22 @@ class NovelPlannerService:
         if project.target_chapter_count:
             constraints.append(f"目标章节数约 {project.target_chapter_count} 章")
         data["constraints"] = constraints
+        if not data.get("locations"):
+            data["locations"] = [
+                {
+                    "name": "核心事件地点",
+                    "description": f"承载『{project.title}』主线冲突与关键转折的主要舞台。",
+                    "importance": "high",
+                }
+            ]
+        if not data.get("factions"):
+            data["factions"] = [
+                {
+                    "name": "核心对立势力",
+                    "description": "推动主线压力、制造阻碍并承载世界秩序的一方势力。",
+                    "importance": "high",
+                }
+            ]
         return StoryBibleContract(**data)
 
     def _fallback_chapters(

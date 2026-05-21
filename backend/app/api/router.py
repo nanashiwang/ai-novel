@@ -12,6 +12,7 @@ from app.api import (
     project_extra,
     projects,
     quotas,
+    revisions,
     scenes,
     world_items,
 )
@@ -26,6 +27,7 @@ api_router.include_router(quotas.router)
 api_router.include_router(organizations.router)
 api_router.include_router(projects.router)
 api_router.include_router(project_extra.router)
+api_router.include_router(revisions.router)
 api_router.include_router(novel_specs.router)
 api_router.include_router(characters.router)
 api_router.include_router(chapters.router)

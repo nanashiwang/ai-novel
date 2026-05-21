@@ -18,8 +18,8 @@ from app.contracts import MAX_OUTLINE_CHAPTERS, OUTLINE_CHAPTER_BATCH_SIZE
 from app.core.database import AsyncSessionLocal
 from app.core.exceptions import NotFoundError
 from app.core.metrics import JOBS_CREATED
-from app.models.character import Character
 from app.models.chapter import Chapter
+from app.models.character import Character
 from app.models.continuity_issue import ContinuityIssue
 from app.models.draft_version import DraftVersion
 from app.models.generation_job import GenerationJob

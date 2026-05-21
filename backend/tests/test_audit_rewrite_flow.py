@@ -186,6 +186,15 @@ async def test_audit_scene_writes_issues(client, db_engine, db_session, monkeypa
         assert issue.status == "open"
         assert issue.description
 
+    list_res = await client.get(
+        f"/api/v1/projects/{project_id}/continuity-issues",
+        headers=headers,
+    )
+    assert list_res.status_code == 200
+    api_issues = [issue for issue in list_res.json() if issue["scene_id"] == scene_id]
+    assert len(api_issues) == len(issues)
+    assert api_issues[0]["chapter_id"] is not None
+
 
 @pytest.mark.asyncio
 async def test_audit_scene_rejects_without_draft(client, db_engine, db_session, monkeypatch):

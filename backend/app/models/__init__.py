@@ -13,6 +13,7 @@ from .plan import Plan, PlanFeature
 from .plot_thread import PlotThread
 from .project import NovelSpec, Project
 from .quota import QuotaBalance, QuotaReservation
+from .revision import RevisionAppliedChange, RevisionMessage, RevisionProposal, RevisionSession
 from .scene import Scene
 from .system_setting import SystemSetting
 from .usage import UsageEvent
@@ -39,6 +40,10 @@ __all__ = [
     "Project",
     "QuotaBalance",
     "QuotaReservation",
+    "RevisionSession",
+    "RevisionProposal",
+    "RevisionMessage",
+    "RevisionAppliedChange",
     "Scene",
     "SystemSetting",
     "UsageEvent",

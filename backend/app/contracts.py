@@ -103,6 +103,8 @@ ERROR_CODES: frozenset[str] = frozenset(
         "member_not_found",
         "quota_not_found",
         "draft_not_found",
+        "revision_session_not_found",
+        "revision_proposal_not_found",
         "plot_thread_not_found",
         # 额度
         "quota_insufficient",
@@ -115,6 +117,9 @@ ERROR_CODES: frozenset[str] = frozenset(
         "export_type_not_supported",
         "job_not_retryable",
         "unknown_job_type",
+        "revision_proposal_already_applied",
+        "revision_action_not_supported",
+        "revision_target_not_supported",
         # 套餐 / 组织管理
         "plan_not_found",
         "plan_inactive",

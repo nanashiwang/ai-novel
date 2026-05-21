@@ -22,6 +22,12 @@ from app.models.plan import Plan, PlanFeature
 from app.models.plot_thread import PlotThread
 from app.models.project import NovelSpec, Project
 from app.models.quota import QuotaBalance, QuotaReservation
+from app.models.revision import (
+    RevisionAppliedChange,
+    RevisionMessage,
+    RevisionProposal,
+    RevisionSession,
+)
 from app.models.scene import Scene
 from app.models.system_setting import SystemSetting
 from app.models.usage import UsageEvent
@@ -145,6 +151,26 @@ class SystemSettingRepository(BaseRepository[SystemSetting]):
     id_prefix = "setting"
 
 
+class RevisionSessionRepository(BaseRepository[RevisionSession]):
+    model = RevisionSession
+    id_prefix = "rev_session"
+
+
+class RevisionMessageRepository(BaseRepository[RevisionMessage]):
+    model = RevisionMessage
+    id_prefix = "rev_msg"
+
+
+class RevisionProposalRepository(BaseRepository[RevisionProposal]):
+    model = RevisionProposal
+    id_prefix = "rev_prop"
+
+
+class RevisionAppliedChangeRepository(BaseRepository[RevisionAppliedChange]):
+    model = RevisionAppliedChange
+    id_prefix = "rev_change"
+
+
 class QuotaBalanceRepository(BaseRepository[QuotaBalance]):
     """额度余额仓储，包含针对竞态的行级锁查询。"""
 
@@ -195,6 +221,10 @@ __all__ = [
     "ProjectRepository",
     "QuotaBalanceRepository",
     "QuotaReservationRepository",
+    "RevisionSessionRepository",
+    "RevisionProposalRepository",
+    "RevisionMessageRepository",
+    "RevisionAppliedChangeRepository",
     "SceneRepository",
     "SystemSettingRepository",
     "UsageEventRepository",

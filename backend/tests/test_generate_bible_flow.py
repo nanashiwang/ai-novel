@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models import (
+    Chapter,
     Character,
     GenerationJob,
     ModelCall,
@@ -130,6 +131,7 @@ async def test_generate_bible_flow_persists_sprint1_records(
     assert spec.premise
     assert len(characters) >= 2
     assert len(world_items) >= 2
+    assert {"location", "faction", "rule"}.issubset({item.type for item in world_items})
     assert len(plot_threads) >= 1
     assert len(model_calls) >= 1
     assert len(usage_events) == 1
@@ -146,6 +148,9 @@ async def test_generate_bible_flow_persists_sprint1_records(
     assert bible["spec"]["premise"]
     assert len(bible["characters"]) >= 2
     assert len(bible["world_items"]) >= 2
+    assert {"location", "faction", "rule"}.issubset(
+        {item["type"] for item in bible["world_items"]}
+    )
     assert len(bible["plot_threads"]) >= 1
     assert bible["latest_job"]["id"] == job_id
 
@@ -336,6 +341,79 @@ async def test_generate_bible_reuses_existing_spec_when_force_false(
         )
     ).scalar_one()
     assert quota.used_value == 0
+
+
+@pytest.mark.asyncio
+async def test_force_regenerate_bible_clears_stale_story_artifacts(
+    client, db_engine, db_session, monkeypatch
+):
+    """重生成故事圣经时，旧人物与旧大纲必须清掉，避免混用多套设定。"""
+    Session = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+    monkeypatch.setattr(activities, "AsyncSessionLocal", Session)
+
+    org_id, project_id, headers = await _setup_org_with_quota(
+        client, db_session, email="bible-force-clear@example.com"
+    )
+    db_session.add_all(
+        [
+            NovelSpec(
+                id=new_id("spec"),
+                organization_id=org_id,
+                project_id=project_id,
+                premise="旧故事圣经",
+                theme="旧主题",
+                genre="旧类型",
+            ),
+            Character(
+                id=new_id("char"),
+                organization_id=org_id,
+                project_id=project_id,
+                name="旧人物",
+                role="protagonist",
+            ),
+            Chapter(
+                id=new_id("chapter"),
+                organization_id=org_id,
+                project_id=project_id,
+                volume_id=None,
+                chapter_index=1,
+                title="旧第一章",
+                summary="旧摘要",
+                goal="旧目标",
+                conflict="旧冲突",
+                ending_hook="旧钩子",
+                status="planned",
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    res = await client.post(
+        f"/api/v1/projects/{project_id}/bible/generate",
+        headers=headers,
+        json={"estimate_words": 2000, "force_regenerate": True},
+    )
+    assert res.status_code == 202, res.text
+    job = await _await_job_terminal(db_session, res.json()["id"])
+    assert job.status == "succeeded"
+    job_id = job.id
+
+    db_session.expire_all()
+    names = {
+        row.name
+        for row in (
+            await db_session.execute(select(Character).where(Character.project_id == project_id))
+        ).scalars()
+    }
+    chapters = (
+        await db_session.execute(select(Chapter).where(Chapter.project_id == project_id))
+    ).scalars().all()
+    refreshed_job = await db_session.get(GenerationJob, job_id)
+    assert "旧人物" not in names
+    assert names
+    assert chapters == []
+    cleared_counts = (refreshed_job.output_payload or {}).get("cleared_counts", {})
+    assert cleared_counts.get("characters") == 1
 
 
 @pytest.mark.asyncio

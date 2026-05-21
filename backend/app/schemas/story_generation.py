@@ -11,8 +11,59 @@ class CharacterSeed(APIModel):
     name: str = ""
     role: str = ""
     description: str = ""
+    personality: str = ""
     motivation: str = ""
+    secret: str = ""
     arc: str = ""
+    relationships: dict[str, Any] = Field(default_factory=dict)
+    current_state: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator(
+        "name",
+        "role",
+        "description",
+        "personality",
+        "motivation",
+        "secret",
+        "arc",
+        mode="before",
+    )
+    @classmethod
+    def stringify_text(cls, value: Any) -> str:
+        if isinstance(value, list):
+            return "；".join(str(item) for item in value)
+        if isinstance(value, dict):
+            return "；".join(f"{key}: {item}" for key, item in value.items())
+        return "" if value is None else str(value)
+
+    @field_validator("relationships", "current_state", mode="before")
+    @classmethod
+    def normalize_mapping(cls, value: Any) -> dict[str, Any]:
+        return value if isinstance(value, dict) else {}
+
+
+class LorebookSeed(APIModel):
+    name: str = ""
+    description: str = ""
+    importance: str = "medium"
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_text_seed(cls, data: Any) -> Any:
+        if isinstance(data, str):
+            text = data.strip()
+            return {"name": text[:80], "description": text}
+        if isinstance(data, dict):
+            name = data.get("name") or data.get("title") or data.get("label") or ""
+            description = (
+                data.get("description") or data.get("summary") or data.get("content") or name
+            )
+            return {
+                **data,
+                "name": str(name).strip(),
+                "description": str(description).strip(),
+            }
+        return data
 
 
 class StoryBibleContract(APIModel):
@@ -24,10 +75,29 @@ class StoryBibleContract(APIModel):
     narrative_pov: str = ""
     style_guide: str = ""
     constraints: list[str] = Field(default_factory=list)
+    locations: list[LorebookSeed] = Field(default_factory=list)
+    factions: list[LorebookSeed] = Field(default_factory=list)
     world_rules: list[str] = Field(default_factory=list)
     main_characters: list[CharacterSeed] = Field(default_factory=list)
     continuity_rules: list[str] = Field(default_factory=list)
     plot_threads: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_lorebook_aliases(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        if "locations" not in data:
+            for key in ("world_locations", "key_locations", "places"):
+                if key in data:
+                    data = {**data, "locations": data[key]}
+                    break
+        if "factions" not in data:
+            for key in ("organizations", "forces", "power_groups", "key_organizations"):
+                if key in data:
+                    data = {**data, "factions": data[key]}
+                    break
+        return data
 
 
 class ChapterPlanItem(APIModel):

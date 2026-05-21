@@ -42,6 +42,7 @@ import { DirectionPreviewDialog } from "./direction-preview-dialog";
 import { EditableItem } from "./editable-item";
 import { PlotThreadEditDialog } from "./plot-thread-edit-dialog";
 import { ProjectStageCard } from "./project-stage-card";
+import { RevisionCopilotDrawer } from "./revision-copilot-drawer";
 import { SpecEditDialog } from "./spec-edit-dialog";
 import { WillGenerateList } from "./will-generate-list";
 import { WorldItemEditDialog } from "./world-item-edit-dialog";
@@ -82,6 +83,7 @@ export function BiblePage({ projectId }: { projectId: string }) {
   const [prefs, setPrefs] = useState<CreativePrefs>(DEFAULT_PREFS);
   const [directionPreviewOpen, setDirectionPreviewOpen] = useState(false);
   const [specEditing, setSpecEditing] = useState(false);
+  const [revisionOpen, setRevisionOpen] = useState(false);
   const [editChar, setEditChar] = useState<BibleCharacter | "new" | null>(null);
   const [editWorld, setEditWorld] = useState<BibleWorldItem | "new" | null>(null);
   const [editThread, setEditThread] = useState<BiblePlotThread | "new" | null>(null);
@@ -122,6 +124,7 @@ export function BiblePage({ projectId }: { projectId: string }) {
   });
 
   const invalidateAll = () => {
+    queryClient.invalidateQueries({ queryKey: projectKey });
     queryClient.invalidateQueries({ queryKey: bibleKey });
     queryClient.invalidateQueries({ queryKey: charactersKey });
     queryClient.invalidateQueries({ queryKey: worldItemsKey });
@@ -181,6 +184,11 @@ export function BiblePage({ projectId }: { projectId: string }) {
               <Button variant="ghost" onClick={() => setPrefsOpen((v) => !v)}>
                 <Settings2 className="size-4" /> {prefsOpen ? "收起创作偏好" : "创作偏好"}
               </Button>
+              {spec ? (
+                <Button variant="secondary" onClick={() => setRevisionOpen(true)}>
+                  <Sparkles className="size-4" /> AI 优化设定
+                </Button>
+              ) : null}
               <Button onClick={() => generate.mutate()} disabled={disableGenerate}>
                 {isGenerating ? <RefreshCw className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
                 {spec ? "重新生成" : "启动生成"}
@@ -242,6 +250,9 @@ export function BiblePage({ projectId }: { projectId: string }) {
               <CardTitle>核心设定</CardTitle>
               <div className="flex items-center gap-2">
                 <Badge tone="violet">{spec.genre || "未分类"}</Badge>
+                <Button size="sm" variant="secondary" onClick={() => setRevisionOpen(true)}>
+                  <Sparkles className="size-3.5" /> AI 优化
+                </Button>
                 <Button size="sm" variant="ghost" onClick={() => setSpecEditing(true)}>
                   <Pencil className="size-3.5" /> 编辑
                 </Button>
@@ -420,6 +431,13 @@ export function BiblePage({ projectId }: { projectId: string }) {
             setEditThread(null);
             invalidateAll();
           }}
+        />
+      ) : null}
+      {revisionOpen ? (
+        <RevisionCopilotDrawer
+          projectId={projectId}
+          onClose={() => setRevisionOpen(false)}
+          onApplied={invalidateAll}
         />
       ) : null}
     </div>

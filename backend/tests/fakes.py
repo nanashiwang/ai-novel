@@ -81,6 +81,30 @@ class DeterministicModelProvider:
             "narrative_pov": "第三人称有限视角",
             "style_guide": style,
             "constraints": constraints,
+            "locations": [
+                {
+                    "name": "雾城档案馆",
+                    "description": "保存城市记忆交易记录的核心地点，所有被篡改的过去都会留下索引。",
+                    "importance": "high",
+                },
+                {
+                    "name": "七日迁移禁区",
+                    "description": "入口每隔七日随机迁移，适合承载追逐、潜入和规则验证场景。",
+                    "importance": "medium",
+                },
+            ],
+            "factions": [
+                {
+                    "name": "城市监察会",
+                    "description": "维持记忆交易秩序的权力机构，既保护规则也掩盖旧案。",
+                    "importance": "high",
+                },
+                {
+                    "name": "灰市掮客联盟",
+                    "description": "游走在合法交易边缘的地下势力，掌握大量非法记忆样本。",
+                    "importance": "medium",
+                },
+            ],
             "world_rules": world_rules,
             "main_characters": [
                 {
@@ -175,6 +199,67 @@ class DeterministicModelProvider:
             "unresolved_threads": [],
         }
 
+    @staticmethod
+    def _revision_result() -> dict[str, Any]:
+        return {
+            "reply": "我建议先强化主题，再补一个可直接落库的人物、世界规则和剧情线。",
+            "proposals": [
+                {
+                    "target_type": "story_bible",
+                    "target_id": None,
+                    "action": "update",
+                    "title": "强化故事主题",
+                    "patch": {"theme": "记忆交易背后的代价与自我选择"},
+                    "reason": "让故事圣经的核心表达更集中。",
+                    "impact": ["characters", "plot_threads"],
+                },
+                {
+                    "target_type": "character",
+                    "target_id": None,
+                    "action": "create",
+                    "title": "新增灰市向导",
+                    "patch": {
+                        "name": "顾眠",
+                        "role": "guide",
+                        "description": "熟悉非法记忆样本的灰市向导。",
+                        "motivation": "用一次交易换回被夺走的家人记忆。",
+                        "arc": "从只求自保到愿意承担代价。",
+                    },
+                    "reason": "补足主角进入灰市的信息入口。",
+                    "impact": ["world_items"],
+                },
+                {
+                    "target_type": "world_item",
+                    "target_id": None,
+                    "action": "create",
+                    "title": "新增硬规则",
+                    "patch": {
+                        "type": "rule",
+                        "name": "记忆等价交换",
+                        "description": "任何记忆交易都必须支付同等强度的情绪代价。",
+                        "importance": "high",
+                        "is_hard_rule": True,
+                    },
+                    "reason": "让长期冲突有稳定约束。",
+                    "impact": ["story_bible"],
+                },
+                {
+                    "target_type": "plot_thread",
+                    "target_id": None,
+                    "action": "create",
+                    "title": "新增灰市支线",
+                    "patch": {
+                        "title": "灰市记忆样本追查",
+                        "thread_type": "side",
+                        "description": "主角追踪一批来源不明的非法记忆样本。",
+                        "status": "open",
+                    },
+                    "reason": "提供中段调查推进线。",
+                    "impact": ["characters", "world_items"],
+                },
+            ],
+        }
+
     async def complete_json(
         self,
         *,
@@ -186,6 +271,8 @@ class DeterministicModelProvider:
     ) -> dict[str, Any]:
         schema_properties = schema.get("properties", {})
         schema_text = str(schema)
+        if "proposals" in schema_properties:
+            return self._revision_result()
         if "main_characters" in schema_properties:
             return self._story_bible(user_prompt)
         if "directions" in schema_properties:
