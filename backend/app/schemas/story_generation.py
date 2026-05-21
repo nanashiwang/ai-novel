@@ -153,6 +153,8 @@ class ScenePlanItem(APIModel):
     reveal: str = ""
     hook: str = ""
     expected_words: int = 1200
+    # Sprint 14-C6：LLM 输出场景计划时可指定 POV 主角名（应在 characters 内）
+    pov_character_name: str | None = None
 
     @field_validator(
         "title",
@@ -176,6 +178,21 @@ class ScenePlanItem(APIModel):
         if isinstance(value, dict):
             return "；".join(f"{key}: {item}" for key, item in value.items())
         return "" if value is None else str(value)
+
+    @field_validator("pov_character_name", mode="before")
+    @classmethod
+    def normalize_pov(cls, value: Any) -> str | None:
+        """空字符串 / None / 空白都视作"未指定 POV"——保持 None 语义。"""
+        if value is None:
+            return None
+        if isinstance(value, list):
+            value = value[0] if value else None
+        if isinstance(value, dict):
+            value = value.get("name") or value.get("character") or None
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
 
     @field_validator("characters", "must_include", "must_avoid", mode="before")
     @classmethod

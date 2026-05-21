@@ -31,6 +31,8 @@ class ScenePayload(APIModel):
     reveal: str = ""
     hook: str = ""
     status: str = "planned"
+    # Sprint 14-C6：单场景 POV 锚定；空 → 回落 spec.narrative_pov
+    pov_character_name: str | None = None
 
 
 class SceneResponse(ScenePayload):

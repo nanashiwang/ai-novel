@@ -29,3 +29,7 @@ class Scene(Base, TenantMixin, TimestampMixin):
     reveal: Mapped[str] = mapped_column(Text, default="")
     hook: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(64), default="planned")
+    # Sprint 14-C6：Per-scene POV 锚定。空 = 无固定 POV（沿用 spec.narrative_pov），
+    # 非空 = 该场景视角主角名（必须出现在 characters 中）。ContextBuilder 据此
+    # 隐藏其它角色的 secret/motivation/arc/current_state，避免"全知视角泄密"。
+    pov_character_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
