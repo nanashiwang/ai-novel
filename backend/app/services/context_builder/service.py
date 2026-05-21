@@ -26,6 +26,7 @@ from app.models.project import NovelSpec, Project
 from app.models.scene import Scene
 from app.repositories import (
     CharacterRepository,
+    DraftVersionRepository,
     MemoryRepository,
     PlotThreadRepository,
     WorldItemRepository,
@@ -36,6 +37,7 @@ SegmentLabel = Literal[
     "hard_constraints",
     "task",
     "characters",
+    "character_actions",
     "world_rules",
     "plot_threads",
     "recent_summary",
@@ -48,19 +50,21 @@ _DEFAULT_TOTAL_BUDGET = 8000
 
 # 每段占总预算的百分比。trusted 段加起来 85%，untrusted 15%。
 _SEGMENT_BUDGET_PCT: dict[SegmentLabel, float] = {
-    "hard_constraints": 0.20,
-    "task": 0.20,
-    "characters": 0.15,
+    "hard_constraints": 0.18,
+    "task": 0.18,
+    "characters": 0.12,
+    "character_actions": 0.12,
     "world_rules": 0.10,
-    "plot_threads": 0.10,
-    "recent_summary": 0.10,
-    "memory_recall": 0.15,
+    "plot_threads": 0.08,
+    "recent_summary": 0.08,
+    "memory_recall": 0.14,
 }
 
 _TRUSTED_LABELS: set[SegmentLabel] = {
     "hard_constraints",
     "task",
     "characters",
+    "character_actions",
     "world_rules",
     "plot_threads",
     "recent_summary",
@@ -210,6 +214,16 @@ class ContextBuilder:
             (
                 "characters",
                 await self._fmt_characters(
+                    session,
+                    organization_id,
+                    project_id,
+                    focus_names=list(scene.characters or []),
+                ),
+                True,
+            ),
+            (
+                "character_actions",
+                await self._fmt_character_actions(
                     session,
                     organization_id,
                     project_id,
@@ -378,6 +392,90 @@ class ContextBuilder:
                 chunk += f" 当前状态：{ch.current_state}"
             parts.append(chunk)
         return "\n".join(parts)
+
+    async def _fmt_character_actions(
+        self,
+        session: AsyncSession,
+        organization_id: str,
+        project_id: str,
+        focus_names: list[str] | None,
+        *,
+        limit_per_character: int = 5,
+        excerpt_chars: int = 160,
+    ) -> str:
+        """按角色召回最近 K 场出场的简短动作摘要。
+
+        Sprint 10 Phase D：在 scene 写作 prompt 中注入「该角色最近做了什么」，
+        减少长篇生成中"人物背叛设定 / 能力凭空消失"。
+
+        策略：
+        - 只对 focus_names 内的角色查询（通常 = scene.characters）
+        - 遍历项目所有 scenes，按 chapter_index + scene_index 倒序取最近 K 场
+        - 每场取最新 draft.content 的尾部 excerpt_chars 字符作为该场摘要
+        - 没有 draft 的 scene 跳过
+        """
+        if not focus_names:
+            return ""
+        focus_set = {n.strip() for n in focus_names if n and n.strip()}
+        if not focus_set:
+            return ""
+
+        # 一次性拉所有 scenes 和 latest drafts，避免 N+1。
+        from app.models.chapter import Chapter as ChapterModel
+        from sqlalchemy import select
+
+        scene_stmt = (
+            select(Scene, ChapterModel.chapter_index)
+            .join(ChapterModel, Scene.chapter_id == ChapterModel.id)
+            .where(
+                Scene.organization_id == organization_id,
+                Scene.project_id == project_id,
+            )
+            .order_by(ChapterModel.chapter_index.desc(), Scene.scene_index.desc())
+        )
+        scenes_with_chapter: list[tuple[Scene, int]] = list(
+            (await session.execute(scene_stmt)).all()
+        )
+        if not scenes_with_chapter:
+            return ""
+
+        # 预取相关 scene_ids 的最新 draft
+        draft_repo = DraftVersionRepository(session)
+        per_character: dict[str, list[str]] = {name: [] for name in focus_set}
+        for scene, chapter_index in scenes_with_chapter:
+            scene_actors = set(scene.characters or [])
+            relevant = scene_actors & focus_set
+            if not relevant:
+                continue
+            # 仍有该角色召回额度才查 draft
+            if all(len(per_character[name]) >= limit_per_character for name in relevant):
+                continue
+            drafts = list(
+                await draft_repo.list(
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    scene_id=scene.id,
+                    limit=1,
+                )
+            )
+            if not drafts or not drafts[0].content:
+                continue
+            excerpt = drafts[0].content.strip()[-excerpt_chars:]
+            tag = f"第 {chapter_index} 章场景 {scene.scene_index}"
+            entry = f"· {tag}：…{excerpt}"
+            for name in relevant:
+                if len(per_character[name]) < limit_per_character:
+                    per_character[name].append(entry)
+
+        # 渲染
+        lines: list[str] = []
+        for name in focus_set:
+            entries = per_character.get(name) or []
+            if not entries:
+                continue
+            lines.append(f"【{name}】最近 {len(entries)} 场动作：")
+            lines.extend(entries)
+        return "\n".join(lines)
 
     async def _fmt_world_rules(
         self, session: AsyncSession, organization_id: str, project_id: str

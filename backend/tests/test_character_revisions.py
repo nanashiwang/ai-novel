@@ -424,3 +424,135 @@ async def test_character_timeline_groups_by_chapter(client, db_session):
     unanchored = timeline[1]
     assert unanchored["chapter_index"] is None
     assert any(r["field"] == "personality" for r in unanchored["revisions"])
+
+
+@pytest.mark.asyncio
+async def test_context_builder_character_actions_segment(client, db_session):
+    """Phase D：build_for_scene_writing 注入 character_actions 段，
+    召回 focus_names 中角色最近出场场景的 draft 摘要。"""
+    from app.models.chapter import Chapter
+    from app.models.common import new_id
+    from app.models.draft_version import DraftVersion
+    from app.models.project import NovelSpec, Project
+    from app.models.scene import Scene
+    from app.services.context_builder import ContextBuilder
+
+    token, project_id = await _register_with_project(client, "ctx-actions@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    me = (await client.get("/api/v1/auth/me", headers=headers)).json()
+    org_id = me["organization_id"]
+
+    project = (
+        await db_session.execute(
+            __import__("sqlalchemy").select(Project).where(Project.id == project_id)
+        )
+    ).scalar_one()
+
+    spec = NovelSpec(
+        id=new_id("spec"),
+        organization_id=org_id,
+        project_id=project_id,
+        premise="测试前提",
+        theme="测试主题",
+        genre="奇幻",
+        tone="紧张",
+        target_reader="—",
+        narrative_pov="第三人称",
+        style_guide="—",
+        constraints=[],
+        continuity_rules=[],
+    )
+    db_session.add(spec)
+
+    # 造 2 章，每章 1 场，主角"林秋"都出场，drafts 有内容
+    chapter1 = Chapter(
+        id=new_id("chapter"), organization_id=org_id, project_id=project_id,
+        volume_id=None, chapter_index=1, title="开端", summary="", goal="", conflict="",
+        ending_hook="", status="drafted",
+    )
+    chapter2 = Chapter(
+        id=new_id("chapter"), organization_id=org_id, project_id=project_id,
+        volume_id=None, chapter_index=2, title="转折", summary="", goal="", conflict="",
+        ending_hook="", status="drafted",
+    )
+    scene1 = Scene(
+        id=new_id("scene"), organization_id=org_id, project_id=project_id,
+        chapter_id=chapter1.id, scene_index=1, title="夜雨", time_marker="",
+        location="", characters=["林秋"], goal="", conflict="",
+        emotion_start="", emotion_end="", reveal="", hook="", status="drafted",
+    )
+    scene2 = Scene(
+        id=new_id("scene"), organization_id=org_id, project_id=project_id,
+        chapter_id=chapter2.id, scene_index=1, title="清晨", time_marker="",
+        location="", characters=["林秋"], goal="", conflict="",
+        emotion_start="", emotion_end="", reveal="", hook="", status="planned",
+    )
+    draft1 = DraftVersion(
+        id=new_id("draft"), organization_id=org_id, project_id=project_id,
+        chapter_id=chapter1.id, scene_id=scene1.id, version_type="draft",
+        content="林秋走进档案馆，第一次触摸那份七年前的封禁文件。",
+        content_format="markdown", word_count=20, status="draft",
+        parent_version_id=None, created_by=me["id"],
+    )
+    db_session.add_all([chapter1, chapter2, scene1, scene2, draft1])
+    await db_session.commit()
+
+    # scene2 是"当前待写"的 scene，focus_names = ["林秋"]
+    builder = ContextBuilder(total_budget=4000)
+    ctx = await builder.build_for_scene_writing(
+        db_session, project=project, spec=spec, chapter=chapter2, scene=scene2
+    )
+    labels = [s.label for s in ctx.segments]
+    assert "character_actions" in labels
+    actions_seg = next(s for s in ctx.segments if s.label == "character_actions")
+    assert actions_seg.trusted is True
+    # 应包含林秋的标题与第 1 章场景 1 的摘要
+    assert "【林秋】" in actions_seg.content
+    assert "第 1 章场景 1" in actions_seg.content
+    assert "档案馆" in actions_seg.content
+
+
+@pytest.mark.asyncio
+async def test_context_builder_character_actions_empty_when_no_focus(client, db_session):
+    """没有 focus_names（场景未指定 characters）时 character_actions 段为空。"""
+    from app.models.chapter import Chapter
+    from app.models.common import new_id
+    from app.models.project import NovelSpec, Project
+    from app.models.scene import Scene
+    from app.services.context_builder import ContextBuilder
+
+    token, project_id = await _register_with_project(client, "ctx-empty@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    me = (await client.get("/api/v1/auth/me", headers=headers)).json()
+    org_id = me["organization_id"]
+
+    project = (
+        await db_session.execute(
+            __import__("sqlalchemy").select(Project).where(Project.id == project_id)
+        )
+    ).scalar_one()
+    spec = NovelSpec(
+        id=new_id("spec"), organization_id=org_id, project_id=project_id,
+        premise="", theme="", genre="", tone="", target_reader="",
+        narrative_pov="", style_guide="", constraints=[], continuity_rules=[],
+    )
+    chapter = Chapter(
+        id=new_id("chapter"), organization_id=org_id, project_id=project_id,
+        volume_id=None, chapter_index=1, title="—", summary="", goal="",
+        conflict="", ending_hook="", status="planned",
+    )
+    scene = Scene(
+        id=new_id("scene"), organization_id=org_id, project_id=project_id,
+        chapter_id=chapter.id, scene_index=1, title="—", time_marker="",
+        location="", characters=[], goal="", conflict="",
+        emotion_start="", emotion_end="", reveal="", hook="", status="planned",
+    )
+    db_session.add_all([spec, chapter, scene])
+    await db_session.commit()
+
+    builder = ContextBuilder(total_budget=4000)
+    ctx = await builder.build_for_scene_writing(
+        db_session, project=project, spec=spec, chapter=chapter, scene=scene
+    )
+    actions_seg = next(s for s in ctx.segments if s.label == "character_actions")
+    assert actions_seg.content == ""
