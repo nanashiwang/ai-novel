@@ -556,3 +556,118 @@ async def test_context_builder_character_actions_empty_when_no_focus(client, db_
     )
     actions_seg = next(s for s in ctx.segments if s.label == "character_actions")
     assert actions_seg.content == ""
+
+
+@pytest.mark.asyncio
+async def test_refine_character_arcs_from_outline(client, db_session, monkeypatch):
+    """Sprint 11 Phase E：mock model_gateway，验证 outline 完成后
+    motivation / arc / secret 被精细化并落 character_revisions
+    (source='ai_arc_refine' status='pending')。"""
+    from app.models.chapter import Chapter
+    from app.models.common import new_id
+    from app.models.project import NovelSpec
+    from app.services.character_tracker.refine_arcs import (
+        extract_character_arcs_from_outline,
+    )
+    from app.services.model_gateway import service as gateway_module
+
+    token, project_id = await _register_with_project(client, "refine-1@example.com")
+    character = await _create_character(client, token, project_id)
+    headers = {"Authorization": f"Bearer {token}"}
+    me = (await client.get("/api/v1/auth/me", headers=headers)).json()
+    org_id = me["organization_id"]
+
+    # 造 NovelSpec + 2 chapters
+    db_session.add_all(
+        [
+            NovelSpec(
+                id=new_id("spec"), organization_id=org_id, project_id=project_id,
+                premise="测试前提", theme="测试主题", genre="奇幻", tone="紧张",
+                target_reader="", narrative_pov="", style_guide="", constraints=[],
+                continuity_rules=[],
+            ),
+            Chapter(
+                id=new_id("chapter"), organization_id=org_id, project_id=project_id,
+                volume_id=None, chapter_index=1, title="序幕", summary="发现父亲遗物",
+                goal="", conflict="", ending_hook="父亲死因有疑", status="planned",
+            ),
+            Chapter(
+                id=new_id("chapter"), organization_id=org_id, project_id=project_id,
+                volume_id=None, chapter_index=12, title="反击", summary="主角主动出击",
+                goal="夺回组织控制权", conflict="盟友背叛",
+                ending_hook="终于站上舞台", status="planned",
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    async def fake_generate_json(self, session, **kwargs):  # noqa: ANN001
+        return {
+            "refinements": [
+                {
+                    "character_name": character["name"],
+                    "field": "motivation",
+                    "new_value": "找回记忆并查清父亲死因，最终为受害者群体讨回公道",
+                    "reason": "第 1 章发现遗物 + 第 12 章反击表明动机已扩展",
+                },
+                {
+                    "character_name": character["name"],
+                    "field": "arc",
+                    "new_value": "第 1 章被动 → 第 12 章主动反击",
+                    "reason": "依章节里程碑划分两段",
+                },
+                # 字段不在白名单的应被忽略
+                {
+                    "character_name": character["name"],
+                    "field": "description",
+                    "new_value": "重写描述",
+                    "reason": "应被过滤",
+                },
+            ]
+        }
+
+    monkeypatch.setattr(
+        gateway_module.ModelGateway, "generate_json", fake_generate_json
+    )
+
+    written = await extract_character_arcs_from_outline(
+        db_session,
+        organization_id=org_id,
+        project_id=project_id,
+        created_by=me["id"],
+    )
+    await db_session.commit()
+
+    # 应落 2 条（description 被白名单过滤）
+    assert written == 2
+
+    revs = (await client.get(
+        f"/api/v1/projects/{project_id}/characters/{character['id']}/revisions",
+        headers=headers,
+        params={"status": "pending"},
+    )).json()
+    sources = {r["source"] for r in revs}
+    assert sources == {"ai_arc_refine"}
+    fields = {r["field"] for r in revs}
+    assert fields == {"motivation", "arc"}
+
+
+@pytest.mark.asyncio
+async def test_refine_character_arcs_no_chapters_skips_silently(client, db_session):
+    """没有 chapters 时不调 LLM 直接返回 0，不抛错。"""
+    from app.services.character_tracker.refine_arcs import (
+        extract_character_arcs_from_outline,
+    )
+
+    token, project_id = await _register_with_project(client, "refine-2@example.com")
+    await _create_character(client, token, project_id)
+    headers = {"Authorization": f"Bearer {token}"}
+    me = (await client.get("/api/v1/auth/me", headers=headers)).json()
+
+    written = await extract_character_arcs_from_outline(
+        db_session,
+        organization_id=me["organization_id"],
+        project_id=project_id,
+        created_by=me["id"],
+    )
+    assert written == 0
