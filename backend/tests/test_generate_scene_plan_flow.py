@@ -509,7 +509,8 @@ async def test_context_builder_assemble_basic_segments(db_session):
         db_session, project=project, spec=spec, chapter=chapter
     )
 
-    # 段顺序：B2 在 world_rules / plot_threads 后各加一段 actions
+    # 段顺序：B2 在 world_rules / plot_threads 后各加一段 actions；
+    # C5 在 recent_summary 后注入 information_visibility（trusted）。
     labels = [s.label for s in ctx.segments]
     assert labels == [
         "hard_constraints",
@@ -520,6 +521,7 @@ async def test_context_builder_assemble_basic_segments(db_session):
         "plot_threads",
         "plot_actions",
         "recent_summary",
+        "information_visibility",
         "memory_recall",
     ]
     # trusted 标记

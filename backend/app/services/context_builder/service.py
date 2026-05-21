@@ -45,6 +45,7 @@ SegmentLabel = Literal[
     "plot_threads",
     "plot_actions",
     "recent_summary",
+    "information_visibility",
     "memory_recall",
 ]
 
@@ -52,9 +53,12 @@ SegmentLabel = Literal[
 # ContextBuilder(total_budget=...) 注入。
 _DEFAULT_TOTAL_BUDGET = 8000
 
-# 每段占总预算的百分比。trusted 段加起来 86%，untrusted 14%。
+# 每段占总预算的百分比。trusted 段加起来 91%，untrusted 9%。
 # Sprint 13-B2：新增 world_actions / plot_actions 用于注入世界观条目与
 # 剧情线的最近演进，避免长篇生成时世界设定 / 主副线发生漂移。
+# Sprint 14-C5：新增 information_visibility (0.05)，把 memory_recall
+# 从 0.14 调到 0.09，保持总和 1.0；ledger 段用于提示"截至当前 scene
+# 哪些 secret 已经公开 / 半公开"，避免 AI 反复"重复揭秘"。
 _SEGMENT_BUDGET_PCT: dict[SegmentLabel, float] = {
     "hard_constraints": 0.16,
     "task": 0.16,
@@ -65,7 +69,8 @@ _SEGMENT_BUDGET_PCT: dict[SegmentLabel, float] = {
     "plot_threads": 0.06,
     "plot_actions": 0.06,
     "recent_summary": 0.08,
-    "memory_recall": 0.14,
+    "information_visibility": 0.05,
+    "memory_recall": 0.09,
 }
 
 _TRUSTED_LABELS: set[SegmentLabel] = {
@@ -78,6 +83,7 @@ _TRUSTED_LABELS: set[SegmentLabel] = {
     "plot_threads",
     "plot_actions",
     "recent_summary",
+    "information_visibility",
 }
 
 
@@ -201,6 +207,13 @@ class ContextBuilder:
                 True,
             ),
             (
+                "information_visibility",
+                await self._fmt_information_visibility(
+                    session, organization_id, project_id
+                ),
+                True,
+            ),
+            (
                 "memory_recall",
                 await self._fmt_memory_recall(session, organization_id, project_id),
                 False,
@@ -275,6 +288,13 @@ class ContextBuilder:
                 "recent_summary",
                 await self._fmt_recent_scene_summaries(
                     session, organization_id, project_id, limit=3
+                ),
+                True,
+            ),
+            (
+                "information_visibility",
+                await self._fmt_information_visibility(
+                    session, organization_id, project_id
                 ),
                 True,
             ),
@@ -706,6 +726,47 @@ class ContextBuilder:
             head = entry.title or entry.memory_type or "摘要"
             parts.append(f"{head}：{entry.content}")
         return "\n---\n".join(parts)
+
+    async def _fmt_information_visibility(
+        self,
+        session: AsyncSession,
+        organization_id: str,
+        project_id: str,
+        *,
+        limit: int = 20,
+    ) -> str:
+        """列出截至当前 scene 时间点的「已公开 / 半公开」事实。
+
+        Sprint 14-C5：让 AI 在写新场景时知道「哪些秘密读者已经知道了」，
+        避免反复揭秘 / 重复打底；secret 类目刻意不进 prompt，保留信息
+        差对剧情张力的作用。
+        """
+        from app.repositories import InformationLedgerRepository  # noqa: PLC0415
+
+        repo = InformationLedgerRepository(session)
+        rows = list(
+            await repo.list(
+                organization_id=organization_id,
+                project_id=project_id,
+                limit=limit,
+            )
+        )
+        if not rows:
+            return ""
+        # 仅注入已开始释放的事实；secret 留给 LedgerService 在 validate_reveal
+        # 阶段卫戍，prompt 端永远不暴露未公开内容。
+        visible = [r for r in rows if r.status in {"partial", "public"}]
+        if not visible:
+            return ""
+        # 重要性高的事实排前，便于 truncate 时优先保留
+        visible.sort(key=lambda r: (-(r.importance or 0), r.status))
+        lines: list[str] = ["信息可见度："]
+        for row in visible:
+            disclosed = "、".join(row.disclosed_to or []) or "—"
+            lines.append(
+                f"· [{row.status}] {row.fact}（已知：{disclosed}）"
+            )
+        return "\n".join(lines)
 
     async def _fmt_memory_recall(
         self,

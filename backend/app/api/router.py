@@ -8,6 +8,7 @@ from app.api import (
     characters,
     events,
     generation_jobs,
+    information_ledger,
     novel_specs,
     organizations,
     plot_thread_revisions,
@@ -44,6 +45,7 @@ api_router.include_router(world_item_revisions.router)
 api_router.include_router(plot_thread_revisions.router)
 api_router.include_router(world_items.router)
 api_router.include_router(plot_threads.router)
+api_router.include_router(information_ledger.router)
 api_router.include_router(generation_jobs.router)
 api_router.include_router(events.router)
 

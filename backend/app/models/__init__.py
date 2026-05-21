@@ -6,6 +6,7 @@ from .continuity_issue import ContinuityIssue
 from .draft_version import DraftVersion
 from .export_file import ExportFile
 from .generation_job import GenerationJob
+from .information_ledger import InformationLedger
 from .invitation import OrganizationInvitation
 from .memory import MemoryEntry
 from .model_call import ModelCall
@@ -32,6 +33,7 @@ __all__ = [
     "DraftVersion",
     "ExportFile",
     "GenerationJob",
+    "InformationLedger",
     "MemoryEntry",
     "ModelCall",
     "NovelSpec",

@@ -15,6 +15,7 @@ from app.models.continuity_issue import ContinuityIssue
 from app.models.draft_version import DraftVersion
 from app.models.export_file import ExportFile
 from app.models.generation_job import GenerationJob
+from app.models.information_ledger import InformationLedger
 from app.models.invitation import OrganizationInvitation
 from app.models.memory import MemoryEntry
 from app.models.model_call import ModelCall
@@ -134,6 +135,11 @@ class GenerationJobRepository(BaseRepository[GenerationJob]):
     id_prefix = "job"
 
 
+class InformationLedgerRepository(BaseRepository[InformationLedger]):
+    model = InformationLedger
+    id_prefix = "ledger"
+
+
 class ModelCallRepository(BaseRepository[ModelCall]):
     model = ModelCall
     id_prefix = "model_call"
@@ -228,6 +234,7 @@ __all__ = [
     "DraftVersionRepository",
     "ExportFileRepository",
     "GenerationJobRepository",
+    "InformationLedgerRepository",
     "MemoryRepository",
     "ModelCallRepository",
     "NovelSpecRepository",
