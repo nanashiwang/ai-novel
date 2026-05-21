@@ -379,6 +379,15 @@ _POSTGRES_SCHEMA_FIXES = [
         "CREATE INDEX IF NOT EXISTS ix_plot_thread_revisions_project_status "
         "ON plot_thread_revisions(project_id, status)"
     ),
+    # Sprint 13-B1：memory_entries 嵌入向量列 + HNSW（迁移 0016 等价补丁）
+    "CREATE EXTENSION IF NOT EXISTS vector",
+    "ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS embedding vector(1536)",
+    (
+        "CREATE INDEX IF NOT EXISTS ix_memory_embedding_hnsw "
+        "ON memory_entries USING hnsw (embedding vector_cosine_ops) "
+        "WITH (m = 16, ef_construction = 64) "
+        "WHERE embedding IS NOT NULL"
+    ),
 ]
 
 

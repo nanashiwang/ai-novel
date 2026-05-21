@@ -70,6 +70,13 @@ class Settings(BaseSettings):
     moderation_provider: str = "local"
     moderation_block_severity: str = "high"  # 达到此严重度时调用方应阻断写入
 
+    # 嵌入向量（Sprint 13-B1）
+    # provider="stub" 走本地确定性向量（无外部依赖，单测可用）；
+    # provider="openai" 走 text-embedding-3-small（1536 维）
+    embedding_provider: str = "stub"
+    embedding_model: str = "text-embedding-3-small"
+    embedding_dims: int = 1536
+
     @property
     def cors_origin_list(self) -> list[str]:
         raw = self.cors_origins.strip().strip("'").strip('"')

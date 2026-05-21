@@ -38,7 +38,9 @@ pytestmark = pytest.mark.skipif(
 async def pg_url() -> AsyncIterator[str]:
     from testcontainers.postgres import PostgresContainer
 
-    container = PostgresContainer("postgres:16-alpine")
+    # 使用 pgvector 官方镜像，保证 memory_entries.embedding 列（vector 类型）
+    # 可成功建表；postgres:16-alpine 没有 pgvector 扩展。
+    container = PostgresContainer("pgvector/pgvector:pg16")
     container.start()
     try:
         url = container.get_connection_url().replace("postgresql+psycopg2", "postgresql+asyncpg")
@@ -49,8 +51,12 @@ async def pg_url() -> AsyncIterator[str]:
 
 @pytest_asyncio.fixture(scope="function")
 async def pg_engine(pg_url: str):
+    from sqlalchemy import text
+
     engine = create_async_engine(pg_url, future=True)
     async with engine.begin() as conn:
+        # pgvector 扩展必须先于 create_all 创建，否则 vector(1536) 列建表失败
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
     yield engine
     async with engine.begin() as conn:

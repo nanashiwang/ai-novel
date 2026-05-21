@@ -17,6 +17,7 @@ from app.schemas.story_generation import (
     CharacterStateUpdateContract,
     CharacterStateUpdateItem,
 )
+from app.services.embedding import embedding_service
 from app.services.model_gateway.service import model_gateway
 from app.services.prompt_manager.service import prompt_manager
 
@@ -240,7 +241,7 @@ class MemoryService:
                 },
                 ensure_ascii=False,
             )
-            await memory_repo.create(
+            saved_memory = await memory_repo.create(
                 organization_id=organization_id,
                 project_id=project_id,
                 source_type="scene",
@@ -250,6 +251,14 @@ class MemoryService:
                 content=content,
                 importance=4,
             )
+            # Sprint 13-B1：同步算 embedding 并写回；走 stub 时 <1ms，走 openai
+            # 时一次 30s 超时已在 service 内部限定，不会拖跨长流程
+            try:
+                vec = await embedding_service.embed(f"{saved_memory.title}\n{content}")
+                if vec is not None:
+                    saved_memory.embedding = vec
+            except Exception:  # noqa: BLE001
+                _logger.warning("memory_embedding_failed", exc_info=True)
             memory_count += 1
 
         return updated, memory_count
