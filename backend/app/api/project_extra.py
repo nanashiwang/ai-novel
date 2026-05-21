@@ -4,13 +4,15 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
+from sqlalchemy import or_, select
 
 from app.api.deps import CurrentUserDep, DbDep, TenantDep
 from app.core.config import get_settings
 from app.core.exceptions import NotFoundError
 from app.core.permissions import require_permission
+from app.models.memory import MemoryEntry
 from app.repositories import (
     ChapterRepository,
     ContinuityIssueRepository,
@@ -41,15 +43,43 @@ class MemoryResponse(MemoryPayload):
     id: str
     organization_id: str
     project_id: str
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 @router.get("/memory", response_model=list[MemoryResponse])
-async def list_memory(project_id: str, tenant: TenantDep, user: CurrentUserDep, db: DbDep):
+async def list_memory(
+    project_id: str,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+    memory_type: str | None = Query(default=None),
+    source_type: str | None = Query(default=None),
+    character: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+):
     require_permission(user, "memory:read", tenant)
-    rows = await MemoryRepository(db).list(
-        organization_id=tenant.organization_id, project_id=project_id
+    stmt = select(MemoryEntry).where(
+        MemoryEntry.organization_id == tenant.organization_id,
+        MemoryEntry.project_id == project_id,
     )
-    return rows
+    if memory_type:
+        stmt = stmt.where(MemoryEntry.memory_type == memory_type)
+    if source_type:
+        stmt = stmt.where(MemoryEntry.source_type == source_type)
+    for term in [character, q]:
+        clean = (term or "").strip()
+        if clean:
+            pattern = f"%{clean}%"
+            stmt = stmt.where(
+                or_(
+                    MemoryEntry.title.ilike(pattern),
+                    MemoryEntry.content.ilike(pattern),
+                )
+            )
+    stmt = stmt.order_by(MemoryEntry.created_at.desc()).limit(limit)
+    return (await db.execute(stmt)).scalars().all()
 
 
 @router.post("/memory", response_model=MemoryResponse, status_code=201)

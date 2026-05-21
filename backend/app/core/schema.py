@@ -137,6 +137,14 @@ _POSTGRES_SCHEMA_FIXES = [
         "CREATE INDEX IF NOT EXISTS ix_jobs_org_status_created "
         "ON generation_jobs(organization_id, status, created_at)"
     ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_memory_project_type_created "
+        "ON memory_entries(project_id, memory_type, created_at)"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_memory_project_source_created "
+        "ON memory_entries(project_id, source_type, source_id, created_at)"
+    ),
     """
     CREATE TABLE IF NOT EXISTS revision_sessions (
       id TEXT PRIMARY KEY,

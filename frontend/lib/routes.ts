@@ -1,6 +1,7 @@
 import {
   BarChart3,
   BookOpen,
+  BrainCircuit,
   BriefcaseBusiness,
   Building2,
   ClipboardCheck,
@@ -50,6 +51,7 @@ export const projectNav = [
   { label: "世界观", href: "/studio/projects/:projectId/world", icon: DatabaseZap },
   { label: "大纲", href: "/studio/projects/:projectId/outline", icon: Layers3 },
   { label: "写作工作台", href: "/studio/projects/:projectId/write", icon: PenLine },
+  { label: "长期记忆", href: "/studio/projects/:projectId/memory", icon: BrainCircuit },
   { label: "生成任务", href: "/studio/projects/:projectId/jobs", icon: Sparkles },
   { label: "版本 / 审稿", href: "/studio/projects/:projectId/versions", icon: FileClock },
   { label: "导出", href: "/studio/projects/:projectId/export", icon: FileDown },

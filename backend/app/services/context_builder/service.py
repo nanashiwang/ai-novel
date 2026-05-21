@@ -9,7 +9,7 @@
   4. world_rules       — Lorebook 地点/势力/硬规则（trusted）
   5. plot_threads      — 当前 open 的剧情线（trusted）
   6. recent_summary    — 最近 N 个 scenes 摘要（trusted）
-  7. memory_recall     — pgvector top-k（**Sprint 3 不接入，占位**, untrusted）
+  7. memory_recall     — 按角色/时间召回的历史记忆（untrusted）
 
 每段独立 token 预算（百分比基于总预算）。超额时按字符 truncate；不可信
 段被加倍压缩以减小 prompt injection 影响面。
@@ -145,7 +145,8 @@ class ContextBuilder:
     ) -> BuiltContext:
         """为"把单章拆成 scene cards"准备上下文。
 
-        recent_summary 取该项目最近若干条 scene 摘要；memory_recall 占位。
+        recent_summary 取该项目最近若干条 scene 摘要；memory_recall 取最近
+        的人物状态/历史记忆。
         """
         organization_id = project.organization_id
         project_id = project.id
@@ -175,8 +176,11 @@ class ContextBuilder:
                 ),
                 True,
             ),
-            # memory_recall: Sprint 3 不接 pgvector，留空但保持 segment 顺序稳定
-            ("memory_recall", "", False),
+            (
+                "memory_recall",
+                await self._fmt_memory_recall(session, organization_id, project_id),
+                False,
+            ),
         ]
         return self._assemble(segments_data)
 
@@ -230,7 +234,16 @@ class ContextBuilder:
                 ),
                 True,
             ),
-            ("memory_recall", "", False),
+            (
+                "memory_recall",
+                await self._fmt_memory_recall(
+                    session,
+                    organization_id,
+                    project_id,
+                    focus_names=list(scene.characters or []),
+                ),
+                False,
+            ),
         ]
         return self._assemble(segments_data)
 
@@ -449,6 +462,47 @@ class ContextBuilder:
         for entry in rows:
             head = entry.title or entry.memory_type or "摘要"
             parts.append(f"{head}：{entry.content}")
+        return "\n---\n".join(parts)
+
+    async def _fmt_memory_recall(
+        self,
+        session: AsyncSession,
+        organization_id: str,
+        project_id: str,
+        focus_names: list[str] | None = None,
+        *,
+        limit: int = 6,
+    ) -> str:
+        """按角色优先、时间倒序召回结构化记忆。
+
+        当前版本先用数据库过滤和文本匹配；向量召回接入后可以替换这里的
+        candidate 排序，但对 ContextBuilder 的输出契约保持不变。
+        """
+        repo = MemoryRepository(session)
+        rows = list(
+            await repo.list(
+                organization_id=organization_id,
+                project_id=project_id,
+                limit=50,
+            )
+        )
+        if not rows:
+            return ""
+        focus_set = {name for name in (focus_names or []) if name}
+
+        def score(entry) -> tuple[int, int]:
+            text = f"{entry.title}\n{entry.content}"
+            role_hit = 1 if focus_set and any(name in text for name in focus_set) else 0
+            type_score = 1 if entry.memory_type == "character_state" else 0
+            return role_hit, type_score
+
+        if focus_set:
+            rows = [row for row in rows if score(row)[0] > 0] or rows
+        rows.sort(key=score, reverse=True)
+        selected = rows[:limit]
+        parts = [
+            f"[{entry.memory_type}] {entry.title}：{entry.content}" for entry in selected
+        ]
         return "\n---\n".join(parts)
 
     # ------------------------------------------------------------------

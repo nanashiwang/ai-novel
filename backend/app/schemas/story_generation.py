@@ -185,6 +185,31 @@ class SceneDraftContract(APIModel):
     unresolved_threads: list[str] = Field(default_factory=list)
 
 
+class CharacterStateUpdateItem(APIModel):
+    name: str = ""
+    current_state: dict[str, Any] = Field(default_factory=dict)
+    relationships: dict[str, Any] = Field(default_factory=dict)
+    summary: str = ""
+
+    @field_validator("name", "summary", mode="before")
+    @classmethod
+    def stringify_text(cls, value: Any) -> str:
+        if isinstance(value, list):
+            return "；".join(str(item) for item in value)
+        if isinstance(value, dict):
+            return "；".join(f"{key}: {item}" for key, item in value.items())
+        return "" if value is None else str(value)
+
+    @field_validator("current_state", "relationships", mode="before")
+    @classmethod
+    def normalize_mapping(cls, value: Any) -> dict[str, Any]:
+        return value if isinstance(value, dict) else {}
+
+
+class CharacterStateUpdateContract(APIModel):
+    updates: list[CharacterStateUpdateItem] = Field(default_factory=list)
+
+
 class AuditIssueItem(APIModel):
     """单条 continuity / character / world / style 审稿问题。
 

@@ -549,6 +549,20 @@ export type WorldItemPayload = {
   attributes?: Record<string, unknown>;
 };
 
+export type MemoryEntry = {
+  id: string;
+  organization_id: string;
+  project_id: string;
+  source_type: string;
+  source_id: string;
+  memory_type: string;
+  title: string;
+  content: string;
+  importance: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
 export type PlotThread = {
   id: string;
   organization_id: string;
@@ -664,8 +678,16 @@ export const plotThreadsApi = {
     http.delete<void>(`/projects/${projectId}/plot-threads/${threadId}`),
 };
 export const memoryApi = {
-  list: (projectId: string) =>
-    http.get<unknown[]>(`/projects/${projectId}/memory`),
+  list: (
+    projectId: string,
+    params?: {
+      memory_type?: string;
+      source_type?: string;
+      character?: string;
+      q?: string;
+      limit?: number;
+    },
+  ) => http.get<MemoryEntry[]>(`/projects/${projectId}/memory`, params),
 };
 // 与 backend/app/models/export_file.py + project_extra.ExportResponse 对齐
 export type ExportFile = {

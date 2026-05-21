@@ -9,8 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models import (
     Chapter,
+    Character,
     DraftVersion,
     GenerationJob,
+    MemoryEntry,
     ModelCall,
     NovelSpec,
     Organization,
@@ -117,6 +119,22 @@ async def _setup_org_project_spec_scene(
                 status="planned",
             )
         )
+    db_session.add(
+        Character(
+            id=new_id("char"),
+            organization_id=org_id,
+            project_id=project_id,
+            name="林澈",
+            role="protagonist",
+            description="旧城区档案员，能读取旧物记忆。",
+            personality="克制敏锐，习惯独自承担风险。",
+            motivation="追查妹妹失踪案。",
+            secret="曾接触过核心记忆样本。",
+            arc="从逃避真相到主动揭开城市记忆系统。",
+            relationships={},
+            current_state={"status": "准备进入档案馆"},
+        )
+    )
     project = await db_session.get(Project, project_id)
     project.status = "scenes_planned"
     # 升级到 Pro plan：write_scene 端点要求 entitlement "generation:scene"，
@@ -158,6 +176,7 @@ async def test_write_scene_happy_path(client, db_engine, db_session, monkeypatch
     job = await _await_job_terminal(db_session, job_id)
     assert job.status == "succeeded"
     assert job.consumed_quota == 1200
+    assert job.output_payload["memory"]["updated_character_count"] == 1
 
     db_session.expire_all()
     drafts = (
@@ -173,12 +192,44 @@ async def test_write_scene_happy_path(client, db_engine, db_session, monkeypatch
 
     scene = await db_session.get(Scene, scene_id)
     assert scene.status == "drafted"
+    character = (
+        await db_session.execute(
+            select(Character).where(
+                Character.project_id == project_id,
+                Character.name == "林澈",
+            )
+        )
+    ).scalar_one()
+    assert character.current_state["last_scene_title"] == "开场场景"
+    assert character.current_state["knowledge_state"] == "档案被人篡改"
+
+    character_memories = (
+        await db_session.execute(
+            select(MemoryEntry).where(
+                MemoryEntry.project_id == project_id,
+                MemoryEntry.source_id == scene_id,
+                MemoryEntry.memory_type == "character_state",
+            )
+        )
+    ).scalars().all()
+    assert len(character_memories) == 1
+    assert "林澈" in character_memories[0].title
+    memory_res = await client.get(
+        f"/api/v1/projects/{project_id}/memory",
+        headers=headers,
+        params={"memory_type": "character_state", "character": "林澈"},
+    )
+    assert memory_res.status_code == 200
+    assert len(memory_res.json()) == 1
 
     # model_calls 应该记录 ContextBuilder 诊断指标
     model_calls = (
         await db_session.execute(select(ModelCall).where(ModelCall.job_id == job_id))
     ).scalars().all()
-    assert len(model_calls) >= 1
+    assert {call.task_type for call in model_calls} >= {
+        "write_scene_draft",
+        "update_character_states",
+    }
 
     usage = (
         await db_session.execute(select(UsageEvent).where(UsageEvent.job_id == job_id))

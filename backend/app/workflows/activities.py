@@ -44,6 +44,7 @@ from app.repositories import (
 )
 from app.services.auditor.service import auditor_service
 from app.services.context_builder.service import context_builder
+from app.services.memory import memory_service
 from app.services.novel_planner.service import novel_planner_service
 from app.services.quota.service import quota_service
 from app.services.rewriter.service import rewriter_service
@@ -974,7 +975,7 @@ async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
                 target_words=target_words,
             )
             word_count = draft.word_count or len(draft.content)
-            await draft_repo.create(
+            saved = await draft_repo.create(
                 organization_id=job_row.organization_id,
                 project_id=job_row.project_id,
                 chapter_id=chapter.id,
@@ -988,6 +989,15 @@ async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
                 created_by=job_row.user_id,
             )
             scene.status = "drafted"
+            await memory_service.update_character_states_from_scene(
+                session,
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                job_id=job_row.id,
+                chapter=chapter,
+                scene=scene,
+                draft=saved,
+            )
             previous_excerpt = draft.content[-800:]
             total_words += word_count
             created += 1
@@ -1071,6 +1081,15 @@ async def run_scene_writing(job: dict[str, Any]) -> dict[str, Any]:
             created_by=job_row.user_id,
         )
         scene.status = "drafted"
+        memory_result = await memory_service.update_character_states_from_scene(
+            session,
+            organization_id=job_row.organization_id,
+            project_id=job_row.project_id,
+            job_id=job_row.id,
+            chapter=chapter,
+            scene=scene,
+            draft=saved,
+        )
 
         # 与 generate_chapter_scene_cards 对称：单 scene 写作自身结算 quota
         await _settle_job_usage(session, job_row, amount=job_row.reserved_quota)
@@ -1107,6 +1126,7 @@ async def run_scene_writing(job: dict[str, Any]) -> dict[str, Any]:
             "parent_version_id": parent_version_id,
             "context_summary": context_summary,
             "context_total_tokens": ctx_inspector.total_tokens,
+            "memory": memory_result,
         }
         job_row.output_payload = result
         return result

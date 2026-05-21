@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -218,6 +219,47 @@ class DeterministicModelProvider:
         }
 
     @staticmethod
+    def _character_state_updates(user_prompt: str) -> dict[str, Any]:
+        roster: list[dict[str, Any]] = []
+        scene: dict[str, Any] = {}
+        try:
+            roster_text = user_prompt.split("已有人物名册：", 1)[1].split("当前 scene：", 1)[0]
+            scene_text = user_prompt.split("当前 scene：", 1)[1]
+            roster = json.loads(roster_text.strip())
+            scene = json.loads(scene_text.strip())
+        except (IndexError, json.JSONDecodeError):
+            pass
+        scene_names = {str(name) for name in scene.get("characters", [])}
+        updates = []
+        for character in roster:
+            name = str(character.get("name") or "")
+            if not name or (scene_names and name not in scene_names):
+                continue
+            updates.append(
+                {
+                    "name": name,
+                    "current_state": {
+                        "last_chapter_index": scene.get("chapter_index"),
+                        "last_chapter_title": scene.get("chapter_title"),
+                        "last_scene_index": scene.get("scene_index"),
+                        "last_scene_title": scene.get("scene_title"),
+                        "location": scene.get("location"),
+                        "emotional_state": (
+                            f"{scene.get('emotion_start')} → {scene.get('emotion_end')}"
+                        ),
+                        "knowledge_state": scene.get("reveal"),
+                        "last_hook": scene.get("hook"),
+                    },
+                    "relationships": {},
+                    "summary": (
+                        f"{name}经历了“{scene.get('scene_title') or '当前场景'}”"
+                        "的冲突，并获得新信息。"
+                    ),
+                }
+            )
+        return {"updates": updates}
+
+    @staticmethod
     def _revision_result() -> dict[str, Any]:
         return {
             "reply": "我建议先强化主题，再补一个可直接落库的人物、世界规则和剧情线。",
@@ -299,6 +341,8 @@ class DeterministicModelProvider:
             return self._audit_result()
         if "unresolved_threads" in schema_properties or "SceneDraftContract" in schema_text:
             return self._scene_draft()
+        if "updates" in schema_properties:
+            return self._character_state_updates(user_prompt)
         return {
             "synthetic": True,
             "model": model,
