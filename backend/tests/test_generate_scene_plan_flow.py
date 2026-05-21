@@ -453,7 +453,7 @@ async def test_generate_scene_plan_rejects_cross_tenant(
 
 @pytest.mark.asyncio
 async def test_context_builder_assemble_basic_segments(db_session):
-    """ContextBuilder.build_for_scene_planning 返回 7 段，trusted 标记正确。"""
+    """ContextBuilder.build_for_scene_planning 返回 8 段，trusted 标记正确。"""
     from app.services.context_builder import ContextBuilder
 
     builder = ContextBuilder(total_budget=4000)
@@ -509,8 +509,9 @@ async def test_context_builder_assemble_basic_segments(db_session):
         db_session, project=project, spec=spec, chapter=chapter
     )
 
-    # 段顺序：B2 在 world_rules / plot_threads 后各加一段 actions；
-    # C5 在 recent_summary 后注入 information_visibility（trusted）。
+    # 段顺序：B2 在 world_rules / plot_threads 后各加 actions；
+    # C2 把 recent_summary 拆为 recent_scenes (L1) + arc_summaries (L2-L4)；
+    # C5 在 arc_summaries 后注入 information_visibility（trusted）。
     labels = [s.label for s in ctx.segments]
     assert labels == [
         "hard_constraints",
@@ -520,7 +521,8 @@ async def test_context_builder_assemble_basic_segments(db_session):
         "world_actions",
         "plot_threads",
         "plot_actions",
-        "recent_summary",
+        "recent_scenes",
+        "arc_summaries",
         "information_visibility",
         "memory_recall",
     ]
@@ -528,6 +530,8 @@ async def test_context_builder_assemble_basic_segments(db_session):
     trusted_labels = {s.label for s in ctx.segments if s.trusted}
     assert "hard_constraints" in trusted_labels
     assert "task" in trusted_labels
+    assert "recent_scenes" in trusted_labels
+    assert "arc_summaries" in trusted_labels
     untrusted_labels = {s.label for s in ctx.segments if not s.trusted}
     assert untrusted_labels == {"memory_recall"}
 
@@ -537,9 +541,12 @@ async def test_context_builder_assemble_basic_segments(db_session):
     assert "测试主题" in hc.content
     assert "保持视角一致" in hc.content
 
-    # to_prompt 应该跳过空段（characters/world_rules/plot_threads/memory_recall）
+    # to_prompt 应该跳过空段（characters/world_rules/plot_threads/recent_scenes/
+    # arc_summaries/memory_recall）
     prompt = ctx.to_prompt()
     assert "[hard_constraints]" in prompt
     assert "[task]" in prompt
     assert "[characters]" not in prompt  # 没有 character 数据
+    assert "[recent_scenes]" not in prompt  # 没有 scene 摘要
+    assert "[arc_summaries]" not in prompt  # 没有弧线摘要
     assert "[memory_recall]" not in prompt  # 没有 memory 数据

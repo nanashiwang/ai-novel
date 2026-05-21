@@ -152,6 +152,16 @@ _POSTGRES_SCHEMA_FIXES = [
         "CREATE INDEX IF NOT EXISTS ix_memory_project_source_created "
         "ON memory_entries(project_id, source_type, source_id, created_at)"
     ),
+    # Sprint 14-C2：分层摘要记忆字段
+    (
+        "ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS "
+        "level VARCHAR(8) NOT NULL DEFAULT 'L1'"
+    ),
+    "ALTER TABLE memory_entries ADD COLUMN IF NOT EXISTS arc_window TEXT",
+    (
+        "CREATE INDEX IF NOT EXISTS ix_memory_project_level_created "
+        "ON memory_entries(project_id, level, created_at)"
+    ),
     """
     CREATE TABLE IF NOT EXISTS revision_sessions (
       id TEXT PRIMARY KEY,

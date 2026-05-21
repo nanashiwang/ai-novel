@@ -8,8 +8,9 @@
   3. characters        — 与本任务相关的人物卡（trusted）
   4. world_rules       — Lorebook 地点/势力/硬规则（trusted）
   5. plot_threads      — 当前 open 的剧情线（trusted）
-  6. recent_summary    — 最近 N 个 scenes 摘要（trusted）
-  7. memory_recall     — 按角色/时间召回的历史记忆（untrusted）
+  6. recent_scenes     — 最近 N 个 scenes 的 L1 原文摘要（trusted）
+  7. arc_summaries     — L2/L3/L4 弧线摘要（trusted；Sprint 14-C2 新增）
+  8. memory_recall     — 按角色/时间召回的历史记忆（untrusted）
 
 每段独立 token 预算（百分比基于总预算）。超额时按字符 truncate；不可信
 段被加倍压缩以减小 prompt injection 影响面。
@@ -19,9 +20,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chapter import Chapter
+from app.models.memory import MemoryEntry
 from app.models.project import NovelSpec, Project
 from app.models.scene import Scene
 from app.repositories import (
@@ -44,7 +47,8 @@ SegmentLabel = Literal[
     "world_actions",
     "plot_threads",
     "plot_actions",
-    "recent_summary",
+    "recent_scenes",
+    "arc_summaries",
     "information_visibility",
     "memory_recall",
 ]
@@ -53,24 +57,24 @@ SegmentLabel = Literal[
 # ContextBuilder(total_budget=...) 注入。
 _DEFAULT_TOTAL_BUDGET = 8000
 
-# 每段占总预算的百分比。trusted 段加起来 91%，untrusted 9%。
-# Sprint 13-B2：新增 world_actions / plot_actions 用于注入世界观条目与
-# 剧情线的最近演进，避免长篇生成时世界设定 / 主副线发生漂移。
-# Sprint 14-C5：新增 information_visibility (0.05)，把 memory_recall
-# 从 0.14 调到 0.09，保持总和 1.0；ledger 段用于提示"截至当前 scene
-# 哪些 secret 已经公开 / 半公开"，避免 AI 反复"重复揭秘"。
+# 每段占总预算的百分比。trusted 段加起来 93%，untrusted 7%。
+# Sprint 13-B2：新增 world_actions / plot_actions（剧情/世界演进追踪）。
+# Sprint 14-C2：拆 recent_summary → recent_scenes (L1) + arc_summaries (L2-L4)。
+# Sprint 14-C5：新增 information_visibility（信息释放 ledger 段）。
+# 验证：sum(_SEGMENT_BUDGET_PCT.values()) == 1.0
 _SEGMENT_BUDGET_PCT: dict[SegmentLabel, float] = {
-    "hard_constraints": 0.16,
-    "task": 0.16,
+    "hard_constraints": 0.15,
+    "task": 0.15,
     "characters": 0.10,
     "character_actions": 0.10,
     "world_rules": 0.08,
     "world_actions": 0.06,
     "plot_threads": 0.06,
     "plot_actions": 0.06,
-    "recent_summary": 0.08,
+    "recent_scenes": 0.05,
+    "arc_summaries": 0.06,
     "information_visibility": 0.05,
-    "memory_recall": 0.09,
+    "memory_recall": 0.08,
 }
 
 _TRUSTED_LABELS: set[SegmentLabel] = {
@@ -82,7 +86,8 @@ _TRUSTED_LABELS: set[SegmentLabel] = {
     "world_actions",
     "plot_threads",
     "plot_actions",
-    "recent_summary",
+    "recent_scenes",
+    "arc_summaries",
     "information_visibility",
 }
 
@@ -200,9 +205,19 @@ class ContextBuilder:
                 True,
             ),
             (
-                "recent_summary",
+                "recent_scenes",
                 await self._fmt_recent_scene_summaries(
                     session, organization_id, project_id, limit=3
+                ),
+                True,
+            ),
+            (
+                "arc_summaries",
+                await self._fmt_arc_summaries(
+                    session,
+                    organization_id,
+                    project_id,
+                    query_text=self._fmt_chapter_task(project, chapter),
                 ),
                 True,
             ),
@@ -292,9 +307,19 @@ class ContextBuilder:
                 True,
             ),
             (
-                "recent_summary",
+                "recent_scenes",
                 await self._fmt_recent_scene_summaries(
                     session, organization_id, project_id, limit=3
+                ),
+                True,
+            ),
+            (
+                "arc_summaries",
+                await self._fmt_arc_summaries(
+                    session,
+                    organization_id,
+                    project_id,
+                    query_text=task_text,
                 ),
                 True,
             ),
@@ -748,7 +773,7 @@ class ContextBuilder:
         *,
         limit: int = 3,
     ) -> str:
-        """从 memory_entries 取最近的 scene 摘要，按 created_at desc。
+        """从 memory_entries 取最近的 L1 scene 摘要，按 created_at desc。
 
         若该项目还没积累 memory（例如刚生成第一章），返回空字符串而非占位
         文本，让 to_prompt() 自动跳过整段。
@@ -759,9 +784,20 @@ class ContextBuilder:
                 organization_id=organization_id,
                 project_id=project_id,
                 source_type="scene",
+                level="L1",
                 limit=limit,
             )
         )
+        if not rows:
+            # 兜底：早期数据可能未设置 level；按 source_type='scene' 再查一次
+            rows = list(
+                await repo.list(
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    source_type="scene",
+                    limit=limit,
+                )
+            )
         if not rows:
             return ""
         parts: list[str] = []
@@ -810,6 +846,73 @@ class ContextBuilder:
                 f"· [{row.status}] {row.fact}（已知：{disclosed}）"
             )
         return "\n".join(lines)
+
+    async def _fmt_arc_summaries(
+        self,
+        session: AsyncSession,
+        organization_id: str,
+        project_id: str,
+        *,
+        query_text: str = "",
+        limit: int = 3,
+    ) -> str:
+        """召回 L2/L3/L4 弧线摘要。
+
+        Sprint 14-C2：优先走 embedding 向量召回（PG + pgvector）；SQLite 测试
+        或向量服务异常时回落到 created_at desc 兜底，保证测试路径稳定。
+        """
+        try:  # pragma: no cover - 依赖外部 embedding 服务
+            from app.services.embedding import embedding_service  # noqa: PLC0415
+            from app.services.embedding.recall import (  # noqa: PLC0415
+                recall_memories_by_vector,
+            )
+
+            if query_text:
+                vector = await embedding_service.embed(query_text)
+                if vector is not None:
+                    rows = await recall_memories_by_vector(
+                        session,
+                        organization_id=organization_id,
+                        project_id=project_id,
+                        query_vector=vector,
+                        memory_types=["L2", "L3", "L4"],
+                        k=limit,
+                    )
+                    if rows:
+                        return self._format_arc_rows(rows)
+        except (ImportError, NotImplementedError):
+            pass
+        except Exception:  # noqa: BLE001
+            pass
+
+        # 回落：按 created_at desc 取最近 N 条 L2/L3/L4
+        stmt = (
+            select(MemoryEntry)
+            .where(
+                MemoryEntry.organization_id == organization_id,
+                MemoryEntry.project_id == project_id,
+                MemoryEntry.level.in_(["L2", "L3", "L4"]),
+            )
+            .order_by(MemoryEntry.created_at.desc())
+            .limit(limit)
+        )
+        rows = list((await session.execute(stmt)).scalars().all())
+        if not rows:
+            return ""
+        return self._format_arc_rows(rows)
+
+    @staticmethod
+    def _format_arc_rows(rows: list[MemoryEntry]) -> str:
+        # L4 → L3 → L2 顺序，让模型先看到最大尺度
+        order = {"L4": 0, "L3": 1, "L2": 2}
+        rows_sorted = sorted(rows, key=lambda r: order.get(r.level or "L2", 9))
+        parts: list[str] = []
+        for entry in rows_sorted:
+            head = entry.title or entry.memory_type or "弧线摘要"
+            arc = f"[{entry.level or 'L?'}|{entry.arc_window or '—'}] "
+            parts.append(f"{arc}{head}：{entry.content}")
+        return "\n---\n".join(parts)
+
 
     async def _fmt_memory_recall(
         self,
@@ -896,6 +999,8 @@ class ContextBuilder:
             title=title,
             content=summary,
             importance=importance,
+            level="L1",
+            arc_window=f"ch{chapter.chapter_index}",
         )
 
 
