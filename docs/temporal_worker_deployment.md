@@ -78,17 +78,24 @@ from temporalio.worker import Worker
 from app.core.config import get_settings
 from app.workflows.activities import (
     audit_scene,
+    finalize_full_novel,
     generate_book_spec,
     generate_chapter_outline,
     generate_chapter_scene_cards,
     mark_job_status,
+    plan_chapter_scenes_for_full_novel,
+    prepare_full_novel,
     rewrite_scene,
     run_full_novel_pipeline,
     run_scene_writing,
+    write_chapter_scenes_for_full_novel,
 )
 from app.workflows.audit_scene import AuditSceneWorkflow
 from app.workflows.generate_bible import GenerateBibleWorkflow
-from app.workflows.generate_full_novel import GenerateFullNovelWorkflow
+from app.workflows.generate_full_novel import (
+    GenerateFullNovelChapterWorkflow,
+    GenerateFullNovelWorkflow,
+)
 from app.workflows.generate_outline import GenerateOutlineWorkflow
 from app.workflows.generate_scene_plan import GenerateScenePlanWorkflow
 from app.workflows.rewrite_scene import RewriteSceneWorkflow
@@ -111,6 +118,7 @@ async def main() -> None:
             AuditSceneWorkflow,
             RewriteSceneWorkflow,
             GenerateFullNovelWorkflow,
+            GenerateFullNovelChapterWorkflow,
         ],
         activities=[
             mark_job_status,
@@ -121,6 +129,10 @@ async def main() -> None:
             audit_scene,
             rewrite_scene,
             run_full_novel_pipeline,
+            prepare_full_novel,
+            plan_chapter_scenes_for_full_novel,
+            write_chapter_scenes_for_full_novel,
+            finalize_full_novel,
         ],
         max_concurrent_activities=8,
     )
@@ -215,3 +227,76 @@ A: workflow 代码改动后必须重新部署 worker；workflow 内不要使用
 
 **Q: 本地开发也需要起 Temporal 吗**
 A: 不需要。默认 `TEMPORAL_ENABLED=false` 走 local 模式，跑 pytest 也无依赖。
+
+## 7. full_novel 长任务部署注意（Sprint 12-B）
+
+`GenerateFullNovelWorkflow` 与其它单 activity workflow 不同，是一个**分批 +
+continue_as_new** 的编排器，会启动若干 `GenerateFullNovelChapterWorkflow`
+子 workflow。这给部署带来几个 Temporal 特有的注意事项。
+
+### 7.1 history 长度
+
+每批默认 `BATCH_SIZE = 3` 章。一批内的事件大致：
+
+- `prepare_full_novel`：1 activity（含 spec / outline 复用）
+- 每章 child workflow scheduled / completed：2 events × 3 = 6
+- 每章子 workflow 内部 ~2 activity：12 events
+- `finalize_full_novel` + `mark_job_status` (succeeded)：4 events
+
+合计单 run ~25 events；continue_as_new 之后 history 重置回 0。即使
+2000 章项目（MAX_OUTLINE_CHAPTERS）也只会有 ~670 个 run，每 run 都远低于
+51200 event / 50MB 的默认上限。
+
+如需调整 batch 大小，改 `app/workflows/generate_full_novel.py::BATCH_SIZE`。
+**注意：调整后必须重新部署 worker**（workflow 代码改动违反 deterministic
+replay，已 in-flight 的 full_novel job 会在下一次重放时报错）。建议：
+
+1. 创建一个 worker version 标签（如 `BATCH_SIZE=5`）
+2. 等所有 BATCH_SIZE=3 的 full_novel job 跑完
+3. 再上线新 worker
+
+### 7.2 max_concurrent_activities
+
+父 workflow 在一批内**并行** K=3 个子 workflow，每子 workflow 又有
+plan + write 两个 activity；写作 activity 可能持续 5~10 分钟。建议
+`max_concurrent_activities` ≥ 16，避免子 workflow 的 activity 排队过久。
+内存上每个 activity ~120MB（包含 LLM client / sqlalchemy session）。
+
+### 7.3 子 workflow ID 冲突
+
+父 workflow 给每个 child 命名为 `<parent_wf_id>-ch-<chapter_id>`。同一
+chapter 的 retry / continue_as_new 后再次入批时会再次启动同名 child
+workflow，Temporal 的 `WorkflowIDReusePolicy` 默认为 `AllowDuplicate`，
+不冲突。
+
+### 7.4 quota 结算时机
+
+父 full_novel job 在 `prepare` 阶段不 settle quota（spec/outline 子
+activity 已被改成 `skip_settle=True`）；唯一 settle 点在
+`finalize_full_novel`，按"实际写出字数"commit。这意味着：
+
+- continue_as_new 中途失败 → mark_job_status('failed') 会自动释放剩余
+  reservation
+- 半路 cancel → 同上，但已经写出的字数不会被 settle，"幽灵预留"在
+  `_release_job_reservations` 中被一次性释放（与其它 job 类型对称）
+
+### 7.5 监控
+
+观察以下指标判断 full_novel 健康度：
+
+- `temporalio_workflow_completed_total{workflow_type="GenerateFullNovelWorkflow"}`
+- `temporalio_workflow_failed_total{workflow_type="GenerateFullNovelChapterWorkflow"}`
+  ：单章失败率；超过 10% 就应该告警，多半是 LLM provider 限流或 prompt
+  退化
+- `jobs_created_total{job_type="full_novel", status="succeeded"}` /
+  `failed`（API metrics）
+
+### 7.6 故障恢复
+
+worker 重启不会丢 full_novel 状态：每次 continue_as_new 都把当前进度
+（offset + 累积 metrics）序列化到 Temporal history，新 worker 接管后从
+最新状态继续。但**进行中的 child workflow** 必须由原 worker 完成或被
+Temporal 重新调度（取决于 `worker_shutdown_grace_period`）。建议
+worker 的 SIGTERM grace ≥ 30 分钟，让最长的 write_chapter_scenes
+activity 有机会完成。
+
