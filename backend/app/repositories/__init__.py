@@ -10,6 +10,7 @@ from sqlalchemy import select
 from app.models.audit_log import AdminAuditLog
 from app.models.chapter import Chapter, Volume
 from app.models.character import Character
+from app.models.character_revision import CharacterRevision
 from app.models.continuity_issue import ContinuityIssue
 from app.models.draft_version import DraftVersion
 from app.models.export_file import ExportFile
@@ -99,6 +100,11 @@ class SceneRepository(BaseRepository[Scene]):
 class CharacterRepository(BaseRepository[Character]):
     model = Character
     id_prefix = "char"
+
+
+class CharacterRevisionRepository(BaseRepository[CharacterRevision]):
+    model = CharacterRevision
+    id_prefix = "char_rev"
 
 
 class WorldItemRepository(BaseRepository[WorldItem]):
@@ -205,6 +211,7 @@ __all__ = [
     "AuditLogRepository",
     "ChapterRepository",
     "CharacterRepository",
+    "CharacterRevisionRepository",
     "ContinuityIssueRepository",
     "DraftVersionRepository",
     "ExportFileRepository",

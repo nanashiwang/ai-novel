@@ -221,6 +221,35 @@ _POSTGRES_SCHEMA_FIXES = [
         "CREATE INDEX IF NOT EXISTS ix_revision_applied_changes_project "
         "ON revision_applied_changes(project_id)"
     ),
+    # character_revisions：人物字段版本链（Sprint 10：动态人物画像系统）
+    """
+    CREATE TABLE IF NOT EXISTS character_revisions (
+      id TEXT PRIMARY KEY,
+      organization_id TEXT NOT NULL,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+      field VARCHAR(64) NOT NULL,
+      old_value JSONB,
+      new_value JSONB,
+      reason TEXT NOT NULL DEFAULT '',
+      source VARCHAR(16) NOT NULL,
+      scene_id TEXT REFERENCES scenes(id),
+      status VARCHAR(16) NOT NULL DEFAULT 'pending',
+      created_by TEXT NOT NULL REFERENCES users(id),
+      applied_by TEXT REFERENCES users(id),
+      applied_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    (
+        "CREATE INDEX IF NOT EXISTS ix_character_revisions_char_status "
+        "ON character_revisions(character_id, status, created_at)"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_character_revisions_project_status "
+        "ON character_revisions(project_id, status)"
+    ),
     """
     CREATE TABLE IF NOT EXISTS draft_versions (
       id TEXT PRIMARY KEY,

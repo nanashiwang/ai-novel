@@ -1,6 +1,7 @@
 from .audit_log import AdminAuditLog
 from .chapter import Chapter, Volume
 from .character import Character
+from .character_revision import CharacterRevision
 from .continuity_issue import ContinuityIssue
 from .draft_version import DraftVersion
 from .export_file import ExportFile
@@ -24,6 +25,7 @@ __all__ = [
     "AdminAuditLog",
     "Chapter",
     "Character",
+    "CharacterRevision",
     "ContinuityIssue",
     "DraftVersion",
     "ExportFile",

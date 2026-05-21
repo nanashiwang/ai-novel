@@ -105,6 +105,7 @@ ERROR_CODES: frozenset[str] = frozenset(
         "draft_not_found",
         "revision_session_not_found",
         "revision_proposal_not_found",
+        "character_revision_not_found",
         "plot_thread_not_found",
         # 额度
         "quota_insufficient",
@@ -140,7 +141,7 @@ ERROR_CODES: frozenset[str] = frozenset(
 # 项目级章节大纲目标上限。超长篇允许设置较大目标，但实际生成会按批推进，
 # 避免一次请求让模型输出数百章 JSON。
 MAX_OUTLINE_CHAPTERS = 2000
-OUTLINE_CHAPTER_BATCH_SIZE = 60
+OUTLINE_CHAPTER_BATCH_SIZE = 30
 
 
 __all__ = [

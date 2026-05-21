@@ -1,4 +1,9 @@
-"""人物卡 API。"""
+"""人物卡 API。
+
+Sprint 10：所有 character 字段修改统一走 character_tracker.record_user_edit()，
+落版本链 + 应用到 characters 表。create 路径仍直接走 repo（首次创建无旧值
+可对比，不需 revision；后续修改才有版本意义）。
+"""
 from __future__ import annotations
 
 from fastapi import APIRouter
@@ -9,6 +14,7 @@ from app.core.exceptions import NotFoundError
 from app.core.permissions import require_permission
 from app.repositories import CharacterRepository
 from app.schemas.common import APIModel
+from app.services.character_tracker import character_tracker
 
 router = APIRouter(prefix="/projects/{project_id}/characters", tags=["characters"])
 
@@ -77,13 +83,17 @@ async def update_character(
     db: DbDep,
 ):
     require_permission(user, "character:write", tenant)
-    character = await CharacterRepository(db).update(
-        character_id,
-        payload.model_dump(),
-        organization_id=tenant.organization_id,
-    )
+    repo = CharacterRepository(db)
+    character = await repo.get(character_id, organization_id=tenant.organization_id)
     if not character or character.project_id != project_id:
         raise NotFoundError("character_not_found")
+    # 通过 tracker 记录版本链 + 应用到 characters 表
+    await character_tracker.record_user_edit(
+        db,
+        character=character,
+        new_values=payload.model_dump(),
+        created_by=user.id,
+    )
     await db.commit()
     return character
 

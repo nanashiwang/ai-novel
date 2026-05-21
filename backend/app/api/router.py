@@ -4,6 +4,7 @@ from app.api import (
     auth,
     billing,
     chapters,
+    character_revisions,
     characters,
     generation_jobs,
     novel_specs,
@@ -30,6 +31,8 @@ api_router.include_router(project_extra.router)
 api_router.include_router(revisions.router)
 api_router.include_router(novel_specs.router)
 api_router.include_router(characters.router)
+api_router.include_router(character_revisions.router)
+api_router.include_router(character_revisions.project_router)
 api_router.include_router(chapters.router)
 api_router.include_router(scenes.router)
 api_router.include_router(world_items.router)

@@ -592,6 +592,53 @@ export const charactersApi = {
   remove: (projectId: string, characterId: string) =>
     http.delete<void>(`/projects/${projectId}/characters/${characterId}`),
 };
+
+// Sprint 10：人物字段版本链
+export type CharacterRevisionSource = "user_edit" | "copilot" | "ai_inferred";
+export type CharacterRevisionStatus = "pending" | "applied" | "rejected" | "superseded";
+
+export type CharacterRevision = {
+  id: string;
+  character_id: string;
+  field: string;
+  old_value: unknown;
+  new_value: unknown;
+  reason: string;
+  source: CharacterRevisionSource;
+  scene_id: string | null;
+  status: CharacterRevisionStatus;
+  created_by: string;
+  applied_by: string | null;
+  created_at: string | null;
+  applied_at: string | null;
+};
+
+export type CharacterPendingCount = {
+  character_id: string;
+  pending_count: number;
+};
+
+export const characterRevisionsApi = {
+  list: (projectId: string, characterId: string, params?: { status?: CharacterRevisionStatus; limit?: number }) =>
+    http.get<CharacterRevision[]>(
+      `/projects/${projectId}/characters/${characterId}/revisions`,
+      params,
+    ),
+  apply: (projectId: string, characterId: string, revisionId: string) =>
+    http.post<CharacterRevision>(
+      `/projects/${projectId}/characters/${characterId}/revisions/${revisionId}/apply`,
+    ),
+  reject: (projectId: string, characterId: string, revisionId: string) =>
+    http.post<CharacterRevision>(
+      `/projects/${projectId}/characters/${characterId}/revisions/${revisionId}/reject`,
+    ),
+  rollback: (projectId: string, characterId: string, revisionId: string) =>
+    http.post<CharacterRevision>(
+      `/projects/${projectId}/characters/${characterId}/revisions/${revisionId}/rollback`,
+    ),
+  pendingCount: (projectId: string) =>
+    http.get<CharacterPendingCount[]>(`/projects/${projectId}/character-revisions/pending-count`),
+};
 export const chaptersApi = {
   list: (projectId: string) =>
     http.get<Chapter[]>(`/projects/${projectId}/chapters`),
