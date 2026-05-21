@@ -353,10 +353,16 @@ class ContextBuilder:
         parts: list[str] = []
         for ch in rows:
             chunk = f"{ch.name}（{ch.role or '配角'}）：{ch.description or '—'}"
+            if ch.personality:
+                chunk += f" 性格：{ch.personality}"
             if ch.motivation:
                 chunk += f" 动机：{ch.motivation}"
+            if ch.secret:
+                chunk += f" 秘密：{ch.secret}"
             if ch.arc:
                 chunk += f" 弧光：{ch.arc}"
+            if ch.current_state:
+                chunk += f" 当前状态：{ch.current_state}"
             parts.append(chunk)
         return "\n".join(parts)
 

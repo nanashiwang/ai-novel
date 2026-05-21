@@ -111,15 +111,33 @@ class DeterministicModelProvider:
                     "name": protagonist_name,
                     "role": "protagonist",
                     "description": protagonist_desc,
+                    "personality": "克制敏锐，习惯独自承担风险。",
                     "motivation": f"揭开『{topic}』背后被掩盖的真相。",
+                    "secret": "曾接触过核心记忆样本，却主动隐瞒了这段经历。",
                     "arc": "从被动卷入到主动承担抉择的代价。",
+                    "relationships": {
+                        antagonist_name: "被对方监视并逐步形成正面对抗"
+                    },
+                    "current_state": {
+                        "status": "追查真相中",
+                        "knowledge_state": "只知道案件表层线索",
+                    },
                 },
                 {
                     "name": antagonist_name,
                     "role": "antagonist",
                     "description": f"掌控本作核心冲突源头的对立面，{style}下的反派形象。",
+                    "personality": "冷静强势，擅长用秩序包装私心。",
                     "motivation": "用自己的方式维护被打破的旧秩序。",
+                    "secret": "知道旧案真正责任人，并一直操纵证据流向。",
                     "arc": "从秩序维护者滑向掌控一切的人。",
+                    "relationships": {
+                        protagonist_name: "试图阻止对方接近真相"
+                    },
+                    "current_state": {
+                        "status": "暗中布局",
+                        "knowledge_state": "掌握核心真相的一部分",
+                    },
                 },
             ],
             "continuity_rules": [

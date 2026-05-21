@@ -79,8 +79,12 @@ export type BibleCharacter = {
   name: string;
   role: string;
   description: string;
+  personality: string;
   motivation: string;
+  secret: string;
   arc: string;
+  relationships: Record<string, unknown>;
+  current_state: Record<string, unknown>;
 };
 
 export type BibleWorldItem = {

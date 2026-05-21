@@ -208,6 +208,68 @@ class NovelPlannerService:
         if project.target_chapter_count:
             constraints.append(f"目标章节数约 {project.target_chapter_count} 章")
         data["constraints"] = constraints
+        characters: list[dict] = []
+        for index, character in enumerate(data.get("main_characters") or [], start=1):
+            item = dict(character)
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            role = str(
+                item.get("role") or ("protagonist" if index == 1 else "supporting")
+            ).strip()
+            item["name"] = name
+            item["role"] = role
+            item["description"] = str(item.get("description") or f"{name}是推动主线的关键人物。")
+            item["personality"] = str(
+                item.get("personality") or "在压力下会暴露真实立场与弱点。"
+            )
+            item["motivation"] = str(
+                item.get("motivation") or f"围绕“{data['premise']}”追求自己的目标。"
+            )
+            item["secret"] = str(
+                item.get("secret") or f"{name}隐藏着会影响主线走向的关键信息。"
+            )
+            item["arc"] = str(item.get("arc") or "在关键选择中完成关系与立场转变。")
+            if not isinstance(item.get("relationships"), dict):
+                item["relationships"] = {}
+            if not isinstance(item.get("current_state"), dict) or not item.get("current_state"):
+                item["current_state"] = {
+                    "status": "故事开局",
+                    "knowledge_state": "尚未掌握核心真相",
+                }
+            characters.append(item)
+        if not characters:
+            characters = [
+                {
+                    "name": "主角",
+                    "role": "protagonist",
+                    "description": "承担主线行动与情绪变化的核心人物。",
+                    "personality": "外表克制，遇到关键选择会主动冒险。",
+                    "motivation": f"揭开“{data['premise']}”背后的真相。",
+                    "secret": "曾经与核心事件有未公开的联系。",
+                    "arc": "从被动卷入到主动承担代价。",
+                    "relationships": {},
+                    "current_state": {
+                        "status": "故事开局",
+                        "knowledge_state": "尚未掌握核心真相",
+                    },
+                },
+                {
+                    "name": "对立者",
+                    "role": "antagonist",
+                    "description": "制造主线阻力并代表另一套价值秩序。",
+                    "personality": "冷静、强势，擅长利用规则压迫他人。",
+                    "motivation": "维护自己认定的秩序与利益。",
+                    "secret": "掌握主角尚不知道的旧事真相。",
+                    "arc": "从秩序维护者滑向更极端的控制者。",
+                    "relationships": {},
+                    "current_state": {
+                        "status": "暗中布局",
+                        "knowledge_state": "掌握部分核心真相",
+                    },
+                },
+            ]
+        data["main_characters"] = characters
         if not data.get("locations"):
             data["locations"] = [
                 {

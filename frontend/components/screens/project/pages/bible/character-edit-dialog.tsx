@@ -32,10 +32,12 @@ export function CharacterEditDialog({
     name: character?.name ?? "",
     role: character?.role ?? "",
     description: character?.description ?? "",
+    personality: character?.personality ?? "",
     motivation: character?.motivation ?? "",
+    secret: character?.secret ?? "",
     arc: character?.arc ?? "",
-    secret: "",
-    personality: "",
+    relationships: character?.relationships ?? {},
+    current_state: character?.current_state ?? {},
   });
   const save = useMutation({
     mutationFn: () =>
@@ -69,7 +71,9 @@ export function CharacterEditDialog({
           <TextField label="定位（protagonist / antagonist / ...）" value={form.role ?? ""} onChange={(v) => set("role", v)} />
         </div>
         <TextField label="外貌 / 描写" rows={3} value={form.description ?? ""} onChange={(v) => set("description", v)} />
+        <TextField label="性格" rows={2} value={form.personality ?? ""} onChange={(v) => set("personality", v)} />
         <TextField label="动机" rows={2} value={form.motivation ?? ""} onChange={(v) => set("motivation", v)} />
+        <TextField label="秘密" rows={2} value={form.secret ?? ""} onChange={(v) => set("secret", v)} />
         <TextField label="人物弧光" rows={2} value={form.arc ?? ""} onChange={(v) => set("arc", v)} />
         <div className="flex justify-between gap-2 pt-2">
           {character ? (

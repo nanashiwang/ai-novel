@@ -56,6 +56,7 @@ export function BiblePage({ projectId }: { projectId: string }) {
   const charactersKey = useScopedKey("project", projectId, "characters");
   const worldItemsKey = useScopedKey("project", projectId, "world-items");
   const plotThreadsKey = useScopedKey("project", projectId, "plot-threads");
+  const chaptersKey = useScopedKey("project", projectId, "chapters");
   const preflightKey = useScopedKey("project", projectId, "preflight", "generate_bible");
   const jobsKey = useScopedKey("jobs");
 
@@ -92,7 +93,6 @@ export function BiblePage({ projectId }: { projectId: string }) {
     mutationFn: () => {
       const payload: GenerateBiblePayload = {
         estimate_words: preflight?.estimate_words ?? 2000,
-        // 已有 spec 时按钮文案是「重新生成」，用户预期就是覆盖式重生成
         force_regenerate: Boolean(bible?.spec),
         topic: prefs.topic.trim() || undefined,
         protagonist_archetype: prefs.protagonist_archetype.trim() || undefined,
@@ -123,6 +123,24 @@ export function BiblePage({ projectId }: { projectId: string }) {
     },
   });
 
+  const regenerateOutline = useMutation({
+    mutationFn: () =>
+      projectsApi.generateOutline(projectId, {
+        target_chapters: preflight?.target_chapter_count || undefined,
+        estimate_words: 3000,
+        force_regenerate: true,
+      }),
+    onSuccess: () => {
+      toast.success("已提交章节大纲重生成任务，故事圣经会保持不变");
+      queryClient.invalidateQueries({ queryKey: chaptersKey });
+      queryClient.invalidateQueries({ queryKey: projectKey });
+      queryClient.invalidateQueries({ queryKey: jobsKey });
+    },
+    onError: (e: unknown) => {
+      toast.error(e instanceof ApiError ? e.message : "提交失败");
+    },
+  });
+
   const invalidateAll = () => {
     queryClient.invalidateQueries({ queryKey: projectKey });
     queryClient.invalidateQueries({ queryKey: bibleKey });
@@ -138,6 +156,36 @@ export function BiblePage({ projectId }: { projectId: string }) {
 
   const canGenerate = preflight?.can_generate !== false;
   const disableGenerate = generate.isPending || isGenerating || !canGenerate;
+  const disableOutlineRegenerate = regenerateOutline.isPending || !spec;
+  const latestJobStatusText =
+    latestJob?.status === "failed"
+      ? `失败：${latestJob.error_message || "模型调用失败"}`
+      : latestJob?.status === "succeeded"
+        ? "已完成"
+        : latestJob?.status ?? "—";
+
+  const submitBibleGeneration = () => {
+    if (
+      spec &&
+      !window.confirm(
+        "这会重做故事圣经，并清空旧大纲/场景/正文。若你只想修章节，请点「只重生成大纲」。确定继续吗？",
+      )
+    ) {
+      return;
+    }
+    generate.mutate();
+  };
+
+  const submitOutlineRegeneration = () => {
+    if (
+      !window.confirm(
+        "这会保留当前故事圣经，只清空并重做章节大纲、场景和正文。确定继续吗？",
+      )
+    ) {
+      return;
+    }
+    regenerateOutline.mutate();
+  };
 
   return (
     <div className="space-y-6">
@@ -189,9 +237,23 @@ export function BiblePage({ projectId }: { projectId: string }) {
                   <Sparkles className="size-4" /> AI 优化设定
                 </Button>
               ) : null}
-              <Button onClick={() => generate.mutate()} disabled={disableGenerate}>
+              {spec ? (
+                <Button
+                  variant="secondary"
+                  onClick={submitOutlineRegeneration}
+                  disabled={disableOutlineRegenerate}
+                >
+                  {regenerateOutline.isPending ? (
+                    <RefreshCw className="size-4 animate-spin" />
+                  ) : (
+                    <Layers3 className="size-4" />
+                  )}
+                  只重生成大纲
+                </Button>
+              ) : null}
+              <Button onClick={submitBibleGeneration} disabled={disableGenerate}>
                 {isGenerating ? <RefreshCw className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-                {spec ? "重新生成" : "启动生成"}
+                {spec ? "重做故事圣经" : "启动生成"}
               </Button>
             </div>
           </div>
@@ -220,7 +282,7 @@ export function BiblePage({ projectId }: { projectId: string }) {
               />
               <BibleBlock
                 title="任务状态"
-                text={latestJob.status === "succeeded" ? "已完成" : latestJob.status}
+                text={latestJobStatusText}
               />
               {isAdmin && latestJob.workflow_id ? (
                 <p className="md:col-span-3 truncate text-xs text-slate-400">
@@ -291,9 +353,15 @@ export function BiblePage({ projectId }: { projectId: string }) {
                       key={character.id}
                       title={character.name}
                       badge={character.role}
-                      text={[character.description, character.motivation, character.arc]
+                      text={[
+                        character.description && `描述：${character.description}`,
+                        character.personality && `性格：${character.personality}`,
+                        character.motivation && `动机：${character.motivation}`,
+                        character.secret && `秘密：${character.secret}`,
+                        character.arc && `弧光：${character.arc}`,
+                      ]
                         .filter(Boolean)
-                        .join(" / ")}
+                        .join("\n")}
                       onEdit={() => setEditChar(character)}
                     />
                   ))

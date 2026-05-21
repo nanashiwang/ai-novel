@@ -85,8 +85,12 @@ class BibleCharacterResponse(APIModel):
     name: str
     role: str
     description: str
+    personality: str
     motivation: str
+    secret: str
     arc: str
+    relationships: dict
+    current_state: dict
 
 
 class BibleWorldItemResponse(APIModel):

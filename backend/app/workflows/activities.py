@@ -208,7 +208,8 @@ async def _character_roster_for_prompt(session: AsyncSession, job: GenerationJob
         return ""
     lines = []
     for row in rows[:40]:
-        detail = row.motivation or row.arc or row.description or ""
+        details = [row.description, row.personality, row.motivation, row.secret, row.arc]
+        detail = "；".join(item for item in details if item)
         lines.append(f"- {row.name}（{row.role or 'supporting'}）：{detail}")
     return "\n".join(lines)
 
@@ -228,8 +229,12 @@ async def _sync_bible_characters(session: AsyncSession, job: GenerationJob, bibl
         values = {
             "role": seed.role or "supporting",
             "description": seed.description,
+            "personality": seed.personality,
             "motivation": seed.motivation,
+            "secret": seed.secret,
             "arc": seed.arc,
+            "relationships": seed.relationships,
+            "current_state": seed.current_state,
         }
         if existing:
             for key, value in values.items():
@@ -430,6 +435,37 @@ _JOB_FAILURE_PROJECT_STATUS: dict[str, tuple[set[str], str]] = {
 }
 
 
+async def _has_project_rows(
+    session: AsyncSession,
+    job: GenerationJob,
+    model: type,
+) -> bool:
+    stmt = (
+        select(model.id)
+        .where(
+            model.organization_id == job.organization_id,
+            model.project_id == job.project_id,
+        )
+        .limit(1)
+    )
+    return (await session.execute(stmt)).scalar_one_or_none() is not None
+
+
+async def _infer_project_status_from_artifacts(
+    session: AsyncSession,
+    job: GenerationJob,
+) -> str:
+    if await _has_project_rows(session, job, DraftVersion):
+        return "drafting"
+    if await _has_project_rows(session, job, Scene):
+        return "scenes_planned"
+    if await _has_project_rows(session, job, Chapter):
+        return "outlined"
+    if await _has_project_rows(session, job, NovelSpec):
+        return "bible_ready"
+    return "created"
+
+
 async def _revert_project_status_on_failure(
     session: AsyncSession, job: GenerationJob
 ) -> bool:
@@ -447,6 +483,8 @@ async def _revert_project_status_on_failure(
     )
     if not project or project.status not in transitional_states:
         return False
+    if job.job_type in {"generate_bible", "generate_outline"}:
+        target = await _infer_project_status_from_artifacts(session, job)
     project.status = target
     return True
 

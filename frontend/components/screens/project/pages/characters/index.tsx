@@ -11,6 +11,13 @@ import { BibleBlock } from "@/components/screens/project/shared/bible-block";
 import { charactersApi } from "@/lib/api";
 import { useScopedKey } from "@/lib/use-scoped-key";
 
+function formatCharacterState(state?: Record<string, unknown>) {
+  if (!state || Object.keys(state).length === 0) return "—";
+  return Object.entries(state)
+    .map(([key, value]) => `${key}: ${String(value)}`)
+    .join("\n");
+}
+
 export function CharactersPage({ projectId }: { projectId: string }) {
   const { data: characters = [] } = useQuery({
     queryKey: useScopedKey("project", projectId, "characters"),
@@ -63,8 +70,11 @@ export function CharactersPage({ projectId }: { projectId: string }) {
               <CardContent className="grid gap-4 md:grid-cols-2">
                 <BibleBlock title="动机" text={active.motivation || "—"} />
                 <BibleBlock title="秘密" text={active.secret || "—"} />
+                <BibleBlock title="性格" text={active.personality || "—"} />
+                <BibleBlock title="弧光" text={active.arc || "—"} />
                 <BibleBlock title="角色定位" text={active.role || "—"} />
                 <BibleBlock title="描述" text={active.description || "—"} />
+                <BibleBlock title="当前状态" text={formatCharacterState(active.current_state)} />
               </CardContent>
             </Card>
           ) : null}

@@ -130,6 +130,8 @@ async def test_generate_bible_flow_persists_sprint1_records(
     assert spec is not None
     assert spec.premise
     assert len(characters) >= 2
+    assert all(c.description and c.personality and c.motivation and c.secret for c in characters)
+    assert all(c.arc and c.relationships and c.current_state for c in characters)
     assert len(world_items) >= 2
     assert {"location", "faction", "rule"}.issubset({item.type for item in world_items})
     assert len(plot_threads) >= 1
@@ -147,6 +149,11 @@ async def test_generate_bible_flow_persists_sprint1_records(
     bible = bible_res.json()
     assert bible["spec"]["premise"]
     assert len(bible["characters"]) >= 2
+    assert all(
+        c["description"] and c["personality"] and c["motivation"] and c["secret"]
+        for c in bible["characters"]
+    )
+    assert all(c["arc"] and c["relationships"] and c["current_state"] for c in bible["characters"])
     assert len(bible["world_items"]) >= 2
     assert {"location", "faction", "rule"}.issubset(
         {item["type"] for item in bible["world_items"]}
@@ -291,6 +298,52 @@ async def test_generate_bible_releases_quota_and_reverts_project_on_failure(
 
     project = await db_session.get(Project, project_id)
     assert project.status == "created"
+
+
+@pytest.mark.asyncio
+async def test_regenerate_bible_failure_keeps_existing_bible_status(
+    client, db_engine, db_session, monkeypatch
+):
+    """已有故事圣经时，重生成失败不能把项目状态打回 created。"""
+    Session = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+    monkeypatch.setattr(activities, "AsyncSessionLocal", Session)
+
+    org_id, project_id, headers = await _setup_org_with_quota(
+        client, db_session, email="bible-regenerate-fail@example.com"
+    )
+    project = await db_session.get(Project, project_id)
+    project.status = "bible_ready"
+    db_session.add(
+        NovelSpec(
+            id=new_id("spec"),
+            organization_id=org_id,
+            project_id=project_id,
+            premise="现有故事圣经",
+            theme="现有主题",
+            genre="校园",
+        )
+    )
+    await db_session.commit()
+
+    from app.services.novel_planner.service import novel_planner_service
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("simulated_planner_failure")
+
+    monkeypatch.setattr(novel_planner_service, "generate_story_bible", _boom)
+
+    res = await client.post(
+        f"/api/v1/projects/{project_id}/bible/generate",
+        headers=headers,
+        json={"estimate_words": 2000, "force_regenerate": True},
+    )
+    assert res.status_code == 202, res.text
+    job = await _await_job_terminal(db_session, res.json()["id"])
+    assert job.status == "failed"
+
+    db_session.expire_all()
+    project = await db_session.get(Project, project_id)
+    assert project.status == "bible_ready"
 
 
 @pytest.mark.asyncio
