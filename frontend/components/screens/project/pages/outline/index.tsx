@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, Sparkles, Wand2 } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { toast } from "sonner";
 
 import { Badge, StatusBadge } from "@/components/ui/badge";
@@ -18,6 +18,7 @@ import {
   projectsApi,
   scenesApi,
 } from "@/lib/api";
+import { useProjectEvents, type ProjectEvent } from "@/lib/hooks/use-event-source";
 import { ApiError } from "@/lib/http";
 import { useScopedKey } from "@/lib/use-scoped-key";
 
@@ -39,8 +40,7 @@ export function OutlinePage({ projectId }: { projectId: string }) {
     queryFn: () => projectsApi.get(projectId),
   });
 
-  // 找出本项目的 generate_outline 任务最近一条（jobs.list 默认 created_at desc）。
-  // 用于驱动生成按钮的 loading 态与轮询刷新。
+  // jobs 列表保留 30s 兜底轮询：SSE 接管实时状态变化后，兜底确保跨页签同步
   const { data: jobs = [] } = useQuery({
     queryKey: jobsKey,
     queryFn: () => jobsApi.list(),
@@ -59,7 +59,7 @@ export function OutlinePage({ projectId }: { projectId: string }) {
             j.job_type === "generate_outline" &&
             j.status === "succeeded",
         ) && chapters.length === 0;
-      return projectActive || waitingForChapters ? 1500 : false;
+      return projectActive || waitingForChapters ? 30000 : false;
     },
   });
   const latestJob = jobs.find(
@@ -125,6 +125,24 @@ export function OutlinePage({ projectId }: { projectId: string }) {
     queryFn: () => scenesApi.list(projectId, active?.id),
     enabled: !!active,
   });
+
+  // SSE：监听项目任务状态变化（替代 1.5s 轮询）
+  const handleProjectEvent = useCallback(
+    (event: ProjectEvent) => {
+      if (event.type.startsWith("job.")) {
+        const jobType = (event.payload as { job_type?: string }).job_type;
+        queryClient.invalidateQueries({ queryKey: jobsKey });
+        if (jobType === "generate_outline") {
+          queryClient.invalidateQueries({ queryKey: chaptersKey });
+          queryClient.invalidateQueries({ queryKey: projectKey });
+        } else if (jobType === "generate_scene_plan") {
+          queryClient.invalidateQueries({ queryKey: scenesKey });
+        }
+      }
+    },
+    [queryClient, jobsKey, chaptersKey, projectKey, scenesKey],
+  );
+  useProjectEvents(projectId, { onMessage: handleProjectEvent });
 
   const generateScenes = useMutation({
     mutationFn: () => {

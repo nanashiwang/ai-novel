@@ -6,6 +6,7 @@ from app.api import (
     chapters,
     character_revisions,
     characters,
+    events,
     generation_jobs,
     novel_specs,
     organizations,
@@ -38,6 +39,7 @@ api_router.include_router(scenes.router)
 api_router.include_router(world_items.router)
 api_router.include_router(plot_threads.router)
 api_router.include_router(generation_jobs.router)
+api_router.include_router(events.router)
 
 # Admin
 api_router.include_router(users.router)

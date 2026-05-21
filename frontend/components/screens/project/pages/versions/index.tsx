@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, FileClock, RefreshCw, Wand2 } from "lucide-react";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { Badge, StatusBadge } from "@/components/ui/badge";
@@ -28,6 +28,7 @@ import {
 } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatDateTime, formatNumber } from "@/lib/format";
+import { useProjectEvents, type ProjectEvent } from "@/lib/hooks/use-event-source";
 import { ApiError } from "@/lib/http";
 import { useScopedKey } from "@/lib/use-scoped-key";
 
@@ -66,7 +67,7 @@ export function VersionsPage({ projectId }: { projectId: string }) {
           ["audit_scene", "rewrite_scene"].includes(job.job_type) &&
           ["queued", "running"].includes(job.status),
       )
-        ? 3000
+        ? 30000
         : false;
     },
   });
@@ -81,13 +82,35 @@ export function VersionsPage({ projectId }: { projectId: string }) {
   const { data: versions = [] } = useQuery({
     queryKey: versionsKey,
     queryFn: () => versionsApi.list(projectId),
-    refetchInterval: hasActiveReviewJob ? 3000 : false,
+    refetchInterval: hasActiveReviewJob ? 30000 : false,
   });
   const { data: issues = [] } = useQuery({
     queryKey: issuesKey,
     queryFn: () => continuityIssuesApi.list(projectId),
-    refetchInterval: hasActiveReviewJob ? 3000 : false,
+    refetchInterval: hasActiveReviewJob ? 30000 : false,
   });
+
+  // SSE：把 3s 轮询替换为事件驱动 invalidate
+  const handleProjectEvent = useCallback(
+    (event: ProjectEvent) => {
+      if (event.type.startsWith("job.")) {
+        const jobType = (event.payload as { job_type?: string }).job_type;
+        queryClient.invalidateQueries({ queryKey: jobsKey });
+        if (jobType === "audit_scene") {
+          queryClient.invalidateQueries({ queryKey: issuesKey });
+        }
+        if (jobType === "rewrite_scene") {
+          queryClient.invalidateQueries({ queryKey: versionsKey });
+          queryClient.invalidateQueries({ queryKey: issuesKey });
+        }
+        if (jobType === "write_scene") {
+          queryClient.invalidateQueries({ queryKey: versionsKey });
+        }
+      }
+    },
+    [queryClient, jobsKey, issuesKey, versionsKey],
+  );
+  useProjectEvents(projectId, { onMessage: handleProjectEvent });
 
   const chapterById = useMemo(
     () => new Map(chapters.map((chapter) => [chapter.id, chapter])),
