@@ -1184,7 +1184,12 @@ async def _latest_draft_id(session: AsyncSession, scene: Scene) -> str | None:
 
 @activity.defn(name="run_full_novel_pipeline")
 async def run_full_novel_pipeline(job: dict[str, Any]) -> dict[str, Any]:
-    """兼容入口：按 GOAT 风格顺序执行完整分层流水线。"""
+    """兼容入口：按 GOAT 风格顺序执行完整分层流水线。
+
+    用于 TEMPORAL_ENABLED=false 的 local fire-and-forget 路径（见
+    workflow_starter._execute_local）。Temporal worker 路径走
+    GenerateFullNovelWorkflow 的批/child workflow 编排，不调本函数。
+    """
     spec = await generate_book_spec(job)
     chapters = await generate_chapter_outline(job)
     scenes = await generate_scene_cards(job)
@@ -1195,6 +1200,322 @@ async def run_full_novel_pipeline(job: dict[str, Any]) -> dict[str, Any]:
         "scenes": scenes,
         "drafts": drafts,
     }
+
+
+# ----------------------------------------------------------------------------
+# Full novel orchestrator activities
+# ----------------------------------------------------------------------------
+# GenerateFullNovelWorkflow 用这一组 activity 把 full_novel 拆成可按章节批次
+# 推进的链路，每章一个 child workflow，支持 continue_as_new 切下一批。
+# 与历史 run_full_novel_pipeline（一次性顺序跑全程）相比：
+# - 父 workflow 的 history 始终保持在数百条 event 之内（一批 K 章）
+# - 单章子 workflow 失败不阻断其他章，由父 workflow try/except 隔离
+# - quota 预估 = target_chapters × avg_words_per_chapter，settle 由父 workflow
+#   在最后一批结束时一次性按"实际写出的字数"提交，避免重复 settle
+#
+# 这些 activity 都使用**显式参数**而非 input_payload，便于 child workflow 复用
+# 父 full_novel job_id 而无需污染父 job 的 input_payload 字段。
+
+
+@activity.defn(name="prepare_full_novel")
+async def prepare_full_novel(job: dict[str, Any]) -> dict[str, Any]:
+    """父 workflow 启动时调用：
+
+    1. 把父 job.status 切到 running
+    2. 确保 NovelSpec 存在（首次启动会复用 generate_book_spec activity 内部
+       逻辑，并按 input_payload 字段决定是否 force）
+    3. 确保 chapters 已落库；若没有则调 generate_chapter_outline
+    4. 返回 chapter_id 升序列表 + 每章预估字数，供 orchestrator 分批
+
+    幂等：continue_as_new 之后再次进入也会重跑本步骤；book_spec/chapter
+    activities 自身已带 reuse 分支，不会重复扣额度或重新生成。
+    """
+    async with _activity_session() as session:
+        job_row = await _load_job(session, job["id"])
+        # 父 full_novel job 在 prepare 阶段就推到 running；后续 continue_as_new
+        # 再次进入时 mark_job_status 是幂等的（已经 running 时不动 started_at）。
+        if job_row.status != "running":
+            job_row.status = "running"
+            if job_row.started_at is None:
+                job_row.started_at = datetime.now(timezone.utc)
+            await session.flush()
+
+    # 复用 generate_book_spec / generate_chapter_outline 各自的 reuse 路径，
+    # 让 full_novel 入口与单独入口共享逻辑。两个 activity 内部各自管理
+    # 自己的 quota settle（reused 分支不扣额度）。
+    await generate_book_spec(job)
+    await generate_chapter_outline(job)
+
+    async with _activity_session() as session:
+        job_row = await _load_job(session, job["id"])
+        chapters = list(
+            await ChapterRepository(session).list(
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                order_by=Chapter.chapter_index.asc(),
+            )
+        )
+        payload = job_row.input_payload or {}
+        target_chapters = _payload_int(payload, "target_chapters", len(chapters)) or len(chapters)
+        scenes_per_chapter = max(1, min(_payload_int(payload, "scenes_per_chapter", 3), 8))
+        estimate_words = max(1, _payload_int(payload, "estimate_words", 20000))
+        # 估算每章每场景字数：让 writer 收敛到目标总字数附近，又不至于把
+        # 单场景压到极短（最低 600）。
+        total_scenes = max(1, target_chapters * scenes_per_chapter)
+        target_words_per_scene = max(600, estimate_words // total_scenes)
+        return {
+            "chapter_ids": [c.id for c in chapters],
+            "chapter_indices": [c.chapter_index for c in chapters],
+            "scenes_per_chapter": scenes_per_chapter,
+            "target_words_per_scene": target_words_per_scene,
+            "estimate_words": estimate_words,
+            "target_chapters": target_chapters,
+        }
+
+
+@activity.defn(name="plan_chapter_scenes_for_full_novel")
+async def plan_chapter_scenes_for_full_novel(
+    job_id: str,
+    chapter_id: str,
+    scenes_per_chapter: int,
+    expected_words: int,
+) -> dict[str, Any]:
+    """父 full_novel orchestrator 用：为指定 chapter 生成 scene cards。
+
+    与 generate_chapter_scene_cards 的区别：
+    - 不读 input_payload.chapter_id（避免覆写父 job 的 payload）
+    - 不在内部 settle quota（父 workflow 统一在最后 settle）
+    - 已有 scenes 时直接 reuse，不重生成
+    """
+    async with _activity_session() as session:
+        job_row = await _load_job(session, job_id)
+        project = await _load_project(session, job_row)
+        spec = await _load_spec(session, job_row)
+        chapter = await ChapterRepository(session).get(
+            chapter_id, organization_id=job_row.organization_id
+        )
+        if not chapter or chapter.project_id != project.id:
+            raise NotFoundError("chapter_not_found")
+        scenes_per_chapter = max(1, min(int(scenes_per_chapter or 3), 8))
+        expected_words = max(600, int(expected_words or 1200))
+
+        scene_repo = SceneRepository(session)
+        existing = list(
+            await scene_repo.list(
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                chapter_id=chapter.id,
+                order_by=Scene.scene_index.asc(),
+            )
+        )
+        if existing:
+            return {
+                "chapter_id": chapter.id,
+                "scene_ids": [scene.id for scene in existing],
+                "reused": True,
+            }
+        new_scenes = await _plan_and_persist_scenes_for_chapter(
+            session,
+            job=job_row,
+            project=project,
+            spec=spec,
+            chapter=chapter,
+            scenes_per_chapter=scenes_per_chapter,
+            expected_words=expected_words,
+        )
+        return {
+            "chapter_id": chapter.id,
+            "scene_ids": [scene.id for scene in new_scenes],
+            "reused": False,
+        }
+
+
+@activity.defn(name="write_chapter_scenes_for_full_novel")
+async def write_chapter_scenes_for_full_novel(
+    job_id: str,
+    chapter_id: str,
+    target_words_per_scene: int,
+) -> dict[str, Any]:
+    """父 full_novel orchestrator 用：串行写一章内所有 scenes 的 draft。
+
+    - 已有 draft 的 scene 直接跳过（reused）
+    - 写每个 scene 前做 quota preflight：父 job 的 (reserved - consumed) <
+      target_words 时跳过，并标 skipped
+    - 不在内部 settle quota；父 workflow 在 finalize_full_novel 中统一 settle
+    - 写完更新 character 状态 + 写 memory entry（沿用 run_scene_writing 的链路）
+    """
+    async with _activity_session() as session:
+        job_row = await _load_job(session, job_id)
+        project = await _load_project(session, job_row)
+        spec = await _load_spec(session, job_row)
+        chapter = await ChapterRepository(session).get(
+            chapter_id, organization_id=job_row.organization_id
+        )
+        if not chapter or chapter.project_id != project.id:
+            raise NotFoundError("chapter_not_found")
+
+        scene_repo = SceneRepository(session)
+        scenes = list(
+            await scene_repo.list(
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                chapter_id=chapter.id,
+                order_by=Scene.scene_index.asc(),
+            )
+        )
+        if not scenes:
+            return {
+                "chapter_id": chapter.id,
+                "scenes_drafted": 0,
+                "scenes_reused": 0,
+                "scenes_skipped": 0,
+                "words": 0,
+                "scene_results": [],
+            }
+
+        draft_repo = DraftVersionRepository(session)
+        words_written = 0
+        drafted = 0
+        reused = 0
+        skipped = 0
+        scene_results: list[dict[str, Any]] = []
+        # quota preflight 基线：父 job 一开始 reserved 全部预算；这里用
+        # reserved_quota - consumed_quota 作为"剩余可花"，每写一个 scene
+        # 都更新 consumed_quota（暂态，最终在 finalize_full_novel 内 settle）。
+        budget_left = max(0, (job_row.reserved_quota or 0) - (job_row.consumed_quota or 0))
+        target_words = max(600, int(target_words_per_scene or 1200))
+
+        for scene in scenes:
+            existing_drafts = list(
+                await draft_repo.list(
+                    organization_id=job_row.organization_id,
+                    project_id=job_row.project_id,
+                    scene_id=scene.id,
+                    version_type="draft",
+                )
+            )
+            if existing_drafts:
+                reused += 1
+                scene_results.append({
+                    "scene_id": scene.id,
+                    "status": "reused",
+                    "words": existing_drafts[0].word_count or 0,
+                })
+                continue
+            if budget_left < target_words:
+                skipped += 1
+                scene_results.append({
+                    "scene_id": scene.id,
+                    "status": "skipped_quota",
+                    "words": 0,
+                })
+                continue
+
+            scene.status = "writing"
+            await session.flush()
+            previous_excerpt = await _previous_scene_excerpt(session, scene)
+            draft = await writer_service.write_scene_draft(
+                session,
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                job_id=job_row.id,
+                project=project,
+                spec=spec,
+                chapter=chapter,
+                scene=scene,
+                previous_scene_excerpt=previous_excerpt,
+                target_words=target_words,
+            )
+            word_count = draft.word_count or len(draft.content)
+            saved = await draft_repo.create(
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                chapter_id=chapter.id,
+                scene_id=scene.id,
+                version_type="draft",
+                content=draft.content,
+                content_format="markdown",
+                word_count=word_count,
+                status="draft",
+                parent_version_id=None,
+                created_by=job_row.user_id,
+            )
+            scene.status = "drafted"
+            await memory_service.update_character_states_from_scene(
+                session,
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                job_id=job_row.id,
+                chapter=chapter,
+                scene=scene,
+                draft=saved,
+            )
+            drafted += 1
+            words_written += word_count
+            budget_left = max(0, budget_left - word_count)
+            scene_results.append({
+                "scene_id": scene.id,
+                "status": "drafted",
+                "words": word_count,
+                "draft_id": saved.id,
+            })
+
+        # 更新 chapter 状态：若本章所有 scenes 都已 drafted/reused → 标 drafted
+        if drafted + reused == len(scenes) and skipped == 0:
+            chapter.status = "drafted"
+        # 父 job 的 consumed_quota 临时累加，给后续 chapter 预算判断用；
+        # 真正落 usage_event 由 finalize_full_novel 处理。
+        job_row.consumed_quota = (job_row.consumed_quota or 0) + words_written
+        return {
+            "chapter_id": chapter.id,
+            "scenes_drafted": drafted,
+            "scenes_reused": reused,
+            "scenes_skipped": skipped,
+            "words": words_written,
+            "scene_results": scene_results,
+        }
+
+
+@activity.defn(name="finalize_full_novel")
+async def finalize_full_novel(
+    job_id: str,
+    metrics: dict[str, Any],
+) -> dict[str, Any]:
+    """父 full_novel workflow 在所有批次完成后调用：
+
+    - 把汇总 metric 写入 output_payload
+    - 调 _settle_job_usage 按"实际产出字数"结算 quota（不写出 = 不扣）
+    - 推进 project.status / 更新 current_word_count
+    - mark_job_status 单独由 workflow 在外层调用，保持与其他 workflow 的
+      日志/重试一致；本 activity 只负责结算与汇总
+    """
+    async with _activity_session() as session:
+        job_row = await _load_job(session, job_id)
+        project = await _load_project(session, job_row)
+        words = int(metrics.get("scenes_words") or 0)
+        # 真实消耗 = max(本次写出的字数, 0)；若全部章节都因 quota 不足被
+        # skipped，amount=0 → settle 走 release 路径。
+        await _settle_job_usage(session, job_row, amount=words)
+        project.current_word_count = max(project.current_word_count or 0, words)
+        project.completed_chapter_count = int(metrics.get("chapters_drafted") or 0)
+        if int(metrics.get("chapters_drafted") or 0) > 0:
+            project.status = "drafting"
+        summary = {
+            "chapters_total": int(metrics.get("chapters_total") or 0),
+            "chapters_drafted": int(metrics.get("chapters_drafted") or 0),
+            "chapters_failed": int(metrics.get("chapters_failed") or 0),
+            "chapters_skipped": int(metrics.get("chapters_skipped") or 0),
+            "scenes_drafted": int(metrics.get("scenes_drafted") or 0),
+            "scenes_reused": int(metrics.get("scenes_reused") or 0),
+            "scenes_failed": int(metrics.get("scenes_failed") or 0),
+            "scenes_skipped": int(metrics.get("scenes_skipped") or 0),
+            "scenes_words": words,
+            "failed_chapter_ids": list(metrics.get("failed_chapter_ids") or []),
+        }
+        # output_payload 由 mark_job_status(succeeded, output=...) 写入；
+        # 这里同时也回填一份，避免依赖外层 status 调用的执行顺序。
+        job_row.output_payload = summary
+        return summary
 
 
 @activity.defn(name="audit_scene")
@@ -1396,4 +1717,9 @@ ALL_ACTIVITIES = [
     audit_scene,
     rewrite_scene,
     run_full_novel_pipeline,
+    # Sprint 12-B full-novel orchestrator activities
+    prepare_full_novel,
+    plan_chapter_scenes_for_full_novel,
+    write_chapter_scenes_for_full_novel,
+    finalize_full_novel,
 ]
