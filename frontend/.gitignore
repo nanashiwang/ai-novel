@@ -6,3 +6,8 @@ out
 coverage
 
 *.tsbuildinfo
+
+# Playwright e2e
+/playwright-report
+/test-results
+/playwright/.cache
