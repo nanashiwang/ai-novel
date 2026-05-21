@@ -1,7 +1,14 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, Loader2, Sparkles, UndoDot, UserRound } from "lucide-react";
+import {
+  Bot,
+  Loader2,
+  Network as NetworkIcon,
+  Sparkles,
+  UndoDot,
+  UserRound,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -19,7 +26,8 @@ import { useScopedKey } from "@/lib/use-scoped-key";
 const sourceLabel: Record<CharacterRevisionSource, string> = {
   user_edit: "手动编辑",
   copilot: "AI 共创",
-  ai_inferred: "AI 推演",
+  ai_inferred: "场景推演",
+  ai_arc_refine: "Outline 弧光优化",
 };
 
 const statusLabel: Record<CharacterRevisionStatus, string> = {
@@ -154,11 +162,21 @@ export function CharacterRevisionHistory({
               <Badge tone={isPendingRev ? "amber" : isAppliedRev ? "green" : "slate"}>
                 {statusLabel[rev.status]}
               </Badge>
-              <Badge tone={rev.source === "ai_inferred" ? "violet" : "blue"}>
+              <Badge
+                tone={
+                  rev.source === "ai_inferred"
+                    ? "violet"
+                    : rev.source === "ai_arc_refine"
+                      ? "amber"
+                      : "blue"
+                }
+              >
                 {rev.source === "user_edit" ? (
                   <UserRound className="mr-1 inline size-3" />
                 ) : rev.source === "ai_inferred" ? (
                   <Sparkles className="mr-1 inline size-3" />
+                ) : rev.source === "ai_arc_refine" ? (
+                  <NetworkIcon className="mr-1 inline size-3" />
                 ) : (
                   <Bot className="mr-1 inline size-3" />
                 )}

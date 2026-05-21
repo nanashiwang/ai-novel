@@ -594,7 +594,11 @@ export const charactersApi = {
 };
 
 // Sprint 10：人物字段版本链
-export type CharacterRevisionSource = "user_edit" | "copilot" | "ai_inferred";
+export type CharacterRevisionSource =
+  | "user_edit"
+  | "copilot"
+  | "ai_inferred"
+  | "ai_arc_refine";
 export type CharacterRevisionStatus = "pending" | "applied" | "rejected" | "superseded";
 
 export type CharacterRevision = {

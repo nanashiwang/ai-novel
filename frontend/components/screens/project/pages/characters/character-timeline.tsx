@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Bot, History, Sparkles, UserRound } from "lucide-react";
+import { Bot, History, Network as NetworkIcon, Sparkles, UserRound } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,7 +16,8 @@ import { useScopedKey } from "@/lib/use-scoped-key";
 const sourceLabel: Record<CharacterRevisionSource, string> = {
   user_edit: "手动",
   copilot: "Copilot",
-  ai_inferred: "AI 推演",
+  ai_inferred: "场景推演",
+  ai_arc_refine: "Outline 弧光",
 };
 
 const fieldLabel: Record<string, string> = {
@@ -40,6 +41,7 @@ function formatValue(value: unknown): string {
 
 function sourceIcon(source: CharacterRevisionSource) {
   if (source === "ai_inferred") return Sparkles;
+  if (source === "ai_arc_refine") return NetworkIcon;
   if (source === "copilot") return Bot;
   return UserRound;
 }
@@ -119,7 +121,15 @@ export function CharacterTimeline({
                         className="rounded-xl border border-slate-200 bg-white p-3 text-xs"
                       >
                         <div className="mb-1 flex flex-wrap items-center gap-2">
-                          <Badge tone={rev.source === "ai_inferred" ? "violet" : "blue"}>
+                          <Badge
+                            tone={
+                              rev.source === "ai_inferred"
+                                ? "violet"
+                                : rev.source === "ai_arc_refine"
+                                  ? "amber"
+                                  : "blue"
+                            }
+                          >
                             <Icon className="mr-1 inline size-3" /> {sourceLabel[rev.source]}
                           </Badge>
                           <span className="font-bold text-slate-800">
