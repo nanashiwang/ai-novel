@@ -299,3 +299,64 @@ class AuditIssueItem(APIModel):
 
 class AuditResultContract(APIModel):
     issues: list[AuditIssueItem] = Field(default_factory=list)
+
+
+class BeatItem(APIModel):
+    """单个 beat（情节段落点）。
+
+    Sprint 14-C3 多 agent 场景写作：planner 把一个 scene 拆成 4~8 个 beat，
+    drafter 再按每个 beat 写正文。各字段语义：
+    - index: 在 scene 内的顺序，从 1 开始
+    - purpose: 该段在叙事节奏中的目的（开场/推进/转折/结尾/钩子等）
+    - action: 角色具体做了什么（show 优先，避免抽象总结）
+    - dialog_hint: 对白要点，可空（不强制每段都写对白）
+    - reaction: 角色的反应/内心变化，让节奏更紧
+    - target_words: 该 beat 的目标字数，所有 beat 之和约等于 scene 目标字数
+    """
+
+    index: int
+    purpose: str
+    action: str
+    dialog_hint: str = ""
+    reaction: str = ""
+    target_words: int
+
+    @field_validator(
+        "purpose",
+        "action",
+        "dialog_hint",
+        "reaction",
+        mode="before",
+    )
+    @classmethod
+    def stringify_text(cls, value: Any) -> str:
+        if isinstance(value, list):
+            return "；".join(str(item) for item in value)
+        if isinstance(value, dict):
+            return "；".join(f"{key}: {item}" for key, item in value.items())
+        return "" if value is None else str(value)
+
+    @field_validator("target_words", mode="before")
+    @classmethod
+    def normalize_target_words(cls, value: Any) -> int:
+        # 模型偶尔会输出字符串数字或 None；统一兜底成正整数。
+        try:
+            v = int(value)
+        except (TypeError, ValueError):
+            return 200
+        return max(50, v)
+
+
+class BeatSheetContract(APIModel):
+    """planner 阶段产出：一个 scene 的全部 beat 列表。"""
+
+    beats: list[BeatItem] = Field(default_factory=list)
+    total_target_words: int = 0
+
+    @field_validator("total_target_words", mode="before")
+    @classmethod
+    def normalize_total(cls, value: Any) -> int:
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return 0

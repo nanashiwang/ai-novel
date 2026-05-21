@@ -279,6 +279,47 @@ class DeterministicModelProvider:
         }
 
     @staticmethod
+    def _beat_sheet() -> dict[str, Any]:
+        """multi 模式 planner 的伪输出：固定 4 个 beat，覆盖三幕节奏。"""
+        return {
+            "beats": [
+                {
+                    "index": 1,
+                    "purpose": "开场",
+                    "action": "林澈推开档案馆的铁门，雾气先一步钻进室内。",
+                    "dialog_hint": "",
+                    "reaction": "他握紧手电，耳后微凉。",
+                    "target_words": 250,
+                },
+                {
+                    "index": 2,
+                    "purpose": "推进",
+                    "action": "他扫过门禁锁芯，看到比昨晚多出一道新鲜刻痕。",
+                    "dialog_hint": "对自己低声：‘谁先进来过？’",
+                    "reaction": "胸口的不安变成清晰的警觉。",
+                    "target_words": 300,
+                },
+                {
+                    "index": 3,
+                    "purpose": "转折",
+                    "action": "他翻出昨日的巡查日志，发现整页登记被人撕去。",
+                    "dialog_hint": "",
+                    "reaction": "他确认：档案确实被人篡改。",
+                    "target_words": 350,
+                },
+                {
+                    "index": 4,
+                    "purpose": "结尾钩子",
+                    "action": "他在桌沿摸到一枚陌生的金属符号，纹路与妹妹案卷上的印记吻合。",
+                    "dialog_hint": "",
+                    "reaction": "他把符号塞进口袋，决定追下去。",
+                    "target_words": 300,
+                },
+            ],
+            "total_target_words": 1200,
+        }
+
+    @staticmethod
     def _character_state_updates(user_prompt: str) -> dict[str, Any]:
         roster: list[dict[str, Any]] = []
         scene: dict[str, Any] = {}
@@ -403,6 +444,9 @@ class DeterministicModelProvider:
             return self._directions(user_prompt)
         if "issues" in schema_properties:
             return self._audit_result()
+        # BeatSheetContract 的特征是 beats + total_target_words，先于 SceneDraftContract 命中
+        if "beats" in schema_properties and "total_target_words" in schema_properties:
+            return self._beat_sheet()
         if "unresolved_threads" in schema_properties or "SceneDraftContract" in schema_text:
             return self._scene_draft()
         if "updates" in schema_properties:
@@ -421,4 +465,42 @@ class DeterministicModelProvider:
         user_prompt: str,
         temperature: float,
     ) -> str:
+        # Sprint 14-C3 multi-agent：drafter / stylist 都通过 complete_text 调用。
+        # 用 system_prompt 的提示头特征区分（更稳定，不依赖 user_prompt 措辞）。
+        if "场景正文执笔人" in system_prompt or "场景正文执笔" in system_prompt:
+            return self._scene_draft_markdown()
+        if "场景风格统一器" in system_prompt or "风格统一" in system_prompt:
+            return self._scene_stylist_markdown(user_prompt)
         return f"[TEST:{model}] 根据上下文生成 scene 级正文（提示约 {len(user_prompt)} 字）。"
+
+    @staticmethod
+    def _scene_draft_markdown() -> str:
+        """drafter 输出：包含全部 4 个 beat 的 Markdown 草稿。"""
+        return (
+            "**林澈**推开档案馆的铁门，雾气先一步钻进室内。"
+            "他握紧手电，耳后微凉，意识到今天的档案馆并不只是"
+            "他熟悉的那个档案馆。\n\n"
+            "他蹲下，扫过门禁锁芯——比昨晚多出一道新鲜刻痕。"
+            "*‘谁先进来过？’*他对自己低声说，胸口的不安变成清晰的警觉。\n\n"
+            "他翻开昨日的巡查日志，整页登记被人撕去。"
+            "他确认：档案确实被人篡改。\n\n"
+            "在桌沿，他摸到一枚陌生的金属符号，"
+            "纹路与妹妹案卷上的印记吻合。"
+            "他把符号塞进口袋，决定追下去。"
+        )
+
+    @staticmethod
+    def _scene_stylist_markdown(user_prompt: str) -> str:
+        """stylist 输出：从 user_prompt 中提取 drafter 原文，模拟"轻润色"返回。
+
+        测试不关心润色质量，只关心 model_call 链路；
+        因此把 drafter 的输出原样回传即可。
+        """
+        marker = "## 待润色 Markdown 正文\n"
+        if marker in user_prompt:
+            tail = user_prompt.split(marker, 1)[1]
+            # 去掉后续的"## 任务指令"段
+            tail = tail.split("\n\n## 任务指令", 1)[0].strip()
+            if tail:
+                return tail
+        return DeterministicModelProvider._scene_draft_markdown()

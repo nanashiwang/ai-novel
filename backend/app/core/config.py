@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     default_model: str = "gpt-5.5"
     model_gateway_timeout_seconds: float = 300.0
 
+    # Sprint 14-C3 多 agent 场景写作：
+    # - "single"（默认）：保留原 WriterService.write_scene_draft 单次 JSON 生成路径
+    # - "multi"：planner → drafter → stylist 三步流水线，token 消耗显著升高，
+    #   由 quota 系统控制，不在此处强制上限
+    writer_pipeline_mode: str = "single"
+
     # 鉴权与会话
     jwt_secret: str = Field(default="dev-only-change-me", min_length=8)
     jwt_algorithm: str = "HS256"
@@ -109,6 +115,11 @@ class Settings(BaseSettings):
         if "*" in self.cors_origin_list:
             raise ValueError(
                 "CORS_ORIGINS 不能包含 '*'（与 allow_credentials=true 冲突）"
+            )
+        if self.writer_pipeline_mode not in {"single", "multi"}:
+            raise ValueError(
+                "WRITER_PIPELINE_MODE 必须是 'single' 或 'multi'，"
+                f"当前值={self.writer_pipeline_mode!r}"
             )
         return self
 

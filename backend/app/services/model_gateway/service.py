@@ -177,6 +177,7 @@ class ModelGateway:
             response_json=response_json,
             response_text=None,
             started=started,
+            metadata=metadata,
         )
         return response_json
 
@@ -234,6 +235,7 @@ class ModelGateway:
             response_json=None,
             response_text=response_text,
             started=started,
+            metadata=metadata,
         )
         return response_text
 
@@ -254,6 +256,7 @@ class ModelGateway:
         started: float,
         status: str = "success",
         error_message: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         input_tokens = _estimate_tokens(system_prompt) + _estimate_tokens(user_prompt)
         input_tokens = max(1, input_tokens)
@@ -284,6 +287,7 @@ class ModelGateway:
             latency_ms=latency_ms,
             status=status,
             error_message=error_message,
+            metadata_json=dict(metadata) if metadata else None,
         )
         session.add(call)
         await session.flush()

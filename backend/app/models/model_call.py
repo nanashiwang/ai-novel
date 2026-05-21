@@ -38,3 +38,6 @@ class ModelCall(Base, TenantMixin, TimestampMixin):
     cost_usd: Mapped[float] = mapped_column(Numeric(10, 4), default=0)
     status: Mapped[str] = mapped_column(String(32), default="success")
     error_message: Mapped[Optional[str]] = mapped_column(Text)
+    # 任意结构化诊断信息：scene_id / pipeline_step / context truncate 等。
+    # 命名为 metadata_json 是为了避开 SQLAlchemy 内部 .metadata 属性。
+    metadata_json: Mapped[Optional[dict]] = mapped_column("metadata", JSON)
