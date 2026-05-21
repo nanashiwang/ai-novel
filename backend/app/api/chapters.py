@@ -6,6 +6,7 @@ from fastapi import APIRouter
 from app.api.deps import CurrentUserDep, DbDep, TenantDep
 from app.core.exceptions import NotFoundError
 from app.core.permissions import require_permission
+from app.models.chapter import Chapter
 from app.repositories import ChapterRepository, VolumeRepository
 from app.schemas.common import APIModel
 
@@ -76,7 +77,9 @@ async def create_volume(
 async def list_chapters(project_id: str, tenant: TenantDep, user: CurrentUserDep, db: DbDep):
     require_permission(user, "chapter:read", tenant)
     rows = await ChapterRepository(db).list(
-        organization_id=tenant.organization_id, project_id=project_id
+        organization_id=tenant.organization_id,
+        project_id=project_id,
+        order_by=Chapter.chapter_index.asc(),
     )
     return rows
 

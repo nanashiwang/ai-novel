@@ -216,14 +216,71 @@ async def test_generate_outline_batches_very_large_project_target(
     job = await _await_job_terminal(db_session, res.json()["id"])
     assert job.status == "succeeded"
     assert (job.output_payload or {}).get("target_chapter_count") == 750
-    assert (job.output_payload or {}).get("batch_target_chapter_count") == 60
-    assert (job.output_payload or {}).get("remaining_chapter_count") == 690
+    assert (job.output_payload or {}).get("batch_target_chapter_count") == 30
+    assert (job.output_payload or {}).get("remaining_chapter_count") == 720
 
     db_session.expire_all()
     chapters = (
         await db_session.execute(select(Chapter).where(Chapter.project_id == project_id))
     ).scalars().all()
-    assert len(chapters) == 60
+    assert len(chapters) == 30
+
+
+@pytest.mark.asyncio
+async def test_generate_outline_appended_batch_uses_next_chapter_indices(
+    client, db_engine, db_session, monkeypatch
+):
+    """已有章节时，下一批只补后续章节号，不要求模型重吐全量大纲。"""
+    Session = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+    monkeypatch.setattr(activities, "AsyncSessionLocal", Session)
+
+    org_id, project_id, headers = await _setup_org_project_and_spec(
+        client,
+        db_session,
+        email="outline-large-append@example.com",
+        target_chapter_count=750,
+    )
+    for idx in range(1, 31):
+        db_session.add(
+            Chapter(
+                id=new_id("chapter"),
+                organization_id=org_id,
+                project_id=project_id,
+                volume_id=None,
+                chapter_index=idx,
+                title=f"已存在的第{idx}章",
+                summary="预置摘要",
+                goal="预置目标",
+                conflict="预置冲突",
+                ending_hook="预置钩子",
+                status="planned",
+            )
+        )
+    await db_session.commit()
+
+    res = await client.post(
+        f"/api/v1/projects/{project_id}/outline/generate",
+        headers=headers,
+        json={"target_chapters": 750, "estimate_words": 3000},
+    )
+    assert res.status_code == 202, res.text
+    job = await _await_job_terminal(db_session, res.json()["id"])
+    assert job.status == "succeeded"
+    assert (job.output_payload or {}).get("batch_target_chapter_count") == 60
+    assert (job.output_payload or {}).get("created_chapter_count") == 30
+    assert (job.output_payload or {}).get("remaining_chapter_count") == 690
+
+    db_session.expire_all()
+    rows = (
+        await db_session.execute(
+            select(Chapter).where(Chapter.project_id == project_id).order_by(
+                Chapter.chapter_index.asc()
+            )
+        )
+    ).scalars().all()
+    assert len(rows) == 60
+    assert [row.chapter_index for row in rows] == list(range(1, 61))
+    assert rows[29].title == "已存在的第30章"
 
 
 @pytest.mark.asyncio

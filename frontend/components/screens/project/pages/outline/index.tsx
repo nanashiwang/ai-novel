@@ -27,10 +27,13 @@ export function OutlinePage({ projectId }: { projectId: string }) {
   const chaptersKey = useScopedKey("project", projectId, "chapters");
   const jobsKey = useScopedKey("jobs");
 
-  const { data: chapters = [] } = useQuery({
+  const { data: chapterRows = [] } = useQuery({
     queryKey: chaptersKey,
     queryFn: () => chaptersApi.list(projectId),
   });
+  const chapters = [...chapterRows].sort(
+    (a, b) => (a.chapter_index ?? 0) - (b.chapter_index ?? 0),
+  );
   const { data: project } = useQuery({
     queryKey: projectKey,
     queryFn: () => projectsApi.get(projectId),
@@ -101,6 +104,8 @@ export function OutlinePage({ projectId }: { projectId: string }) {
   });
 
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [sceneCountMode, setSceneCountMode] = useState<"auto" | "manual">("auto");
+  const [manualSceneCount, setManualSceneCount] = useState(3);
   const active = chapters.find((c) => c.id === activeId) ?? chapters[0];
 
   // 当前激活章节的 scene_plan 任务（按 input_payload.chapter_id 精确匹配）
@@ -127,7 +132,7 @@ export function OutlinePage({ projectId }: { projectId: string }) {
         return Promise.reject(new Error("no_active_chapter"));
       }
       return projectsApi.generateScenePlan(projectId, active.id, {
-        scenes_per_chapter: 3,
+        scenes_per_chapter: sceneCountMode === "manual" ? manualSceneCount : null,
         expected_words: 1500,
         estimate_words: 2000,
         force_regenerate: scenes.length > 0,
@@ -252,6 +257,19 @@ export function OutlinePage({ projectId }: { projectId: string }) {
                     ),
                   },
                   { key: "location", header: "地点", render: (row) => row.location || "—" },
+                  {
+                    key: "purpose",
+                    header: "目的",
+                    render: (row) => row.scene_purpose || row.goal || "—",
+                  },
+                  {
+                    key: "state",
+                    header: "承接",
+                    render: (row) =>
+                      row.entry_state || row.exit_state
+                        ? `${row.entry_state || "—"} → ${row.exit_state || "—"}`
+                        : "—",
+                  },
                   { key: "goal", header: "目标", render: (row) => row.goal || "—" },
                   {
                     key: "status",
@@ -273,17 +291,41 @@ export function OutlinePage({ projectId }: { projectId: string }) {
                     </p>
                   ) : null}
                 </div>
-                <Button
-                  onClick={() => generateScenes.mutate()}
-                  disabled={generateScenes.isPending || isGeneratingScenes || !active}
-                >
-                  {isGeneratingScenes ? (
-                    <RefreshCw className="size-4 animate-spin" />
-                  ) : (
-                    <Wand2 className="size-4" />
-                  )}
-                  {scenes.length > 0 ? "重新生成场景计划" : "生成场景计划"}
-                </Button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="text-xs font-semibold text-slate-600">
+                    场景数
+                    <select
+                      value={sceneCountMode === "auto" ? "auto" : String(manualSceneCount)}
+                      onChange={(event) => {
+                        if (event.target.value === "auto") {
+                          setSceneCountMode("auto");
+                        } else {
+                          setSceneCountMode("manual");
+                          setManualSceneCount(Number(event.target.value));
+                        }
+                      }}
+                      className="ml-2 h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800"
+                    >
+                      <option value="auto">AI 自动判断</option>
+                      {[1, 2, 3, 4, 5, 6, 7, 8].map((count) => (
+                        <option key={count} value={count}>
+                          {count} 个
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <Button
+                    onClick={() => generateScenes.mutate()}
+                    disabled={generateScenes.isPending || isGeneratingScenes || !active}
+                  >
+                    {isGeneratingScenes ? (
+                      <RefreshCw className="size-4 animate-spin" />
+                    ) : (
+                      <Wand2 className="size-4" />
+                    )}
+                    {scenes.length > 0 ? "重新生成场景计划" : "生成场景计划"}
+                  </Button>
+                </div>
               </div>
             </CardContent>
           </Card>

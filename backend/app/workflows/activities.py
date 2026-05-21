@@ -718,7 +718,7 @@ async def _plan_and_persist_scenes_for_chapter(
     project: Project,
     spec: NovelSpec,
     chapter: Chapter,
-    scenes_per_chapter: int,
+    scenes_per_chapter: int | None,
     expected_words: int,
 ) -> list[Scene]:
     """单章 scene cards 规划 + 落库的共享流程。
@@ -739,9 +739,10 @@ async def _plan_and_persist_scenes_for_chapter(
         expected_words=expected_words,
         character_roster=await _character_roster_for_prompt(session, job),
     )
+    scene_limit = scenes_per_chapter or 8
     scene_repo = SceneRepository(session)
     created: list[Scene] = []
-    for item in contract.scenes[:scenes_per_chapter]:
+    for item in contract.scenes[:scene_limit]:
         row = await scene_repo.create(
             organization_id=job.organization_id,
             project_id=job.project_id,
@@ -751,8 +752,13 @@ async def _plan_and_persist_scenes_for_chapter(
             time_marker=item.time_marker,
             location=item.location,
             characters=item.characters,
+            scene_purpose=item.scene_purpose,
+            entry_state=item.entry_state,
+            exit_state=item.exit_state,
             goal=item.goal,
             conflict=item.conflict,
+            must_include=item.must_include,
+            must_avoid=item.must_avoid,
             emotion_start=item.emotion_start,
             emotion_end=item.emotion_end,
             reveal=item.reveal,
@@ -799,9 +805,15 @@ async def generate_scene_cards(job: dict[str, Any]) -> dict[str, Any]:
                 order_by=Chapter.chapter_index.asc(),
             )
         )
-        scenes_per_chapter = max(1, min(_payload_int(payload, "scenes_per_chapter", 3), 8))
+        raw_scenes_per_chapter = payload.get("scenes_per_chapter")
+        scenes_per_chapter = (
+            max(1, min(int(raw_scenes_per_chapter), 8))
+            if raw_scenes_per_chapter is not None
+            else None
+        )
         estimate_words = _payload_int(payload, "estimate_words", 20000)
-        expected_words = max(600, estimate_words // max(1, len(chapters) * scenes_per_chapter))
+        expected_scene_count = scenes_per_chapter or 3
+        expected_words = max(600, estimate_words // max(1, len(chapters) * expected_scene_count))
         created = 0
         for chapter in chapters:
             new_scenes = await _plan_and_persist_scenes_for_chapter(
@@ -873,7 +885,12 @@ async def generate_chapter_scene_cards(job: dict[str, Any]) -> dict[str, Any]:
             )
             await _delete_project_rows(session, job_row, Scene, chapter_id=chapter.id)
 
-        scenes_per_chapter = max(1, min(_payload_int(payload, "scenes_per_chapter", 3), 8))
+        raw_scenes_per_chapter = payload.get("scenes_per_chapter")
+        scenes_per_chapter = (
+            max(1, min(int(raw_scenes_per_chapter), 8))
+            if raw_scenes_per_chapter is not None
+            else None
+        )
         expected_words = max(600, _payload_int(payload, "expected_words", 1500))
         new_scenes = await _plan_and_persist_scenes_for_chapter(
             session,

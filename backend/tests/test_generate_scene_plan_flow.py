@@ -150,8 +150,13 @@ async def test_generate_scene_plan_happy_path(client, db_engine, db_session, mon
     assert len(scenes) == 3
     for s in scenes:
         assert s.title
+        assert s.scene_purpose
+        assert s.entry_state
+        assert s.exit_state
         assert s.goal
         assert s.conflict
+        assert s.must_include
+        assert s.must_avoid
 
     # memory_entries：每个 scene 一条 source_type=scene 的摘要
     memories = (
@@ -186,6 +191,39 @@ async def test_generate_scene_plan_happy_path(client, db_engine, db_session, mon
     # 单章生成不动 project.status
     project = await db_session.get(Project, project_id)
     assert project.status == "outlined"
+
+
+@pytest.mark.asyncio
+async def test_generate_scene_plan_auto_scene_count(client, db_engine, db_session, monkeypatch):
+    """不传 scenes_per_chapter 时，由模型在 1-8 范围内自行拆分。"""
+    Session = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+    monkeypatch.setattr(activities, "AsyncSessionLocal", Session)
+
+    _, project_id, chapter_id, headers = await _setup_org_project_spec_and_chapter(
+        client,
+        db_session,
+        email="scene-auto@example.com",
+    )
+
+    res = await client.post(
+        f"/api/v1/projects/{project_id}/chapters/{chapter_id}/scenes/generate",
+        headers=headers,
+        json={"expected_words": 1200, "estimate_words": 2000},
+    )
+    assert res.status_code == 202, res.text
+    job = await _await_job_terminal(db_session, res.json()["id"])
+    assert job.status == "succeeded"
+    assert job.input_payload["scenes_per_chapter"] is None
+    assert (job.output_payload or {}).get("scene_count") == 4
+
+    db_session.expire_all()
+    scenes = (
+        await db_session.execute(
+            select(Scene).where(Scene.chapter_id == chapter_id).order_by(Scene.scene_index)
+        )
+    ).scalars().all()
+    assert len(scenes) == 4
+    assert all(scene.entry_state and scene.exit_state for scene in scenes)
 
 
 @pytest.mark.asyncio

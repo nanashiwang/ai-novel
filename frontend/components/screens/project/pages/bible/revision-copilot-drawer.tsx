@@ -2,7 +2,7 @@
 
 import { useMutation } from "@tanstack/react-query";
 import { Bot, CheckCircle2, Loader2, Send, Sparkles, UserRound, X } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +14,8 @@ import {
 } from "@/lib/api";
 import { ApiError } from "@/lib/http";
 import { cn } from "@/lib/cn";
+
+const startedAutoRequests = new Set<string>();
 
 const targetLabel: Record<string, string> = {
   project_settings: "项目设置",
@@ -31,12 +33,16 @@ function formatValue(value: unknown): string {
 
 export type RevisionCopilotDrawerProps = {
   projectId: string;
+  autoStartKey?: number;
+  autoStartMessage?: string;
   onClose: () => void;
   onApplied: () => void;
 };
 
 export function RevisionCopilotDrawer({
   projectId,
+  autoStartKey,
+  autoStartMessage,
   onClose,
   onApplied,
 }: RevisionCopilotDrawerProps) {
@@ -55,14 +61,50 @@ export function RevisionCopilotDrawer({
       }),
     onSuccess: (data) => {
       setSessionId(data.session.id);
+      // 后端返回完整 session 历史（含 user + assistant），覆盖本地 optimistic 占位
       setMessages(data.messages);
       setProposals((prev) => {
         const seen = new Set(prev.map((item) => item.id));
         return [...prev, ...data.proposals.filter((item) => !seen.has(item.id))];
       });
+      if (data.proposals.length === 0) {
+        toast.warning("AI 返回了分析，但没有生成可应用修改");
+      }
     },
-    onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "AI 优化失败"),
+    onError: (e: unknown) => {
+      // 失败时回滚 optimistic 添加的用户消息，避免误以为已发送成功
+      setMessages((prev) => prev.filter((item) => !item.id.startsWith("optimistic-")));
+      toast.error(e instanceof ApiError ? e.message : "AI 优化失败");
+    },
   });
+
+  const submitMessage = useCallback(
+    (rawMessage: string) => {
+      const message = rawMessage.trim();
+      if (!message || chat.isPending) return;
+      setInput("");
+      // Optimistic：立即把用户消息加到 UI，避免 LLM 调用期间用户以为消息未发出
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `optimistic-${Date.now()}`,
+          session_id: sessionId ?? "",
+          role: "user",
+          content: message,
+        },
+      ]);
+      chat.mutate(message);
+    },
+    [chat, sessionId],
+  );
+
+  useEffect(() => {
+    if (!autoStartKey || !autoStartMessage) return;
+    const requestKey = `${projectId}:${autoStartKey}`;
+    if (startedAutoRequests.has(requestKey)) return;
+    startedAutoRequests.add(requestKey);
+    chat.mutate(autoStartMessage);
+  }, [autoStartKey, autoStartMessage, chat, projectId]);
 
   const apply = useMutation({
     mutationFn: (proposalId: string) => revisionApi.applyProposal(projectId, proposalId),
@@ -80,10 +122,7 @@ export function RevisionCopilotDrawer({
 
   const send = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const message = input.trim();
-    if (!message || chat.isPending) return;
-    setInput("");
-    chat.mutate(message);
+    submitMessage(input);
   };
 
   return (
@@ -117,18 +156,30 @@ export function RevisionCopilotDrawer({
         <div className="flex-1 overflow-y-auto bg-slate-50 p-5">
           {messages.length === 0 ? (
             <div className="rounded-3xl border border-dashed border-slate-300 bg-white p-6">
+              {chat.isPending ? (
+                <div className="mb-4 flex items-center gap-2 rounded-2xl bg-cyan-50 px-4 py-3 text-sm font-bold text-cyan-800">
+                  <Loader2 className="size-4 animate-spin" />
+                  正在分析故事圣经，整理修改提案...
+                </div>
+              ) : null}
               <p className="font-black text-slate-950">可以这样问：</p>
               <div className="mt-3 grid gap-2 text-sm text-slate-600">
                 <button
                   type="button"
-                  onClick={() => setInput("请检查故事圣经、人物和世界观，找出最值得优化的 3 个设定点。")}
+                  disabled={chat.isPending}
+                  onClick={() =>
+                    submitMessage("请检查故事圣经、人物和世界观，找出最值得优化的 3 个设定点。")
+                  }
                   className="rounded-2xl bg-slate-50 px-4 py-3 text-left hover:bg-cyan-50"
                 >
                   请检查故事圣经、人物和世界观，找出最值得优化的 3 个设定点。
                 </button>
                 <button
                   type="button"
-                  onClick={() => setInput("帮我强化主角动机，并补一条能贯穿长篇的世界硬规则。")}
+                  disabled={chat.isPending}
+                  onClick={() =>
+                    submitMessage("帮我强化主角动机，并补一条能贯穿长篇的世界硬规则。")
+                  }
                   className="rounded-2xl bg-slate-50 px-4 py-3 text-left hover:bg-cyan-50"
                 >
                   帮我强化主角动机，并补一条能贯穿长篇的世界硬规则。
@@ -158,6 +209,18 @@ export function RevisionCopilotDrawer({
                   <p className="whitespace-pre-wrap leading-6 text-slate-800">{message.content}</p>
                 </div>
               ))}
+              {chat.isPending ? (
+                <div className="mr-10 rounded-3xl border border-slate-200 bg-white p-4 text-sm shadow-sm">
+                  <div className="mb-2 flex items-center gap-2 text-xs font-bold text-slate-500">
+                    <Bot className="size-3.5" />
+                    AI 编辑
+                  </div>
+                  <div className="flex items-center gap-2 text-slate-500">
+                    <Loader2 className="size-4 animate-spin" />
+                    正在分析故事圣经，整理修改提案...
+                  </div>
+                </div>
+              ) : null}
             </div>
           )}
 

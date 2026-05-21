@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from typing import Any, Protocol
 
@@ -15,6 +16,8 @@ from app.models.common import new_id
 from app.models.model_call import ModelCall
 from app.services.model_gateway.providers import AnthropicMessagesProvider, OpenAIChatProvider
 from app.services.system_settings import ModelGatewayConfig, system_settings_service
+
+_logger = logging.getLogger(__name__)
 
 
 def _estimate_tokens(text: str) -> int:
@@ -136,13 +139,31 @@ class ModelGateway:
     ) -> dict[str, Any]:
         await self.refresh_from_settings(session)
         started = time.perf_counter()
-        response_json = await self._provider.complete_json(
-            model=self._default_model,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            schema=schema,
-            temperature=temperature,
-        )
+        try:
+            response_json = await self._provider.complete_json(
+                model=self._default_model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                schema=schema,
+                temperature=temperature,
+            )
+        except Exception as exc:
+            await self._record_failed_call_best_effort(
+                organization_id=organization_id,
+                project_id=project_id,
+                job_id=job_id,
+                task_type=task_type,
+                prompt_key=prompt_key or task_type,
+                prompt_version=prompt_version,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_json=None,
+                response_text=None,
+                started=started,
+                status="failed",
+                error_message=str(exc),
+            )
+            raise
         await self._record_call(
             session,
             organization_id=organization_id,
@@ -176,12 +197,30 @@ class ModelGateway:
     ) -> str:
         await self.refresh_from_settings(session)
         started = time.perf_counter()
-        response_text = await self._provider.complete_text(
-            model=self._default_model,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            temperature=temperature,
-        )
+        try:
+            response_text = await self._provider.complete_text(
+                model=self._default_model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=temperature,
+            )
+        except Exception as exc:
+            await self._record_failed_call_best_effort(
+                organization_id=organization_id,
+                project_id=project_id,
+                job_id=job_id,
+                task_type=task_type,
+                prompt_key=prompt_key or task_type,
+                prompt_version=prompt_version,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_json=None,
+                response_text=None,
+                started=started,
+                status="failed",
+                error_message=str(exc),
+            )
+            raise
         await self._record_call(
             session,
             organization_id=organization_id,
@@ -213,6 +252,8 @@ class ModelGateway:
         response_json: dict[str, Any] | None,
         response_text: str | None,
         started: float,
+        status: str = "success",
+        error_message: str | None = None,
     ) -> None:
         input_tokens = _estimate_tokens(system_prompt) + _estimate_tokens(user_prompt)
         input_tokens = max(1, input_tokens)
@@ -224,9 +265,7 @@ class ModelGateway:
         # Prometheus 埋点：模型调用延迟（按 task_type / 成功状态）
         from app.core.metrics import MODEL_CALL_LATENCY  # noqa: PLC0415
 
-        MODEL_CALL_LATENCY.labels(task_type=task_type, status="success").observe(
-            latency_ms
-        )
+        MODEL_CALL_LATENCY.labels(task_type=task_type, status=status).observe(latency_ms)
         call = ModelCall(
             id=new_id("model_call"),
             organization_id=organization_id,
@@ -243,10 +282,55 @@ class ModelGateway:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             latency_ms=latency_ms,
-            status="success",
+            status=status,
+            error_message=error_message,
         )
         session.add(call)
         await session.flush()
+
+    async def _record_failed_call_best_effort(
+        self,
+        *,
+        organization_id: str,
+        project_id: str | None,
+        job_id: str | None,
+        task_type: str,
+        prompt_key: str,
+        prompt_version: str,
+        system_prompt: str,
+        user_prompt: str,
+        response_json: dict[str, Any] | None,
+        response_text: str | None,
+        started: float,
+        status: str,
+        error_message: str,
+    ) -> None:
+        try:
+            from app.core.database import AsyncSessionLocal  # noqa: PLC0415
+
+            async with AsyncSessionLocal() as audit_session:
+                await self._record_call(
+                    audit_session,
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    job_id=job_id,
+                    task_type=task_type,
+                    prompt_key=prompt_key,
+                    prompt_version=prompt_version,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    response_json=response_json,
+                    response_text=response_text,
+                    started=started,
+                    status=status,
+                    error_message=error_message,
+                )
+                await audit_session.commit()
+        except Exception:  # noqa: BLE001
+            _logger.exception(
+                "failed_to_record_model_call_failure",
+                extra={"job_id": job_id, "task_type": task_type},
+            )
 
 
 model_gateway = ModelGateway()

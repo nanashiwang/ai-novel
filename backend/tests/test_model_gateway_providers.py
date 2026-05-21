@@ -44,3 +44,35 @@ async def test_openai_provider_retries_transient_gateway_errors(monkeypatch):
 
     assert result == {"ok": True}
     assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_repairs_invalid_json_once():
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        content = '{"items": ["broken" "json"]}' if calls == 1 else '{"items": ["fixed"]}'
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": content}}]},
+            request=request,
+        )
+
+    provider = OpenAIChatProvider(api_key="test", base_url="https://proxy.example/v1")
+    provider._client = lambda: httpx.AsyncClient(  # type: ignore[method-assign]
+        base_url=provider.base_url,
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = await provider.complete_json(
+        model="test-model",
+        system_prompt="system",
+        user_prompt="user",
+        schema={"properties": {"items": {"type": "array"}}},
+        temperature=0.7,
+    )
+
+    assert result == {"items": ["fixed"]}
+    assert calls == 2

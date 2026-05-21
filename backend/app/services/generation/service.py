@@ -264,7 +264,7 @@ class GenerationService:
         *,
         project_id: str,
         chapter_id: str,
-        scenes_per_chapter: int = 3,
+        scenes_per_chapter: int | None = None,
         expected_words: int = 1500,
         estimate_words: int = 2000,
         force_regenerate: bool = False,
@@ -366,7 +366,7 @@ class GenerationService:
         mode: str = "full_novel",
         topic: str = "",
         target_chapters: int | None = None,
-        scenes_per_chapter: int = 3,
+        scenes_per_chapter: int | None = None,
         write_drafts: bool = True,
     ) -> GenerationJob:
         require_permission(user, "generation_job:create", tenant)
@@ -625,7 +625,11 @@ class GenerationService:
                 session, user, tenant,
                 project_id=job.project_id,
                 chapter_id=str(payload.get("chapter_id") or ""),
-                scenes_per_chapter=int(payload.get("scenes_per_chapter") or 3),
+                scenes_per_chapter=(
+                    int(payload["scenes_per_chapter"])
+                    if payload.get("scenes_per_chapter") is not None
+                    else None
+                ),
                 expected_words=int(payload.get("expected_words") or 1500),
                 estimate_words=int(payload.get("estimate_words") or 2000),
                 force_regenerate=bool(payload.get("force_regenerate_scenes")),
@@ -660,7 +664,11 @@ class GenerationService:
                 mode=str(payload.get("mode") or "full_novel"),
                 topic=str(payload.get("topic") or ""),
                 target_chapters=payload.get("target_chapters"),
-                scenes_per_chapter=int(payload.get("scenes_per_chapter") or 3),
+                scenes_per_chapter=(
+                    int(payload["scenes_per_chapter"])
+                    if payload.get("scenes_per_chapter") is not None
+                    else None
+                ),
                 write_drafts=bool(payload.get("write_drafts", True)),
             )
         else:

@@ -322,8 +322,8 @@ class ContextBuilder:
             f"目标：{chapter.goal}\n"
             f"冲突：{chapter.conflict}\n"
             f"结尾钩子：{chapter.ending_hook}\n"
-            "请把本章拆成 scene cards，每个 scene 必须含微冲突、情绪变化、"
-            "揭示与钩子。"
+            "请把本章拆成 scene cards，每个 scene 必须含场景目的、入场状态、"
+            "退场状态、微冲突、必须包含、必须避免、情绪变化、揭示与钩子。"
         )
 
     def _fmt_scene_task(
@@ -343,8 +343,13 @@ class ContextBuilder:
             f"当前场景 #{scene.scene_index}：{scene.title}\n"
             f"时间/地点：{scene.time_marker} / {scene.location}\n"
             f"出场人物：{', '.join(scene.characters or [])}\n"
+            f"场景目的：{scene.scene_purpose}\n"
+            f"入场状态：{scene.entry_state}\n"
+            f"退场状态：{scene.exit_state}\n"
             f"场景目标：{scene.goal}\n"
             f"微冲突：{scene.conflict}\n"
+            f"必须包含：{'; '.join(scene.must_include or [])}\n"
+            f"必须避免：{'; '.join(scene.must_avoid or [])}\n"
             f"情绪变化：{scene.emotion_start} → {scene.emotion_end}\n"
             f"揭示：{scene.reveal}\n"
             f"结尾钩子：{scene.hook}\n"
@@ -626,8 +631,13 @@ class ContextBuilder:
         title = f"第 {chapter.chapter_index} 章 · 场景 {scene.scene_index}"
         summary = (
             f"标题：{scene.title}\n"
+            f"目的：{scene.scene_purpose}\n"
+            f"入场：{scene.entry_state}\n"
+            f"退场：{scene.exit_state}\n"
             f"目标：{scene.goal}\n"
             f"冲突：{scene.conflict}\n"
+            f"必须包含：{'; '.join(scene.must_include or [])}\n"
+            f"必须避免：{'; '.join(scene.must_avoid or [])}\n"
             f"情绪：{scene.emotion_start} → {scene.emotion_end}\n"
             f"揭示：{scene.reveal}\n"
             f"钩子：{scene.hook}"

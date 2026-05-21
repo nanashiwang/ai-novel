@@ -38,7 +38,7 @@ class GenerateNovelRequest(APIModel):
     start_immediately: bool = True
     topic: str = ""
     target_chapters: int | None = None
-    scenes_per_chapter: int = 3
+    scenes_per_chapter: int | None = None
     write_drafts: bool = True
 
 

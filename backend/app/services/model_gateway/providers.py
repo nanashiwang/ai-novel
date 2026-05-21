@@ -134,6 +134,20 @@ def _parse_json_from_text(text: str) -> dict[str, Any]:
     return parsed
 
 
+def _json_repair_prompt(text: str, schema: dict[str, Any]) -> tuple[str, str]:
+    system_prompt = (
+        "你是 JSON 修复器。把用户提供的内容修复成一个可被 json.loads 解析的 "
+        "JSON 对象。不要补充解释，不要使用 Markdown。"
+    )
+    user_prompt = (
+        "请只返回修复后的完整 JSON 对象。若内容被截断或缺少逗号/引号/括号，"
+        "请按已有上下文补全为合法 JSON。\n"
+        f"目标 schema 概要：{_schema_field_summary(schema)}\n"
+        f"待修复内容：\n{text[:30000]}"
+    )
+    return system_prompt, user_prompt
+
+
 def _schema_field_summary(schema: dict[str, Any]) -> str:
     properties = schema.get("properties") or {}
     if not properties:
@@ -231,7 +245,33 @@ class OpenAIChatProvider:
         schema: dict[str, Any],
         temperature: float,
     ) -> dict[str, Any]:
-        schema_instruction = (
+        schema_instruction = self._schema_instruction(schema)
+        payload = self._chat_payload(
+            model=model,
+            system_prompt=system_prompt,
+            user_prompt=f"{user_prompt}\n\n{schema_instruction}",
+            temperature=temperature,
+        )
+        if self._use_response_format:
+            payload["response_format"] = {"type": "json_object"}
+
+        text = await self._complete_json_text(payload)
+        try:
+            return _parse_json_from_text(text)
+        except json.JSONDecodeError:
+            repair_system, repair_user = _json_repair_prompt(text, schema)
+            repair_payload = self._chat_payload(
+                model=model,
+                system_prompt=repair_system,
+                user_prompt=repair_user,
+                temperature=0,
+            )
+            if self._use_response_format:
+                repair_payload["response_format"] = {"type": "json_object"}
+            return _parse_json_from_text(await self._complete_json_text(repair_payload))
+
+    def _schema_instruction(self, schema: dict[str, Any]) -> str:
+        return (
             "请严格按以下字段约束返回 JSON 对象，不要附加自然语言：\n"
             f"{json.dumps(schema, ensure_ascii=False)}"
             if self._use_response_format
@@ -240,26 +280,31 @@ class OpenAIChatProvider:
                 f"{_schema_field_summary(schema)}"
             )
         )
-        payload: dict[str, Any] = {
+
+    def _chat_payload(
+        self,
+        *,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float,
+    ) -> dict[str, Any]:
+        return {
             "model": model,
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": f"{user_prompt}\n\n{schema_instruction}",
-                },
+                {"role": "user", "content": user_prompt},
             ],
             "temperature": temperature,
         }
-        if self._use_response_format:
-            payload["response_format"] = {"type": "json_object"}
 
+    async def _complete_json_text(self, payload: dict[str, Any]) -> str:
         async with self._client() as client:
             if self.stream:
                 # 流式分支：拼出完整文本后走原有 _parse_json_from_text；
                 # response_format 在中转 API 上常不支持，stream 失败时摘掉它再试一次。
                 try:
-                    text = await _stream_chat_completion(
+                    return await _stream_chat_completion(
                         client, "/chat/completions", payload=payload
                     )
                 except httpx.HTTPStatusError:
@@ -267,10 +312,9 @@ class OpenAIChatProvider:
                         raise
                     fallback = dict(payload)
                     fallback.pop("response_format", None)
-                    text = await _stream_chat_completion(
+                    return await _stream_chat_completion(
                         client, "/chat/completions", payload=fallback
                     )
-                return _parse_json_from_text(text)
             response = await _post_json(
                 client,
                 "/chat/completions",
@@ -292,7 +336,7 @@ class OpenAIChatProvider:
                 )
                 _raise_for_status(response)
             data = response.json()
-        return _parse_json_from_text(data["choices"][0]["message"]["content"])
+        return data["choices"][0]["message"]["content"]
 
 
 class AnthropicMessagesProvider:

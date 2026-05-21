@@ -92,10 +92,18 @@ class NovelPlannerService:
         project: Project,
         bible: StoryBibleContract | NovelSpec,
         target_chapters: int,
+        start_chapter_index: int = 1,
+        end_chapter_index: int | None = None,
         character_roster: str = "",
     ) -> ChapterPlanContract:
         prompt = prompt_manager.load(_PROMPT_PLAN_CHAPTERS, version=_PROMPT_VERSION)
-        target_chapters = max(1, target_chapters)
+        target_total_chapters = max(1, target_chapters)
+        start_chapter_index = max(1, start_chapter_index)
+        end_chapter_index = max(
+            start_chapter_index,
+            int(end_chapter_index or target_total_chapters),
+        )
+        batch_count = end_chapter_index - start_chapter_index + 1
         roster_block = (
             f"\n\n已登记人物名册（章节主线人物、同桌/师生等关系必须与这里一致；"
             f"不要凭空替换主线角色姓名）：\n{character_roster}"
@@ -104,11 +112,14 @@ class NovelPlannerService:
         )
         user_prompt = (
             "请把故事圣经拆成章节大纲，采用三幕式推进，但不要输出幕名层级。\n"
-            f"目标章节数：{target_chapters}\n"
+            f"全书目标章节数：{target_total_chapters}\n"
+            f"本次只生成第 {start_chapter_index} 章到第 {end_chapter_index} 章，"
+            f"共 {batch_count} 章；不要输出其他章节。\n"
             f"项目：{project.title}\n"
             f"故事圣经：\n{self._dump_contract(bible)}\n"
             f"{roster_block}\n"
-            "要求：每章必须有明确目标、冲突、结尾钩子；只返回 JSON。"
+            "要求：chapter_index 必须使用实际章节序号；每章必须有明确目标、冲突、"
+            "结尾钩子；只返回 JSON。"
         )
         raw = await model_gateway.generate_json(
             session,
@@ -121,12 +132,22 @@ class NovelPlannerService:
             schema=ChapterPlanContract.model_json_schema(),
             prompt_key=_PROMPT_PLAN_CHAPTERS,
             prompt_version=_PROMPT_VERSION,
-            metadata={"module": "novel_planner", "target_chapters": target_chapters},
+            metadata={
+                "module": "novel_planner",
+                "target_chapters": target_total_chapters,
+                "start_chapter_index": start_chapter_index,
+                "end_chapter_index": end_chapter_index,
+            },
         )
         contract = ChapterPlanContract.model_validate(raw)
         if not contract.chapters:
-            return self._fallback_chapters(project, bible, target_chapters)
-        return self._normalize_chapters(contract)
+            return self._fallback_chapters(
+                project,
+                bible,
+                start_chapter_index=start_chapter_index,
+                target_chapters=end_chapter_index,
+            )
+        return self._normalize_chapters(contract, start_chapter_index=start_chapter_index)
 
     async def plan_scenes(
         self,
@@ -138,12 +159,19 @@ class NovelPlannerService:
         project: Project,
         bible: StoryBibleContract | NovelSpec,
         chapter: Chapter,
-        scenes_per_chapter: int,
+        scenes_per_chapter: int | None,
         expected_words: int,
         character_roster: str = "",
     ) -> ScenePlanContract:
         prompt = prompt_manager.load(_PROMPT_PLAN_SCENES, version=_PROMPT_VERSION)
-        scenes_per_chapter = max(1, scenes_per_chapter)
+        scenes_per_chapter = (
+            max(1, min(scenes_per_chapter, 8)) if scenes_per_chapter is not None else None
+        )
+        scene_count_instruction = (
+            f"建议场景数：{scenes_per_chapter}\n"
+            if scenes_per_chapter is not None
+            else "场景数：请根据本章复杂度自行判断，范围 1-8 个；过渡章少，高潮/群像章多。\n"
+        )
         roster_block = (
             f"\n已登记人物名册（scene 出场人物必须优先从这里选择，不要凭空替换主线角色姓名）：\n"
             f"{character_roster}\n"
@@ -160,9 +188,11 @@ class NovelPlannerService:
             f"章节目标：{chapter.goal}\n"
             f"章节冲突：{chapter.conflict}\n"
             f"结尾钩子：{chapter.ending_hook}\n"
-            f"建议场景数：{scenes_per_chapter}\n"
+            f"{scene_count_instruction}"
             f"单场景目标字数：{expected_words}\n"
-            "要求：每个 scene 必须有微冲突、情绪变化、揭示与钩子；只返回 JSON。"
+            "要求：每个 scene 必须有 scene_purpose、entry_state、exit_state、"
+            "must_include、must_avoid、微冲突、情绪变化、揭示与钩子；"
+            "相邻场景必须顺序承接，避免重复上一场已完成的信息；只返回 JSON。"
         )
         raw = await model_gateway.generate_json(
             session,
@@ -179,11 +209,16 @@ class NovelPlannerService:
                 "module": "novel_planner",
                 "chapter_id": chapter.id,
                 "scenes_per_chapter": scenes_per_chapter,
+                "scene_count_mode": "manual" if scenes_per_chapter is not None else "auto",
             },
         )
         contract = ScenePlanContract.model_validate(raw)
         if not contract.scenes:
-            return self._fallback_scenes(chapter, scenes_per_chapter, expected_words)
+            return self._fallback_scenes(
+                chapter,
+                scenes_per_chapter or self._infer_scene_count(chapter),
+                expected_words,
+            )
         return self._normalize_scenes(contract, chapter, expected_words)
 
     def _normalize_story_bible(
@@ -293,10 +328,11 @@ class NovelPlannerService:
         project: Project,
         bible: StoryBibleContract | NovelSpec,
         target_chapters: int,
+        start_chapter_index: int = 1,
     ) -> ChapterPlanContract:
         premise = getattr(bible, "premise", "") or project.title
         chapters: list[ChapterPlanItem] = []
-        for index in range(1, target_chapters + 1):
+        for index in range(start_chapter_index, target_chapters + 1):
             if index <= max(1, target_chapters // 3):
                 phase = "开局"
             elif index <= max(2, target_chapters * 2 // 3):
@@ -323,6 +359,12 @@ class NovelPlannerService:
     ) -> ScenePlanContract:
         scenes: list[ScenePlanItem] = []
         for index in range(1, scenes_per_chapter + 1):
+            previous = f"承接场景 {index - 1} 的新信息与情绪压力" if index > 1 else "承接上一章结尾钩子"
+            exit_state = (
+                f"第 {index} 个推进点完成，但留下新的行动压力"
+                if index < scenes_per_chapter
+                else "本章目标阶段性完成，并抛出下一章钩子"
+            )
             scenes.append(
                 ScenePlanItem(
                     scene_index=index,
@@ -330,8 +372,13 @@ class NovelPlannerService:
                     time_marker="承接上一场",
                     location="核心事件地点",
                     characters=[],
+                    scene_purpose=f"完成本章第 {index} 个必要推进点。",
+                    entry_state=previous,
+                    exit_state=exit_state,
                     goal=f"完成第 {index} 个场景推进点。",
                     conflict="信息差、时间压力或人物立场冲突升级。",
+                    must_include=["承接上一场结果", "推进本章目标"],
+                    must_avoid=["重复解释已解决的信息", "突然改变人物动机"],
                     emotion_start="紧张",
                     emotion_end="更强的不确定感",
                     reveal="暴露一个新的事实或人物态度。",
@@ -345,9 +392,44 @@ class NovelPlannerService:
             scenes=scenes,
         )
 
-    def _normalize_chapters(self, contract: ChapterPlanContract) -> ChapterPlanContract:
+    def _infer_scene_count(self, chapter: Chapter) -> int:
+        text = " ".join(
+            [
+                chapter.summary or "",
+                chapter.goal or "",
+                chapter.conflict or "",
+                chapter.ending_hook or "",
+            ]
+        )
+        score = 3
+        dense_markers = [
+            "反转",
+            "高潮",
+            "决战",
+            "群像",
+            "多线",
+            "潜入",
+            "追逐",
+            "审判",
+            "大战",
+        ]
+        quiet_markers = ["过渡", "日常", "铺垫", "整理", "休整"]
+        if any(marker in text for marker in dense_markers):
+            score += 2
+        if any(marker in text for marker in quiet_markers):
+            score -= 1
+        if len(text) > 240:
+            score += 1
+        return max(1, min(score, 8))
+
+    def _normalize_chapters(
+        self,
+        contract: ChapterPlanContract,
+        *,
+        start_chapter_index: int = 1,
+    ) -> ChapterPlanContract:
         chapters = []
-        for index, item in enumerate(contract.chapters, start=1):
+        for index, item in enumerate(contract.chapters, start=start_chapter_index):
             data = item.model_dump()
             data["chapter_index"] = data.get("chapter_index") or index
             data["title"] = data.get("title") or f"第{index}章"
@@ -365,6 +447,13 @@ class NovelPlannerService:
             data = item.model_dump()
             data["scene_index"] = data.get("scene_index") or index
             data["title"] = data.get("title") or f"{chapter.title}·场景{index}"
+            data["scene_purpose"] = data.get("scene_purpose") or data.get("goal") or "推进本章目标"
+            data["entry_state"] = data.get("entry_state") or (
+                "承接上一场结果" if index > 1 else "承接上一章钩子"
+            )
+            data["exit_state"] = data.get("exit_state") or data.get("hook") or "留下下一步压力"
+            data["must_include"] = data.get("must_include") or ["推进本章目标"]
+            data["must_avoid"] = data.get("must_avoid") or ["重复上一场已完成的信息"]
             data["expected_words"] = data.get("expected_words") or expected_words
             scenes.append(ScenePlanItem(**data))
         return ScenePlanContract(

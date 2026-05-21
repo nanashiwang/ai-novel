@@ -255,8 +255,13 @@ export type Scene = {
   time_marker: string;
   location: string;
   characters: string[];
+  scene_purpose: string;
+  entry_state: string;
+  exit_state: string;
   goal: string;
   conflict: string;
+  must_include: string[];
+  must_avoid: string[];
   emotion_start: string;
   emotion_end: string;
   reveal: string;
@@ -265,7 +270,7 @@ export type Scene = {
 };
 
 export type GenerateScenePlanPayload = {
-  scenes_per_chapter?: number;
+  scenes_per_chapter?: number | null;
   expected_words?: number;
   estimate_words?: number;
   force_regenerate?: boolean;

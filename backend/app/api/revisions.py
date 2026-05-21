@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -29,9 +30,11 @@ from app.repositories import (
     WorldItemRepository,
 )
 from app.schemas.common import APIModel
+from app.services.character_tracker import character_tracker
 from app.services.model_gateway.service import model_gateway
 
 router = APIRouter(prefix="/projects/{project_id}/revisions", tags=["revisions"])
+logger = logging.getLogger(__name__)
 
 RevisionTargetType = Literal[
     "project_settings",
@@ -157,6 +160,18 @@ def _filter_patch(patch: dict[str, Any], allowed: set[str]) -> dict[str, Any]:
     return {key: value for key, value in (patch or {}).items() if key in allowed}
 
 
+def _json_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _join_text(*parts: Any) -> str:
+    return "\n".join(text for part in parts if (text := _json_text(part)))
+
+
 async def _load_context(db: DbDep, *, organization_id: str, project: Project) -> dict[str, Any]:
     spec = await NovelSpecRepository(db).get_by(
         organization_id=organization_id,
@@ -224,11 +239,202 @@ def _proposal_schema() -> dict[str, Any]:
     }
 
 
-def _normalize_proposals(raw: dict[str, Any]) -> tuple[str, list[RevisionProposalPayload]]:
+def _find_character_id(context: dict[str, Any], name: str) -> str | None:
+    if not name:
+        return None
+    for character in context.get("characters") or []:
+        if not isinstance(character, dict):
+            continue
+        if str(character.get("name") or "").strip() == name:
+            return str(character.get("id") or "") or None
+    return None
+
+
+def _fallback_proposals_from_advice(
+    item: dict[str, Any],
+    *,
+    context: dict[str, Any],
+) -> list[RevisionProposalPayload]:
+    title = str(item.get("title") or "设定优化提案")[:200]
+    reason = _join_text(item.get("problem"), item.get("core_adjustment"))
+    proposals: list[RevisionProposalPayload] = []
+
+    story_patch = _filter_patch(
+        {
+            "premise": item.get("premise"),
+            "theme": item.get("theme") or item.get("core_conflict_upgrade"),
+            "genre": item.get("genre"),
+            "tone": item.get("tone"),
+            "target_reader": item.get("target_reader"),
+            "narrative_pov": item.get("narrative_pov"),
+            "style_guide": item.get("style_guide"),
+            "constraints": item.get("constraints"),
+            "continuity_rules": item.get("continuity_rules"),
+        },
+        SPEC_FIELDS,
+    )
+    if not story_patch:
+        story_patch = {
+            "continuity_rules": [
+                _join_text(
+                    item.get("core_adjustment"),
+                    item.get("application_notes"),
+                    item.get("long_form_value"),
+                )
+            ]
+        }
+    if story_patch:
+        proposals.append(
+            RevisionProposalPayload(
+                target_type="story_bible",
+                action="update",
+                title=title,
+                patch=story_patch,
+                reason=reason or "将 AI 建议写入故事圣经规则，避免只停留在聊天文本。",
+                impact=["story_bible"],
+            )
+        )
+
+    profile = item.get("male_lead_profile") or item.get("character_profile")
+    if isinstance(profile, dict):
+        name = str(profile.get("name") or "").strip()
+        character_patch = _filter_patch(
+            {
+                "name": name,
+                "role": profile.get("role"),
+                "description": _join_text(
+                    profile.get("surface_identity"),
+                    profile.get("male_frequency_hook"),
+                    profile.get("true_identity"),
+                ),
+                "personality": profile.get("personality"),
+                "motivation": profile.get("core_motivation") or profile.get("motivation"),
+                "secret": profile.get("secret"),
+                "arc": profile.get("ability_arc") or profile.get("arc"),
+                "current_state": {
+                    key: value
+                    for key, value in {
+                        "inner_wound": profile.get("inner_wound"),
+                        "true_identity": profile.get("true_identity"),
+                    }.items()
+                    if value
+                },
+            },
+            CHARACTER_FIELDS,
+        )
+        if character_patch:
+            target_id = _find_character_id(context, name)
+            proposals.append(
+                RevisionProposalPayload(
+                    target_type="character",
+                    target_id=target_id,
+                    action="update" if target_id else "create",
+                    title=f"{title}：人物落库",
+                    patch=character_patch,
+                    reason=reason or "把 AI 建议中的人物设定转为可应用人物补丁。",
+                    impact=["characters"],
+                )
+            )
+
+    world_description = _join_text(
+        item.get("core_adjustment"),
+        item.get("expanded_world_model"),
+        item.get("folded_world_layers"),
+    )
+    rules = item.get("rule_upgrades")
+    if world_description or rules:
+        proposals.append(
+            RevisionProposalPayload(
+                target_type="world_item",
+                action="create",
+                title=f"{title}：世界观落库",
+                patch={
+                    "type": "rule",
+                    "name": title[:80],
+                    "description": world_description or title,
+                    "rules": {"items": rules} if isinstance(rules, list) else {},
+                    "importance": "high",
+                    "is_hard_rule": True,
+                },
+                reason=reason or "把 AI 建议中的世界规则转为可应用世界观条目。",
+                impact=["world_items"],
+            )
+        )
+
+    factions = item.get("factions")
+    if isinstance(factions, list):
+        for faction in factions[:3]:
+            if not isinstance(faction, dict):
+                continue
+            name = str(faction.get("name") or "未命名势力").strip()
+            proposals.append(
+                RevisionProposalPayload(
+                    target_type="world_item",
+                    action="create",
+                    title=f"新增势力：{name}"[:200],
+                    patch={
+                        "type": "faction",
+                        "name": name,
+                        "description": _join_text(
+                            faction.get("surface_identity"),
+                            faction.get("goal"),
+                            faction.get("method"),
+                            faction.get("conflict_with_male_lead"),
+                        ),
+                        "rules": {
+                            "leader": faction.get("leader"),
+                            "resources": faction.get("resources"),
+                            "internal_crack": faction.get("internal_crack"),
+                        },
+                        "importance": "high",
+                        "is_hard_rule": False,
+                    },
+                    reason=reason or "把 AI 建议中的势力格局转为可应用世界观条目。",
+                    impact=["world_items", "plot_threads"],
+                )
+            )
+
+    thread_description = _join_text(
+        item.get("core_adjustment"),
+        item.get("new_core_conflicts"),
+        item.get("male_lead_team_growth"),
+        item.get("long_form_value"),
+    )
+    if thread_description:
+        proposals.append(
+            RevisionProposalPayload(
+                target_type="plot_thread",
+                action="create",
+                title=title[:200],
+                patch={
+                    "title": title[:200],
+                    "thread_type": "main",
+                    "description": thread_description,
+                    "status": "open",
+                },
+                reason=reason or "把 AI 建议中的长期冲突引擎转为可应用剧情线。",
+                impact=["plot_threads"],
+            )
+        )
+
+    return proposals
+
+
+def _normalize_proposals(
+    raw: dict[str, Any],
+    *,
+    context: dict[str, Any] | None = None,
+) -> tuple[str, list[RevisionProposalPayload]]:
     reply = str(raw.get("reply") or "我整理了一组可应用的设定优化提案。").strip()
     proposals: list[RevisionProposalPayload] = []
     for item in raw.get("proposals") or []:
         if not isinstance(item, dict):
+            continue
+        patch = item.get("patch") if isinstance(item.get("patch"), dict) else {}
+        if not item.get("target_type") or not patch:
+            proposals.extend(
+                _fallback_proposals_from_advice(item, context=context or {})
+            )
             continue
         try:
             proposal = RevisionProposalPayload.model_validate(
@@ -237,15 +443,14 @@ def _normalize_proposals(raw: dict[str, Any]) -> tuple[str, list[RevisionProposa
                     "target_id": item.get("target_id") or None,
                     "action": item.get("action") or "update",
                     "title": str(item.get("title") or "设定优化提案")[:200],
-                    "patch": item.get("patch") if isinstance(item.get("patch"), dict) else {},
+                    "patch": patch,
                     "reason": str(item.get("reason") or ""),
                     "impact": item.get("impact") if isinstance(item.get("impact"), list) else [],
                 }
             )
         except Exception:  # noqa: BLE001
             continue
-        if proposal.patch:
-            proposals.append(proposal)
+        proposals.append(proposal)
     return reply, proposals[:6]
 
 
@@ -317,6 +522,13 @@ async def chat_revision(
 ):
     require_permission(user, "project:update", tenant)
     project = await _ensure_project(project_id, tenant, db)
+    logger.info(
+        "revision_chat_started project_id=%s user_id=%s scope=%s target_type=%s",
+        project_id,
+        user.id,
+        payload.scope,
+        payload.target_type,
+    )
     session = await _get_or_create_session(
         db,
         project_id=project_id,
@@ -365,7 +577,10 @@ async def chat_revision(
         system_prompt=(
             "你是专业长篇小说设定编辑。请基于当前故事圣经、角色、世界观和剧情线，"
             "与作者共创优化方案。必须只输出 JSON；不要直接改库。proposals 是可应用的"
-            "结构化修改提案：target_id 必须优先使用上下文里的真实 id；create 可不填。"
+            "结构化修改提案：每个 proposals[] 必须包含 target_type、action、title、patch、reason；"
+            "patch 的 key 只能使用对应目标允许字段。target_id 必须优先使用上下文里的真实 id；"
+            "新增角色、世界观或剧情线时 action=create 且 target_id=null。不要输出 problem、"
+            "core_adjustment、application_notes 这类只供阅读、不能落库的字段。"
         ),
         user_prompt=user_prompt,
         schema=_proposal_schema(),
@@ -373,7 +588,13 @@ async def chat_revision(
         prompt_version="v1",
         temperature=0.5,
     )
-    reply, proposals = _normalize_proposals(raw)
+    reply, proposals = _normalize_proposals(raw, context=context)
+    logger.info(
+        "revision_chat_completed project_id=%s session_id=%s proposals=%s",
+        project_id,
+        session.id,
+        len(proposals),
+    )
     await message_repo.create(
         organization_id=tenant.organization_id,
         project_id=project_id,
@@ -471,6 +692,54 @@ async def _apply_entity_patch(
     return before, after, entity.id
 
 
+async def _apply_character_patch(
+    db: DbDep,
+    *,
+    organization_id: str,
+    project_id: str,
+    target_id: str | None,
+    action: str,
+    patch: dict[str, Any],
+    reason: str,
+    user_id: str,
+) -> tuple[dict, dict, str]:
+    values = _filter_patch(patch, CHARACTER_FIELDS)
+    repo = CharacterRepository(db)
+    if action == "create":
+        create_values = {"name": "未命名角色", **values}
+        entity = await repo.create(
+            organization_id=organization_id,
+            project_id=project_id,
+            **create_values,
+        )
+        return {}, _public_row(entity, CHARACTER_FIELDS | {"id"}), entity.id
+    if not target_id:
+        raise NotFoundError("character_not_found", code="character_not_found")
+    entity = await repo.get(target_id, organization_id=organization_id)
+    if not entity or entity.project_id != project_id:
+        raise NotFoundError("character_not_found", code="character_not_found")
+
+    before = _public_row(entity, CHARACTER_FIELDS | {"id"})
+    for field, value in values.items():
+        revision = await character_tracker.record_copilot_proposal(
+            db,
+            character=entity,
+            field=field,
+            new_value=value,
+            reason=reason,
+            created_by=user_id,
+        )
+        if revision is not None:
+            await character_tracker.apply_revision(
+                db,
+                revision_id=revision.id,
+                organization_id=organization_id,
+                applied_by=user_id,
+            )
+    after = _public_row(entity, CHARACTER_FIELDS | {"id"})
+    return before, after, entity.id
+
+
 @router.post("/proposals/{proposal_id}/apply", response_model=ApplyProposalResponse)
 async def apply_revision_proposal(
     project_id: str,
@@ -504,17 +773,15 @@ async def apply_revision_proposal(
             patch=proposal.patch,
         )
     elif target_type == "character":
-        before, after, target_id = await _apply_entity_patch(
+        before, after, target_id = await _apply_character_patch(
             db,
-            repo=CharacterRepository(db),
-            model_name="character",
             organization_id=tenant.organization_id,
             project_id=project_id,
             target_id=proposal.target_id,
             action=proposal.action,
             patch=proposal.patch,
-            fields=CHARACTER_FIELDS,
-            defaults={"name": "未命名角色"},
+            reason=proposal.reason,
+            user_id=user.id,
         )
     elif target_type == "world_item":
         before, after, target_id = await _apply_entity_patch(

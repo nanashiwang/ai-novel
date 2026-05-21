@@ -141,8 +141,13 @@ class ScenePlanItem(APIModel):
     time_marker: str = ""
     location: str = ""
     characters: list[str] = Field(default_factory=list)
+    scene_purpose: str = ""
+    entry_state: str = ""
+    exit_state: str = ""
     goal: str = ""
     conflict: str = ""
+    must_include: list[str] = Field(default_factory=list)
+    must_avoid: list[str] = Field(default_factory=list)
     emotion_start: str = ""
     emotion_end: str = ""
     reveal: str = ""
@@ -153,6 +158,9 @@ class ScenePlanItem(APIModel):
         "title",
         "time_marker",
         "location",
+        "scene_purpose",
+        "entry_state",
+        "exit_state",
         "goal",
         "conflict",
         "emotion_start",
@@ -168,6 +176,23 @@ class ScenePlanItem(APIModel):
         if isinstance(value, dict):
             return "；".join(f"{key}: {item}" for key, item in value.items())
         return "" if value is None else str(value)
+
+    @field_validator("characters", "must_include", "must_avoid", mode="before")
+    @classmethod
+    def normalize_text_list(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            value = [value]
+        names: list[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                name = item.get("name") or item.get("title") or item.get("role")
+                if name:
+                    names.append(str(name))
+            elif item is not None:
+                names.append(str(item))
+        return names
 
 
 class ScenePlanContract(APIModel):

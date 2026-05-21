@@ -204,6 +204,66 @@ class DeterministicModelProvider:
         }
 
     @staticmethod
+    def _chapter_plan(user_prompt: str) -> dict[str, Any]:
+        range_match = re.search(r"本次只生成第\s*(\d+)\s*章到第\s*(\d+)\s*章", user_prompt)
+        if range_match:
+            start = int(range_match.group(1))
+            end = int(range_match.group(2))
+        else:
+            target_match = re.search(r"(?:目标章节数|全书目标章节数)：(\d+)", user_prompt)
+            start = 1
+            end = int(target_match.group(1)) if target_match else 6
+        return {
+            "chapters": [
+                {
+                    "chapter_index": index,
+                    "title": f"第{index}章 测试转折",
+                    "summary": f"第 {index} 章摘要",
+                    "goal": "推进主线",
+                    "conflict": "目标与阻力碰撞",
+                    "ending_hook": "留下下一章钩子",
+                }
+                for index in range(start, end + 1)
+            ]
+        }
+
+    @staticmethod
+    def _scene_plan(user_prompt: str) -> dict[str, Any]:
+        count_match = re.search(r"建议场景数：(\d+)", user_prompt)
+        scene_count = int(count_match.group(1)) if count_match else 4
+        scene_count = max(1, min(scene_count, 8))
+        scenes = []
+        for index in range(1, scene_count + 1):
+            scenes.append(
+                {
+                    "scene_index": index,
+                    "title": f"测试场景{index}",
+                    "time_marker": "承接上一场",
+                    "location": "雾城档案馆",
+                    "characters": ["林澈"],
+                    "scene_purpose": f"推进第 {index} 个章节转折",
+                    "entry_state": (
+                        "承接上一章悬念" if index == 1 else f"承接场景 {index - 1} 的退场压力"
+                    ),
+                    "exit_state": (
+                        f"留下场景 {index + 1} 必须回应的新压力"
+                        if index < scene_count
+                        else "形成本章结尾钩子"
+                    ),
+                    "goal": f"完成场景 {index} 的调查推进",
+                    "conflict": "主角目标与监察会阻力碰撞",
+                    "must_include": ["承接上一场结果", "推进本章目标"],
+                    "must_avoid": ["重复解释已解决的信息", "跳过人物情绪变化"],
+                    "emotion_start": "紧张",
+                    "emotion_end": "更强的不确定感",
+                    "reveal": "新的记忆线索浮出水面",
+                    "hook": "下一步选择变得无法回避",
+                    "expected_words": 1200,
+                }
+            )
+        return {"chapter_index": 1, "chapter_title": "测试章节", "scenes": scenes}
+
+    @staticmethod
     def _scene_draft() -> dict[str, Any]:
         return {
             "scene_id": "",
@@ -335,6 +395,10 @@ class DeterministicModelProvider:
             return self._revision_result()
         if "main_characters" in schema_properties:
             return self._story_bible(user_prompt)
+        if "chapters" in schema_properties:
+            return self._chapter_plan(user_prompt)
+        if "scenes" in schema_properties:
+            return self._scene_plan(user_prompt)
         if "directions" in schema_properties:
             return self._directions(user_prompt)
         if "issues" in schema_properties:

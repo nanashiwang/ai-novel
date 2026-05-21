@@ -264,8 +264,17 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
                   会装配 7 段优先级上下文交给模型。
                 </p>
                 <div className="grid gap-3 md:grid-cols-2">
+                  <BibleBlock title="场景目的" text={activeScene.scene_purpose || "—"} />
+                  <BibleBlock title="入场状态" text={activeScene.entry_state || "—"} />
+                  <BibleBlock title="退场状态" text={activeScene.exit_state || "—"} />
                   <BibleBlock title="场景目标" text={activeScene.goal || "—"} />
                   <BibleBlock title="微冲突" text={activeScene.conflict || "—"} />
+                  <BibleBlock
+                    title="必须包含 / 避免"
+                    text={`${activeScene.must_include?.join("；") || "—"} / ${
+                      activeScene.must_avoid?.join("；") || "—"
+                    }`}
+                  />
                   <BibleBlock
                     title="情绪变化"
                     text={`${activeScene.emotion_start} → ${activeScene.emotion_end}`}

@@ -52,7 +52,8 @@ class GenerateOutlineRequest(APIModel):
 
 
 class GenerateScenePlanRequest(APIModel):
-    scenes_per_chapter: int = Field(default=3, ge=1, le=8)
+    # None 表示交给 AI 根据章节复杂度自动判断，后端仍限制在 1-8 个。
+    scenes_per_chapter: int | None = Field(default=None, ge=1, le=8)
     expected_words: int = Field(default=1500, ge=300, le=10000)
     estimate_words: int = Field(default=2000, ge=1, le=20000)
     force_regenerate: bool = False

@@ -101,6 +101,7 @@ export function BiblePage({ projectId }: { projectId: string }) {
   const [directionPreviewOpen, setDirectionPreviewOpen] = useState(false);
   const [specEditing, setSpecEditing] = useState(false);
   const [revisionOpen, setRevisionOpen] = useState(false);
+  const [revisionAutoStartKey, setRevisionAutoStartKey] = useState(0);
   const [editChar, setEditChar] = useState<BibleCharacter | "new" | null>(null);
   const [editWorld, setEditWorld] = useState<BibleWorldItem | "new" | null>(null);
   const [editThread, setEditThread] = useState<BiblePlotThread | "new" | null>(null);
@@ -204,6 +205,11 @@ export function BiblePage({ projectId }: { projectId: string }) {
     regenerateOutline.mutate();
   };
 
+  const startAiOptimization = () => {
+    setRevisionAutoStartKey((key) => key + 1);
+    setRevisionOpen(true);
+  };
+
   return (
     <div className="space-y-6">
       <ProjectHeader projectId={projectId} />
@@ -250,7 +256,7 @@ export function BiblePage({ projectId }: { projectId: string }) {
                 <Settings2 className="size-4" /> {prefsOpen ? "收起创作偏好" : "创作偏好"}
               </Button>
               {spec ? (
-                <Button variant="secondary" onClick={() => setRevisionOpen(true)}>
+                <Button variant="secondary" onClick={startAiOptimization}>
                   <Sparkles className="size-4" /> AI 优化设定
                 </Button>
               ) : null}
@@ -329,7 +335,7 @@ export function BiblePage({ projectId }: { projectId: string }) {
               <CardTitle>核心设定</CardTitle>
               <div className="flex items-center gap-2">
                 <Badge tone="violet">{spec.genre || "未分类"}</Badge>
-                <Button size="sm" variant="secondary" onClick={() => setRevisionOpen(true)}>
+                <Button size="sm" variant="secondary" onClick={startAiOptimization}>
                   <Sparkles className="size-3.5" /> AI 优化
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => setSpecEditing(true)}>
@@ -529,6 +535,8 @@ export function BiblePage({ projectId }: { projectId: string }) {
       {revisionOpen ? (
         <RevisionCopilotDrawer
           projectId={projectId}
+          autoStartKey={revisionAutoStartKey}
+          autoStartMessage="请检查当前故事圣经、人物、世界观和剧情线，直接生成最值得应用的 3 个设定优化提案。优先补强人物动机、秘密、弧光、核心冲突和长篇可持续规则。"
           onClose={() => setRevisionOpen(false)}
           onApplied={invalidateAll}
         />

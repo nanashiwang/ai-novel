@@ -116,10 +116,14 @@ class WriterService:
         return (
             f"《{chapter.title}》里的“{scene.title}”开始于{scene.time_marker or '一个关键时刻'}。"
             f"地点是{scene.location or '故事的核心地点'}，"
+            f"入场状态是{scene.entry_state or '承接上一场压力'}，"
             f"人物围绕“{scene.goal or '当前目标'}”行动。"
             f"冲突很快浮出水面：{scene.conflict or '他们的目标与现实阻力发生碰撞'}。"
+            f"本场必须推进：{'、'.join(scene.must_include or []) or scene.scene_purpose or '本章目标'}；"
+            f"需要避免：{'、'.join(scene.must_avoid or []) or '重复上一场已解决的信息'}。"
             f"情绪从{scene.emotion_start or '克制'}转向{scene.emotion_end or '紧绷'}，"
             f"并揭示出：{scene.reveal or '一个会改变后续判断的新事实'}。"
+            f"退场状态是{scene.exit_state or '带着新的压力进入下一场'}，"
             f"场景末尾留下钩子：{scene.hook or '下一步选择变得无法回避'}。"
             f"\n\n目标篇幅约 {target_words} 字；当前为流水线占位正文，可在真实模型接入后替换。"
         )

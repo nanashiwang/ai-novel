@@ -19,8 +19,13 @@ class ScenePayload(APIModel):
     time_marker: str = ""
     location: str = ""
     characters: list[str] = []
+    scene_purpose: str = ""
+    entry_state: str = ""
+    exit_state: str = ""
     goal: str = ""
     conflict: str = ""
+    must_include: list[str] = []
+    must_avoid: list[str] = []
     emotion_start: str = ""
     emotion_end: str = ""
     reveal: str = ""

@@ -1,7 +1,7 @@
 """场景计划生成 workflow。
 
 单章模式：input_payload 必须包含 chapter_id。仅为该章拆出 scene cards
-（3-8 个，受 input_payload.scenes_per_chapter 影响），不影响其他章。
+（默认由 AI 判断 1-8 个；传入 input_payload.scenes_per_chapter 时手动指定），不影响其他章。
 与项目级的 generate_scene_cards activity 区分：后者用于 full_novel pipeline
 遍历所有 chapters。
 """
