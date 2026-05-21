@@ -1,8 +1,10 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback } from "react";
 
 import { jobsApi, type GenerationJob, type Scene } from "@/lib/api";
+import { useProjectEvents, type ProjectEvent } from "@/lib/hooks/use-event-source";
 import { useScopedKey } from "@/lib/use-scoped-key";
 
 export type UseSceneJobsArgs = {
@@ -13,10 +15,14 @@ export type UseSceneJobsArgs = {
 /**
  * 写作工作台：jobs 列表查询 + 当前 scene 三类任务（write/audit/rewrite）的派生状态。
  *
- * jobs query 自带轮询：当本项目存在 write/audit/rewrite 任务处于
- * queued/running 时每 1.5s 刷新一次，结束自动停止。
+ * SSE 接管实时状态变化：``useProjectEvents`` 监听 ``project:{id}`` channel，
+ * 收到 ``job.*`` 事件后立即 ``invalidateQueries(jobsKey)``，把"任务状态
+ * 从后端到 UI"的延迟从 1500ms 降到 < 200ms。
+ *
+ * 兜底：``refetchInterval`` 改为 30s，覆盖 SSE 断开 / 错过事件场景。
  */
 export function useSceneJobs({ projectId, activeScene }: UseSceneJobsArgs) {
+  const queryClient = useQueryClient();
   const jobsKey = useScopedKey("jobs");
 
   const { data: jobs = [] } = useQuery({
@@ -30,9 +36,19 @@ export function useSceneJobs({ projectId, activeScene }: UseSceneJobsArgs) {
           ["write_scene", "audit_scene", "rewrite_scene"].includes(j.job_type) &&
           (j.status === "queued" || j.status === "running"),
       );
-      return active ? 1500 : false;
+      return active ? 30000 : false;
     },
   });
+
+  const handleProjectEvent = useCallback(
+    (event: ProjectEvent) => {
+      if (event.type.startsWith("job.")) {
+        queryClient.invalidateQueries({ queryKey: jobsKey });
+      }
+    },
+    [queryClient, jobsKey],
+  );
+  useProjectEvents(projectId, { onMessage: handleProjectEvent });
 
   const latestSceneJob = jobs.find(
     (j) =>

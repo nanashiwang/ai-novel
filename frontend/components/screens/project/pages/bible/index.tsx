@@ -11,7 +11,7 @@ import {
   Wand2,
 } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { toast } from "sonner";
 
 import { useAuth } from "@/components/providers/auth-provider";
@@ -30,6 +30,7 @@ import {
   type GenerateBiblePayload,
   projectsApi,
 } from "@/lib/api";
+import { useProjectEvents, type ProjectEvent } from "@/lib/hooks/use-event-source";
 import { ApiError } from "@/lib/http";
 import { isPlatformAdmin } from "@/lib/permissions";
 import { useScopedKey } from "@/lib/use-scoped-key";
@@ -64,11 +65,12 @@ export function BiblePage({ projectId }: { projectId: string }) {
     queryKey: bibleKey,
     queryFn: () => projectsApi.getBible(projectId),
     refetchInterval: (query) => {
+      // SSE 接管后只做 30s 兜底刷新：连接异常 / 中间错过事件时仍能收敛
       const data = query.state.data as Bible | undefined;
       const latestJob = data?.latest_job;
       const waitingForJob = latestJob?.status === "queued" || latestJob?.status === "running";
       const waitingForResult = latestJob?.status === "succeeded" && !data?.spec;
-      return waitingForJob || waitingForResult ? 1500 : false;
+      return waitingForJob || waitingForResult ? 30000 : false;
     },
   });
   const { data: preflight } = useQuery({
@@ -77,6 +79,34 @@ export function BiblePage({ projectId }: { projectId: string }) {
   });
   const latestJob = bible?.latest_job;
   const isGenerating = latestJob?.status === "queued" || latestJob?.status === "running";
+
+  // SSE：项目维度任务状态变化 → 立即失效相关 query（替代 1.5s 轮询）
+  const handleProjectEvent = useCallback(
+    (event: ProjectEvent) => {
+      if (event.type.startsWith("job.")) {
+        queryClient.invalidateQueries({ queryKey: bibleKey });
+        queryClient.invalidateQueries({ queryKey: projectKey });
+        queryClient.invalidateQueries({ queryKey: charactersKey });
+        queryClient.invalidateQueries({ queryKey: worldItemsKey });
+        queryClient.invalidateQueries({ queryKey: plotThreadsKey });
+        queryClient.invalidateQueries({ queryKey: preflightKey });
+        queryClient.invalidateQueries({ queryKey: jobsKey });
+      } else if (event.type === "character_revision.created") {
+        queryClient.invalidateQueries({ queryKey: charactersKey });
+      }
+    },
+    [
+      queryClient,
+      bibleKey,
+      projectKey,
+      charactersKey,
+      worldItemsKey,
+      plotThreadsKey,
+      preflightKey,
+      jobsKey,
+    ],
+  );
+  useProjectEvents(projectId, { onMessage: handleProjectEvent });
 
   const [prefsOpen, setPrefsOpen] = useState(false);
   const [prefsAdvanced, setPrefsAdvanced] = useState(false);
