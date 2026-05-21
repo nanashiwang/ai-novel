@@ -46,6 +46,7 @@ from app.services.auditor.service import auditor_service
 from app.services.context_builder.service import context_builder
 from app.services.event_bus import build_event, publish_event_fire_and_forget
 from app.services.memory import memory_service
+from app.services.moderation import log_moderation_event, moderation_service
 from app.services.novel_planner.service import novel_planner_service
 from app.services.quota.service import quota_service
 from app.services.rewriter.service import rewriter_service
@@ -133,6 +134,48 @@ def _payload_int(payload: dict[str, Any], key: str, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+_moderation_tasks: set[Any] = set()
+
+
+def _spawn_moderation_check(
+    text: str,
+    *,
+    organization_id: str,
+    project_id: str,
+    scene_id: str | None,
+    source: str,
+) -> None:
+    """Fire-and-forget 内容审查。不阻断主流程；高风险结果只记日志。
+
+    任务 set 持有引用避免 GC 提前回收，参考 Python 官方 asyncio 文档。
+    """
+    if not text:
+        return
+    try:
+        import asyncio as _asyncio  # noqa: PLC0415
+
+        loop = _asyncio.get_running_loop()
+    except RuntimeError:
+        return  # 没有运行 loop 时直接放弃（测试/local 路径偶现）
+
+    async def _run() -> None:
+        try:
+            result = await moderation_service.check(text)
+            log_moderation_event(
+                result,
+                organization_id=organization_id,
+                project_id=project_id,
+                scene_id=scene_id,
+                source=source,
+            )
+        except Exception:  # noqa: BLE001
+            _logger.warning("moderation_check_failed", exc_info=True)
+
+    task = loop.create_task(_run())
+    _moderation_tasks.add(task)
+    task.add_done_callback(_moderation_tasks.discard)
 
 
 async def _delete_project_rows(
@@ -1049,6 +1092,13 @@ async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
                 created_by=job_row.user_id,
             )
             scene.status = "drafted"
+            _spawn_moderation_check(
+                draft.content,
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                scene_id=scene.id,
+                source="write_scene_drafts",
+            )
             await memory_service.update_character_states_from_scene(
                 session,
                 organization_id=job_row.organization_id,
@@ -1141,6 +1191,13 @@ async def run_scene_writing(job: dict[str, Any]) -> dict[str, Any]:
             created_by=job_row.user_id,
         )
         scene.status = "drafted"
+        _spawn_moderation_check(
+            draft.content,
+            organization_id=job_row.organization_id,
+            project_id=job_row.project_id,
+            scene_id=scene.id,
+            source="run_scene_writing",
+        )
         memory_result = await memory_service.update_character_states_from_scene(
             session,
             organization_id=job_row.organization_id,
@@ -1509,6 +1566,13 @@ async def write_chapter_scenes_for_full_novel(
                 created_by=job_row.user_id,
             )
             scene.status = "drafted"
+            _spawn_moderation_check(
+                draft.content,
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                scene_id=scene.id,
+                source="write_scene_drafts",
+            )
             await memory_service.update_character_states_from_scene(
                 session,
                 organization_id=job_row.organization_id,
@@ -1758,6 +1822,13 @@ async def rewrite_scene(job: dict[str, Any]) -> dict[str, Any]:
             created_by=job_row.user_id,
         )
         scene.status = "drafted"
+        _spawn_moderation_check(
+            new_draft.content,
+            organization_id=job_row.organization_id,
+            project_id=job_row.project_id,
+            scene_id=scene.id,
+            source="rewrite_scene",
+        )
 
         # 把本次涉及的 issues 标 fixed（不删除，保留可审计的修复历史）
         for issue in issues:

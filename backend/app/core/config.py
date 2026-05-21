@@ -64,6 +64,12 @@ class Settings(BaseSettings):
     minio_secure: bool = False  # http vs https
     minio_presigned_ttl_seconds: int = 3600
 
+    # 内容审查（Sprint 13-A3）
+    # provider="local" 仅走本地正则；"openai" 叠加 OpenAI moderation API
+    moderation_enabled: bool = True
+    moderation_provider: str = "local"
+    moderation_block_severity: str = "high"  # 达到此严重度时调用方应阻断写入
+
     @property
     def cors_origin_list(self) -> list[str]:
         raw = self.cors_origins.strip().strip("'").strip('"')
