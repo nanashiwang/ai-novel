@@ -16,3 +16,6 @@ __pycache__/
 .ruff_cache/
 
 *.egg-info/
+
+# 离线评测报告（按需生成，无需入库）
+backend/eval_reports/

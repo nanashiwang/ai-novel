@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 .PHONY: help install install-frontend install-backend check check-frontend check-backend \
 	docker-config deploy d update u restart r logs l status ps stop down infra-up infra-down \
-	migrate seed test test-backend monitoring-up monitoring-down
+	migrate seed test test-backend monitoring-up monitoring-down eval
 
 help:
 	@printf "\nAI Novel 快捷命令\n"
@@ -11,6 +11,7 @@ help:
 	@printf "  make migrate                 执行 alembic upgrade head\n"
 	@printf "  make seed                    注入种子数据（plans / admin / demo project）\n"
 	@printf "  make test                    运行后端 pytest\n"
+	@printf "  make eval                    运行离线评测（judge stub，无 LLM 调用）\n"
 	@printf "  make deploy   / make d       一键构建并启动全套服务\n"
 	@printf "  make update   / make u       拉取最新代码并重建服务\n"
 	@printf "  make logs     / make l       查看服务日志\n"
@@ -49,6 +50,9 @@ test test-backend:
 
 test-postgres:
 	cd backend && pytest -v -m postgres
+
+eval:
+	cd backend && source .venv/bin/activate && python -m app.evals.cli run --dataset all --judge-disabled
 
 worker:
 	cd backend && python -m app.workers.main
