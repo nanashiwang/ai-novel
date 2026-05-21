@@ -671,6 +671,7 @@ async def generate_chapter_outline(job: dict[str, Any]) -> dict[str, Any]:
             project=project,
             bible=spec,
             target_chapters=batch_target_chapters,
+            start_chapter_index=existing_count + 1,
             character_roster=await _character_roster_for_prompt(session, job_row),
         )
         existing_indices = {chapter.chapter_index for chapter in existing}
@@ -1385,6 +1386,47 @@ async def rewrite_scene(job: dict[str, Any]) -> dict[str, Any]:
         }
 
 
+@activity.defn(name="extract_character_state_from_scene")
+async def extract_character_state_from_scene(payload: dict[str, Any]) -> dict[str, Any]:
+    """从场景正文反推角色状态变化，落 character_revisions（status='pending'）。
+
+    Sprint 10 Phase B：write_scene / rewrite_scene 主 activity 完成后由
+    workflow fire-and-forget 调用；本 activity 内部捕获所有异常，绝不抛出，
+    避免推演失败影响主流程已成功的 scene 写作。
+
+    payload 字段：
+      - organization_id (必填)
+      - project_id      (必填)
+      - scene_id        (必填)
+      - draft_id        (必填，用于取最新正文)
+      - created_by      (必填，用作 revision.created_by)
+    """
+    from app.services.character_tracker.extract import (
+        extract_state_changes_from_scene,
+    )
+
+    try:
+        async with _activity_session() as session:
+            draft_repo = DraftVersionRepository(session)
+            draft = await draft_repo.get(
+                payload["draft_id"], organization_id=payload["organization_id"]
+            )
+            if not draft:
+                return {"changes_written": 0, "reason": "draft_not_found"}
+            written = await extract_state_changes_from_scene(
+                session,
+                organization_id=payload["organization_id"],
+                project_id=payload["project_id"],
+                scene_id=payload["scene_id"],
+                scene_content=draft.content or "",
+                created_by=payload["created_by"],
+            )
+            return {"changes_written": written}
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("extract_character_state activity_failed: %s", exc)
+        return {"changes_written": 0, "error": str(exc)}
+
+
 ALL_ACTIVITIES = [
     mark_job_status,
     generate_book_spec,
@@ -1396,4 +1438,5 @@ ALL_ACTIVITIES = [
     audit_scene,
     rewrite_scene,
     run_full_novel_pipeline,
+    extract_character_state_from_scene,
 ]

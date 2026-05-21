@@ -28,6 +28,7 @@ import {
   type BiblePlotThread,
   type BibleWorldItem,
   type GenerateBiblePayload,
+  characterRevisionsApi,
   projectsApi,
 } from "@/lib/api";
 import { ApiError } from "@/lib/http";
@@ -59,6 +60,11 @@ export function BiblePage({ projectId }: { projectId: string }) {
   const chaptersKey = useScopedKey("project", projectId, "chapters");
   const preflightKey = useScopedKey("project", projectId, "preflight", "generate_bible");
   const jobsKey = useScopedKey("jobs");
+  const pendingCountsKey = useScopedKey(
+    "project",
+    projectId,
+    "character-revisions-pending",
+  );
 
   const { data: bible, isPending } = useQuery({
     queryKey: bibleKey,
@@ -75,6 +81,16 @@ export function BiblePage({ projectId }: { projectId: string }) {
     queryKey: preflightKey,
     queryFn: () => projectsApi.preflight(projectId, "generate_bible"),
   });
+  // Sprint 10：人物卡显示"N 项待审核"badge（AI 推演产出的 pending revision 数）。
+  // 每 6s 轻量轮询；任何应用/驳回操作会通过 onSaved invalidate 触发立即刷新。
+  const { data: pendingCounts = [] } = useQuery({
+    queryKey: pendingCountsKey,
+    queryFn: () => characterRevisionsApi.pendingCount(projectId),
+    refetchInterval: 6000,
+  });
+  const pendingByCharacter = new Map(
+    pendingCounts.map((c) => [c.character_id, c.pending_count]),
+  );
   const latestJob = bible?.latest_job;
   const isGenerating = latestJob?.status === "queued" || latestJob?.status === "running";
 
@@ -147,6 +163,7 @@ export function BiblePage({ projectId }: { projectId: string }) {
     queryClient.invalidateQueries({ queryKey: charactersKey });
     queryClient.invalidateQueries({ queryKey: worldItemsKey });
     queryClient.invalidateQueries({ queryKey: plotThreadsKey });
+    queryClient.invalidateQueries({ queryKey: pendingCountsKey });
   };
 
   const spec = bible?.spec;
@@ -348,23 +365,31 @@ export function BiblePage({ projectId }: { projectId: string }) {
                 {characters.length === 0 ? (
                   <p className="text-sm text-slate-500">暂无人物。</p>
                 ) : (
-                  characters.map((character: BibleCharacter) => (
-                    <EditableItem
-                      key={character.id}
-                      title={character.name}
-                      badge={character.role}
-                      text={[
-                        character.description && `描述：${character.description}`,
-                        character.personality && `性格：${character.personality}`,
-                        character.motivation && `动机：${character.motivation}`,
-                        character.secret && `秘密：${character.secret}`,
-                        character.arc && `弧光：${character.arc}`,
-                      ]
-                        .filter(Boolean)
-                        .join("\n")}
-                      onEdit={() => setEditChar(character)}
-                    />
-                  ))
+                  characters.map((character: BibleCharacter) => {
+                    const pendingCount = pendingByCharacter.get(character.id) ?? 0;
+                    return (
+                      <EditableItem
+                        key={character.id}
+                        title={character.name}
+                        badge={character.role}
+                        text={[
+                          character.description && `描述：${character.description}`,
+                          character.personality && `性格：${character.personality}`,
+                          character.motivation && `动机：${character.motivation}`,
+                          character.secret && `秘密：${character.secret}`,
+                          character.arc && `弧光：${character.arc}`,
+                        ]
+                          .filter(Boolean)
+                          .join("\n")}
+                        extraBadge={
+                          pendingCount > 0 ? (
+                            <Badge tone="amber">{pendingCount} 项待审核</Badge>
+                          ) : undefined
+                        }
+                        onEdit={() => setEditChar(character)}
+                      />
+                    );
+                  })
                 )}
               </CardContent>
             </Card>

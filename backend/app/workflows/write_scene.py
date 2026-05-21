@@ -7,6 +7,7 @@ from temporalio import workflow
 
 with workflow.unsafe.imports_passed_through():
     from app.workflows.activities import (
+        extract_character_state_from_scene,
         mark_job_status,
         run_scene_writing,
     )
@@ -32,6 +33,23 @@ class WriteSceneWorkflow:
                 args=[job],
                 start_to_close_timeout=timedelta(minutes=20),
                 retry_policy=MODEL_ACTIVITY_RETRY,
+            )
+            # Sprint 10 Phase B：fire-and-forget 推演角色状态变化。
+            # activity 内部已捕获所有异常并返回 dict，绝不抛出，
+            # 不会影响 succeeded 标记。
+            await workflow.execute_activity(
+                extract_character_state_from_scene,
+                args=[
+                    {
+                        "organization_id": job.get("organization_id"),
+                        "project_id": result.get("project_id") or job.get("project_id"),
+                        "scene_id": result["scene_id"],
+                        "draft_id": result["draft_id"],
+                        "created_by": job.get("user_id") or job.get("created_by"),
+                    }
+                ],
+                start_to_close_timeout=timedelta(minutes=2),
+                retry_policy=STATUS_ACTIVITY_RETRY,
             )
             await workflow.execute_activity(
                 mark_job_status,

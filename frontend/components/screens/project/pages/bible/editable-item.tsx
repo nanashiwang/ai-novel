@@ -1,6 +1,7 @@
 "use client";
 
 import { Pencil } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 
@@ -9,15 +10,18 @@ export type EditableItemProps = {
   badge?: string;
   text: string;
   onEdit: () => void;
+  /** 额外的 badge，渲染在 role badge 右侧。用于人物卡显示"N 项待审核"等。 */
+  extraBadge?: ReactNode;
 };
 
-export function EditableItem({ title, badge, text, onEdit }: EditableItemProps) {
+export function EditableItem({ title, badge, text, onEdit, extraBadge }: EditableItemProps) {
   return (
     <div className="group relative rounded-2xl border border-slate-200 bg-white p-4">
       <div className="flex items-start justify-between gap-3">
         <p className="font-bold text-slate-950">{title}</p>
         <div className="flex items-center gap-2">
           {badge ? <Badge tone="slate">{badge}</Badge> : null}
+          {extraBadge}
           <button
             type="button"
             onClick={onEdit}

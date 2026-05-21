@@ -196,3 +196,122 @@ async def test_character_revisions_pending_count(client, db_session):
     assert count_res.status_code == 200
     counts = count_res.json()
     assert {"character_id": character["id"], "pending_count": 1} in counts
+
+
+@pytest.mark.asyncio
+async def test_extract_state_changes_persists_pending_revisions(
+    client, db_session, monkeypatch
+):
+    """Phase B：mock model_gateway.generate_json，验证 LLM 输出被正确落
+    到 character_revisions（status='pending'）。"""
+    from app.services.character_tracker import extract as extract_module
+    from app.services.model_gateway import service as gateway_module
+
+    token, project_id = await _register_with_project(client, "extract-1@example.com")
+    character = await _create_character(client, token, project_id)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # mock model_gateway.generate_json 直接返回结构化结果
+    async def fake_generate_json(self, session, **kwargs):  # noqa: ANN001
+        return {
+            "changes": [
+                {
+                    "character_name": character["name"],
+                    "field": "current_state",
+                    "new_value": {"abilities": ["识别加密签名"]},
+                    "evidence": "他对加密签名产生了直觉——「这是父亲的笔迹。」",
+                },
+                {
+                    "character_name": character["name"],
+                    "field": "motivation",
+                    "new_value": "找回记忆并查清姐姐死因",
+                    "evidence": "新动机出现",
+                },
+            ]
+        }
+
+    monkeypatch.setattr(
+        gateway_module.ModelGateway, "generate_json", fake_generate_json
+    )
+
+    me = (await client.get("/api/v1/auth/me", headers=headers)).json()
+    written = await extract_module.extract_state_changes_from_scene(
+        db_session,
+        organization_id=me["organization_id"],
+        project_id=project_id,
+        scene_id="scene_test_id",
+        scene_content="林秋第一次发现签名是父亲的笔迹。",
+        created_by=me["id"],
+    )
+    await db_session.commit()
+
+    assert written == 2
+
+    # 应有 2 条 pending revisions
+    rev_res = await client.get(
+        f"/api/v1/projects/{project_id}/characters/{character['id']}/revisions",
+        headers=headers,
+        params={"status": "pending"},
+    )
+    revisions = rev_res.json()
+    assert len(revisions) == 2
+    assert all(r["status"] == "pending" for r in revisions)
+    assert all(r["source"] == "ai_inferred" for r in revisions)
+    fields = {r["field"] for r in revisions}
+    assert fields == {"current_state", "motivation"}
+
+
+@pytest.mark.asyncio
+async def test_extract_skips_unknown_characters_and_invalid_fields(
+    client, db_session, monkeypatch
+):
+    """LLM 输出陌生人物或字段时静默跳过，不报错。"""
+    from app.services.character_tracker import extract as extract_module
+    from app.services.model_gateway import service as gateway_module
+
+    token, project_id = await _register_with_project(client, "extract-2@example.com")
+    character = await _create_character(client, token, project_id)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async def fake_generate_json(self, session, **kwargs):  # noqa: ANN001
+        return {
+            "changes": [
+                # 陌生人物（不在 character 卡）
+                {
+                    "character_name": "未知人物",
+                    "field": "motivation",
+                    "new_value": "abc",
+                    "evidence": "x",
+                },
+                # 不在白名单的 field
+                {
+                    "character_name": character["name"],
+                    "field": "level",
+                    "new_value": 10,
+                    "evidence": "x",
+                },
+                # 合法变化
+                {
+                    "character_name": character["name"],
+                    "field": "personality",
+                    "new_value": "执着",
+                    "evidence": "对真相有偏执",
+                },
+            ]
+        }
+
+    monkeypatch.setattr(
+        gateway_module.ModelGateway, "generate_json", fake_generate_json
+    )
+    me = (await client.get("/api/v1/auth/me", headers=headers)).json()
+    written = await extract_module.extract_state_changes_from_scene(
+        db_session,
+        organization_id=me["organization_id"],
+        project_id=project_id,
+        scene_id="scene_test_id",
+        scene_content="...",
+        created_by=me["id"],
+    )
+    await db_session.commit()
+    # 只有 1 条合法 → 1 条落库
+    assert written == 1
