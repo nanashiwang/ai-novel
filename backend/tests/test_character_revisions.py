@@ -315,3 +315,112 @@ async def test_extract_skips_unknown_characters_and_invalid_fields(
     await db_session.commit()
     # 只有 1 条合法 → 1 条落库
     assert written == 1
+
+
+@pytest.mark.asyncio
+async def test_character_timeline_groups_by_chapter(client, db_session):
+    """Phase C：apply 一条带 scene_id 的 revision，timeline 应该把它聚到对应章节下；
+    手动编辑（无 scene_id）落到"未关联章节"桶。"""
+    from app.models.chapter import Chapter
+    from app.models.character_revision import CharacterRevision
+    from app.models.common import new_id
+    from app.models.scene import Scene
+
+    token, project_id = await _register_with_project(client, "timeline-1@example.com")
+    character = await _create_character(client, token, project_id)
+    headers = {"Authorization": f"Bearer {token}"}
+    me = (await client.get("/api/v1/auth/me", headers=headers)).json()
+
+    # 造一条 Chapter + Scene
+    chapter = Chapter(
+        id=new_id("chapter"),
+        organization_id=me["organization_id"],
+        project_id=project_id,
+        volume_id=None,
+        chapter_index=5,
+        title="第五章 转折",
+        summary="",
+        goal="",
+        conflict="",
+        ending_hook="",
+        status="planned",
+    )
+    scene = Scene(
+        id=new_id("scene"),
+        organization_id=me["organization_id"],
+        project_id=project_id,
+        chapter_id=chapter.id,
+        scene_index=1,
+        title="",
+        time_marker="",
+        location="",
+        characters=[],
+        goal="",
+        conflict="",
+        emotion_start="",
+        emotion_end="",
+        reveal="",
+        hook="",
+        status="planned",
+    )
+    db_session.add_all([chapter, scene])
+    await db_session.flush()
+
+    # 1) AI 推演产出 pending revision（带 scene_id）
+    pending_rev = CharacterRevision(
+        id=new_id("char_rev"),
+        organization_id=me["organization_id"],
+        project_id=project_id,
+        character_id=character["id"],
+        field="current_state",
+        old_value={},
+        new_value={"abilities": ["识别加密签名"]},
+        reason="第 5 章主角破解了加密文件",
+        source="ai_inferred",
+        scene_id=scene.id,
+        status="pending",
+        created_by=me["id"],
+    )
+    db_session.add(pending_rev)
+    await db_session.commit()
+
+    # 2) 用户应用
+    apply_res = await client.post(
+        f"/api/v1/projects/{project_id}/characters/{character['id']}/revisions/{pending_rev.id}/apply",
+        headers=headers,
+    )
+    assert apply_res.status_code == 200
+
+    # 3) 用户手动编辑 personality（无 scene_id）
+    # 先 GET 最新 character（current_state 已被 AI 推演应用更新），避免用 stale 值
+    latest_chars = (await client.get(
+        f"/api/v1/projects/{project_id}/characters",
+        headers=headers,
+    )).json()
+    fresh = next(c for c in latest_chars if c["id"] == character["id"])
+    await client.patch(
+        f"/api/v1/projects/{project_id}/characters/{character['id']}",
+        headers=headers,
+        json={**fresh, "personality": "内敛且执着"},
+    )
+
+    # 4) 拉 timeline
+    timeline_res = await client.get(
+        f"/api/v1/projects/{project_id}/characters/{character['id']}/revisions/timeline",
+        headers=headers,
+    )
+    assert timeline_res.status_code == 200, timeline_res.text
+    timeline = timeline_res.json()
+
+    # 应有 2 桶：第 5 章 + 未关联章节
+    assert len(timeline) == 2
+    # 第一个 entry 应是第 5 章
+    chapter_entry = timeline[0]
+    assert chapter_entry["chapter_index"] == 5
+    assert chapter_entry["chapter_title"] == "第五章 转折"
+    assert len(chapter_entry["revisions"]) == 1
+    assert chapter_entry["revisions"][0]["field"] == "current_state"
+    # 第二个 entry 是未关联章节，包含 personality 变化
+    unanchored = timeline[1]
+    assert unanchored["chapter_index"] is None
+    assert any(r["field"] == "personality" for r in unanchored["revisions"])

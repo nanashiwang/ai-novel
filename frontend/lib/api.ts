@@ -618,6 +618,13 @@ export type CharacterPendingCount = {
   pending_count: number;
 };
 
+export type CharacterTimelineEntry = {
+  chapter_id: string | null;
+  chapter_index: number | null;
+  chapter_title: string | null;
+  revisions: CharacterRevision[];
+};
+
 export const characterRevisionsApi = {
   list: (projectId: string, characterId: string, params?: { status?: CharacterRevisionStatus; limit?: number }) =>
     http.get<CharacterRevision[]>(
@@ -638,6 +645,10 @@ export const characterRevisionsApi = {
     ),
   pendingCount: (projectId: string) =>
     http.get<CharacterPendingCount[]>(`/projects/${projectId}/character-revisions/pending-count`),
+  timeline: (projectId: string, characterId: string) =>
+    http.get<CharacterTimelineEntry[]>(
+      `/projects/${projectId}/characters/${characterId}/revisions/timeline`,
+    ),
 };
 export const chaptersApi = {
   list: (projectId: string) =>

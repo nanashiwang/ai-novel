@@ -11,6 +11,8 @@ import { BibleBlock } from "@/components/screens/project/shared/bible-block";
 import { charactersApi } from "@/lib/api";
 import { useScopedKey } from "@/lib/use-scoped-key";
 
+import { CharacterTimeline } from "./character-timeline";
+
 function formatCharacterState(state?: Record<string, unknown>) {
   if (!state || Object.keys(state).length === 0) return "—";
   return Object.entries(state)
@@ -77,6 +79,13 @@ export function CharactersPage({ projectId }: { projectId: string }) {
                 <BibleBlock title="当前状态" text={formatCharacterState(active.current_state)} />
               </CardContent>
             </Card>
+          ) : null}
+          {active ? (
+            <CharacterTimeline
+              projectId={projectId}
+              characterId={active.id}
+              characterName={active.name}
+            />
           ) : null}
           <Card>
             <CardHeader>

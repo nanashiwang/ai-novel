@@ -19,7 +19,9 @@ from sqlalchemy import select
 from app.api.deps import CurrentUserDep, DbDep, TenantDep
 from app.core.exceptions import NotFoundError
 from app.core.permissions import require_permission
+from app.models.chapter import Chapter
 from app.models.character_revision import CharacterRevision
+from app.models.scene import Scene
 from app.repositories import CharacterRepository, CharacterRevisionRepository
 from app.schemas.common import APIModel
 from app.services.character_tracker import character_tracker
@@ -48,6 +50,14 @@ class CharacterRevisionResponse(APIModel):
     applied_by: str | None
     created_at: str | None = None
     applied_at: str | None = None
+
+
+class CharacterTimelineEntry(APIModel):
+    """时间线一个节点：可能对应一个章节、也可能是"未关联章节"。"""
+    chapter_id: str | None
+    chapter_index: int | None
+    chapter_title: str | None
+    revisions: list[CharacterRevisionResponse]
 
 
 class CharacterRevisionPendingCount(APIModel):
@@ -209,6 +219,101 @@ async def list_pending_count(
         CharacterRevisionPendingCount(character_id=cid, pending_count=cnt)
         for cid, cnt in counts.items()
     ]
+
+
+@router.get("/timeline", response_model=list[CharacterTimelineEntry])
+async def character_timeline(
+    project_id: str,
+    character_id: str,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    """按章节聚合该人物的 applied revisions，构造演进时间线。
+
+    - 有 scene_id 的 revision → 通过 scene.chapter_id 关联章节
+    - 无 scene_id 的（手动 / Copilot 提案）→ 放到 "未关联章节" 桶
+    - 输出按 chapter_index 升序；同章节内按 applied_at 升序
+    """
+    require_permission(user, "character:read", tenant)
+    await _ensure_character(
+        db,
+        project_id=project_id,
+        character_id=character_id,
+        organization_id=tenant.organization_id,
+    )
+
+    # 仅 applied 走时间线；rejected / superseded / pending 不进
+    rev_stmt = (
+        select(CharacterRevision)
+        .where(
+            CharacterRevision.organization_id == tenant.organization_id,
+            CharacterRevision.character_id == character_id,
+            CharacterRevision.status == "applied",
+        )
+        .order_by(CharacterRevision.applied_at.asc())
+    )
+    revisions = list((await db.execute(rev_stmt)).scalars().all())
+    if not revisions:
+        return []
+
+    scene_ids = {r.scene_id for r in revisions if r.scene_id}
+    chapter_id_by_scene: dict[str, str] = {}
+    if scene_ids:
+        scene_stmt = select(Scene.id, Scene.chapter_id).where(
+            Scene.organization_id == tenant.organization_id,
+            Scene.project_id == project_id,
+            Scene.id.in_(scene_ids),
+        )
+        for sid, cid in (await db.execute(scene_stmt)).all():
+            if cid:
+                chapter_id_by_scene[sid] = cid
+
+    chapter_ids = set(chapter_id_by_scene.values())
+    chapter_meta: dict[str, tuple[int, str]] = {}
+    if chapter_ids:
+        chap_stmt = select(
+            Chapter.id, Chapter.chapter_index, Chapter.title
+        ).where(
+            Chapter.organization_id == tenant.organization_id,
+            Chapter.project_id == project_id,
+            Chapter.id.in_(chapter_ids),
+        )
+        for cid, idx, title in (await db.execute(chap_stmt)).all():
+            chapter_meta[cid] = (idx, title or "")
+
+    buckets: dict[str | None, list[CharacterRevision]] = {}
+    for rev in revisions:
+        chapter_id = chapter_id_by_scene.get(rev.scene_id) if rev.scene_id else None
+        buckets.setdefault(chapter_id, []).append(rev)
+
+    entries: list[CharacterTimelineEntry] = []
+    for chapter_id, revs in buckets.items():
+        if chapter_id and chapter_id in chapter_meta:
+            idx, title = chapter_meta[chapter_id]
+            entries.append(
+                CharacterTimelineEntry(
+                    chapter_id=chapter_id,
+                    chapter_index=idx,
+                    chapter_title=title,
+                    revisions=[_to_response(r) for r in revs],
+                )
+            )
+        else:
+            entries.append(
+                CharacterTimelineEntry(
+                    chapter_id=None,
+                    chapter_index=None,
+                    chapter_title=None,
+                    revisions=[_to_response(r) for r in revs],
+                )
+            )
+
+    # 排序：未关联章节放最后；其余按 chapter_index 升序
+    entries.sort(
+        key=lambda e: (1 if e.chapter_index is None else 0, e.chapter_index or 0)
+    )
+    return entries
 
 
 def _to_response(revision: CharacterRevision) -> CharacterRevisionResponse:
