@@ -127,6 +127,8 @@ async def apply_plot_thread_revision(
         raise NotFoundError(
             "plot_thread_revision_not_found", code="plot_thread_revision_not_found"
         )
+    await db.flush()
+    await db.refresh(revision)
     await db.commit()
     return revision
 
@@ -160,6 +162,8 @@ async def reject_plot_thread_revision(
         raise NotFoundError(
             "plot_thread_revision_not_found", code="plot_thread_revision_not_found"
         )
+    await db.flush()
+    await db.refresh(revision)
     await db.commit()
     return revision
 
@@ -194,5 +198,7 @@ async def rollback_plot_thread_revision(
         raise NotFoundError(
             "plot_thread_revision_not_found", code="plot_thread_revision_not_found"
         )
+    await db.flush()
+    await db.refresh(revision)
     await db.commit()
     return revision

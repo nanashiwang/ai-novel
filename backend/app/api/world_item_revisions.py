@@ -126,6 +126,8 @@ async def apply_world_item_revision(
         raise NotFoundError(
             "world_item_revision_not_found", code="world_item_revision_not_found"
         )
+    await db.flush()
+    await db.refresh(revision)
     await db.commit()
     return revision
 
@@ -159,6 +161,8 @@ async def reject_world_item_revision(
         raise NotFoundError(
             "world_item_revision_not_found", code="world_item_revision_not_found"
         )
+    await db.flush()
+    await db.refresh(revision)
     await db.commit()
     return revision
 
@@ -193,5 +197,7 @@ async def rollback_world_item_revision(
         raise NotFoundError(
             "world_item_revision_not_found", code="world_item_revision_not_found"
         )
+    await db.flush()
+    await db.refresh(revision)
     await db.commit()
     return revision
