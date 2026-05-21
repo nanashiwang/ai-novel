@@ -321,6 +321,28 @@ _POSTGRES_SCHEMA_FIXES = [
     )
     """,
     "DELETE FROM system_settings WHERE key = 'model_gateway.mode'",
+    """
+    CREATE TABLE IF NOT EXISTS style_samples (
+      id TEXT PRIMARY KEY,
+      organization_id TEXT NOT NULL,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      label TEXT NOT NULL DEFAULT '',
+      content TEXT NOT NULL DEFAULT '',
+      embedding JSONB,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    (
+        "CREATE INDEX IF NOT EXISTS ix_style_samples_organization_id "
+        "ON style_samples(organization_id)"
+    ),
+    "CREATE INDEX IF NOT EXISTS ix_style_samples_project_id ON style_samples(project_id)",
+    (
+        "CREATE INDEX IF NOT EXISTS ix_style_samples_project_created "
+        "ON style_samples(project_id, created_at)"
+    ),
     "ALTER TABLE IF EXISTS subscriptions ALTER COLUMN provider SET DEFAULT 'manual'",
     "ALTER TABLE IF EXISTS payment_events ALTER COLUMN provider SET DEFAULT 'manual'",
     """

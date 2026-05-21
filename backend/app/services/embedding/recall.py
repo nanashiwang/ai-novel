@@ -72,3 +72,53 @@ async def recall_memories_by_vector(
         entry = MemoryEntry(**{k: row[k] for k in row.keys() if hasattr(MemoryEntry, k)})
         entries.append(entry)
     return entries
+
+
+async def recall_style_samples_by_vector(
+    session: AsyncSession,
+    *,
+    organization_id: str,
+    project_id: str,
+    query_vector: list[float] | None,
+    k: int = 2,
+) -> list:
+    """Sprint 14-C4：按向量召回 top-K 风格样本。
+
+    实现：先按租户/项目过滤拉候选（按 created_at desc 最多 50 条），再在
+    内存里按余弦相似度排序取 top-K。query_vector 为空或样本无 embedding
+    时退化为按时间倒序取前 k 条。这种实现 SQLite/PG 都能跑通；PG 上量大
+    后可改为 `ORDER BY embedding <=> :q` 的 SQL 形式。
+    """
+    import math  # noqa: PLC0415
+
+    from sqlalchemy import select  # noqa: PLC0415
+
+    from app.models.style_sample import StyleSample  # noqa: PLC0415
+
+    stmt = (
+        select(StyleSample)
+        .where(StyleSample.organization_id == organization_id)
+        .where(StyleSample.project_id == project_id)
+        .order_by(StyleSample.created_at.desc())
+        .limit(50)
+    )
+    rows = list((await session.execute(stmt)).scalars().all())
+    if not rows:
+        return []
+    if not query_vector:
+        return rows[:k]
+
+    def _cosine(a: list[float], b: list[float]) -> float:
+        if not a or not b:
+            return 0.0
+        n = min(len(a), len(b))
+        dot = sum(a[i] * b[i] for i in range(n))
+        na = math.sqrt(sum(x * x for x in a[:n])) or 1.0
+        nb = math.sqrt(sum(x * x for x in b[:n])) or 1.0
+        return dot / (na * nb)
+
+    scored = [
+        (_cosine(list(query_vector), list(r.embedding or [])), r) for r in rows
+    ]
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [row for _, row in scored[:k]]

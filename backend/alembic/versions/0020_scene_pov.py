@@ -1,7 +1,7 @@
 """Per-scene POV anchor
 
 Revision ID: 0020_scene_pov
-Revises: 0016_memory_embedding_hnsw
+Revises: 0019_information_ledger
 Create Date: 2026-05-22 10:00:00
 
 Sprint 14-C6：为 scenes 加 pov_character_name 字段。
@@ -21,7 +21,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0020_scene_pov"
-down_revision: str | None = "0016_memory_embedding_hnsw"
+down_revision: str | None = "0019_information_ledger"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

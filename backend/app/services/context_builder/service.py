@@ -10,6 +10,7 @@
   5. plot_threads      — 当前 open 的剧情线（trusted）
   6. recent_scenes     — 最近 N 个 scenes 的 L1 原文摘要（trusted）
   7. arc_summaries     — L2/L3/L4 弧线摘要（trusted；Sprint 14-C2 新增）
+  8. style_samples     — 用户提供的风格示例（trusted；Sprint 14-C4 新增）
   8. memory_recall     — 按角色/时间召回的历史记忆（untrusted）
 
 每段独立 token 预算（百分比基于总预算）。超额时按字符 truncate；不可信
@@ -36,6 +37,7 @@ from app.repositories import (
     WorldItemRepository,
     WorldItemRevisionRepository,
 )
+from app.services.embedding import embedding_service, recall_style_samples_by_vector
 from app.services.model_gateway.service import _estimate_tokens
 
 SegmentLabel = Literal[
@@ -43,6 +45,7 @@ SegmentLabel = Literal[
     "task",
     "characters",
     "character_actions",
+    "style_samples",
     "world_rules",
     "world_actions",
     "plot_threads",
@@ -57,16 +60,18 @@ SegmentLabel = Literal[
 # ContextBuilder(total_budget=...) 注入。
 _DEFAULT_TOTAL_BUDGET = 8000
 
-# 每段占总预算的百分比。trusted 段加起来 93%，untrusted 7%。
+# 每段占总预算的百分比。trusted 段加起来 92%，untrusted 8%。
 # Sprint 13-B2：新增 world_actions / plot_actions（剧情/世界演进追踪）。
 # Sprint 14-C2：拆 recent_summary → recent_scenes (L1) + arc_summaries (L2-L4)。
+# Sprint 14-C4：新增 style_samples（风格样本向量召回）。
 # Sprint 14-C5：新增 information_visibility（信息释放 ledger 段）。
 # 验证：sum(_SEGMENT_BUDGET_PCT.values()) == 1.0
 _SEGMENT_BUDGET_PCT: dict[SegmentLabel, float] = {
-    "hard_constraints": 0.15,
-    "task": 0.15,
-    "characters": 0.10,
-    "character_actions": 0.10,
+    "hard_constraints": 0.13,
+    "task": 0.13,
+    "characters": 0.09,
+    "character_actions": 0.09,
+    "style_samples": 0.06,
     "world_rules": 0.08,
     "world_actions": 0.06,
     "plot_threads": 0.06,
@@ -82,6 +87,7 @@ _TRUSTED_LABELS: set[SegmentLabel] = {
     "task",
     "characters",
     "character_actions",
+    "style_samples",
     "world_rules",
     "world_actions",
     "plot_threads",
@@ -176,12 +182,21 @@ class ContextBuilder:
         organization_id = project.organization_id
         project_id = project.id
 
+        chapter_query = self._chapter_style_query(chapter)
+
         segments_data: list[tuple[SegmentLabel, str, bool]] = [
             ("hard_constraints", self._fmt_hard_constraints(spec), True),
             ("task", self._fmt_chapter_task(project, chapter), True),
             (
                 "characters",
                 await self._fmt_characters(session, organization_id, project_id),
+                True,
+            ),
+            (
+                "style_samples",
+                await self._fmt_style_samples(
+                    session, organization_id, project_id, chapter_query
+                ),
                 True,
             ),
             (
@@ -260,6 +275,7 @@ class ContextBuilder:
 
         task_text = self._fmt_scene_task(project, chapter, scene, previous_excerpt)
         pov_name = (scene.pov_character_name or "").strip() or None
+        scene_query = self._scene_style_query(scene)
 
         segments_data: list[tuple[SegmentLabel, str, bool]] = [
             ("hard_constraints", self._fmt_hard_constraints(spec), True),
@@ -283,6 +299,13 @@ class ContextBuilder:
                     project_id,
                     focus_names=list(scene.characters or []),
                     pov_character_name=pov_name,
+                ),
+                True,
+            ),
+            (
+                "style_samples",
+                await self._fmt_style_samples(
+                    session, organization_id, project_id, scene_query
                 ),
                 True,
             ),
@@ -953,6 +976,89 @@ class ContextBuilder:
         parts = [
             f"[{entry.memory_type}] {entry.title}：{entry.content}" for entry in selected
         ]
+        return "\n---\n".join(parts)
+
+    # ------------------------------------------------------------------
+    # 风格样本召回（Sprint 14-C4）
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _scene_style_query(scene: Scene) -> str:
+        """把当前 scene 的 title/goal/conflict 拼成召回 query 文本。"""
+        parts: list[str] = []
+        if scene.title:
+            parts.append(scene.title)
+        if scene.goal:
+            parts.append(scene.goal)
+        if scene.conflict:
+            parts.append(scene.conflict)
+        return "\n".join(parts)
+
+    @staticmethod
+    def _chapter_style_query(chapter: Chapter) -> str:
+        """章节级别的召回 query：用 title/summary/goal/conflict。"""
+        parts: list[str] = []
+        if chapter.title:
+            parts.append(chapter.title)
+        if chapter.summary:
+            parts.append(chapter.summary)
+        if chapter.goal:
+            parts.append(chapter.goal)
+        if chapter.conflict:
+            parts.append(chapter.conflict)
+        return "\n".join(parts)
+
+    async def _fmt_style_samples(
+        self,
+        session: AsyncSession,
+        organization_id: str,
+        project_id: str,
+        query_text: str,
+        *,
+        k: int = 2,
+    ) -> str:
+        """按当前任务 query 召回 top-K 风格样本。
+
+        若 query_text 非空且 embedding_service 可用，会先对 query 文本 embed
+        再做余弦相似度排序；样本无 embedding（旧数据）时退化按时间倒序，
+        保证段落始终非空（项目里存在样本就会注入）。
+        """
+        from app.repositories import StyleSampleRepository  # noqa: PLC0415
+
+        query_text = (query_text or "").strip()
+        if query_text:
+            try:
+                query_vector = await embedding_service.embed(query_text)
+            except Exception:  # pragma: no cover - defensive
+                query_vector = None
+        else:
+            query_vector = None
+
+        rows = await recall_style_samples_by_vector(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            query_vector=query_vector,
+            k=k,
+        )
+        if not rows:
+            # 兜底再读一次 repository（极少触发；保留以便后续替换召回实现时
+            # 接口对齐）。
+            repo = StyleSampleRepository(session)
+            rows = list(
+                await repo.list(
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    limit=k,
+                )
+            )
+        if not rows:
+            return ""
+
+        parts: list[str] = []
+        for sample in rows:
+            head = sample.label.strip() or "风格示例"
+            parts.append(f"[{head}]\n{sample.content}")
         return "\n---\n".join(parts)
 
     # ------------------------------------------------------------------

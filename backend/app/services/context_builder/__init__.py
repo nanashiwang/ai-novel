@@ -11,6 +11,10 @@ Sprint 3 实现范围（KISS）：
 - 向量召回**暂不接入**，预留位置；Sprint 4-5 引入 pgvector 时再填
 - token 估算复用 model_gateway._estimate_tokens（CJK 1 char/token）
 
+Sprint 14-C4：在 characters 之后插入 style_samples 段，按当前 scene 的
+title/goal/conflict 做 embedding 召回 top-K 用户上传的风格样本。
+memory_recall 预算从 0.15 缩到 0.09，新增段占 0.06，总和保持 1.0。
+
 参考：docs/api_contract_v1.md §5；优化方向.md §3.6。
 """
 from .service import (

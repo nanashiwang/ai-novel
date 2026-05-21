@@ -32,6 +32,7 @@ from app.models.revision import (
     RevisionSession,
 )
 from app.models.scene import Scene
+from app.models.style_sample import StyleSample
 from app.models.system_setting import SystemSetting
 from app.models.usage import UsageEvent
 from app.models.user import User
@@ -128,6 +129,11 @@ class PlotThreadRevisionRepository(BaseRepository[PlotThreadRevision]):
 class MemoryRepository(BaseRepository[MemoryEntry]):
     model = MemoryEntry
     id_prefix = "mem_entry"
+
+
+class StyleSampleRepository(BaseRepository[StyleSample]):
+    model = StyleSample
+    id_prefix = "style"
 
 
 class GenerationJobRepository(BaseRepository[GenerationJob]):
@@ -253,6 +259,7 @@ __all__ = [
     "RevisionMessageRepository",
     "RevisionAppliedChangeRepository",
     "SceneRepository",
+    "StyleSampleRepository",
     "SystemSettingRepository",
     "UsageEventRepository",
     "UserRepository",

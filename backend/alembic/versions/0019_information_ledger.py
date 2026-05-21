@@ -1,7 +1,7 @@
 """新增 information_ledger 表（Sprint 14-C5）。
 
 Revision ID: 0019_information_ledger
-Revises: 0016_memory_embedding_hnsw
+Revises: 0018_model_calls_metadata
 Create Date: 2026-05-22 10:00:00
 
 把"主角真实身份 / 凶手是谁 / 神器真名"等需要分阶段释放的事实登记到
@@ -17,7 +17,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0019_information_ledger"
-down_revision: str | None = "0016_memory_embedding_hnsw"
+down_revision: str | None = "0018_model_calls_metadata"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

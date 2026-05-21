@@ -18,6 +18,7 @@ from app.api import (
     quotas,
     revisions,
     scenes,
+    style_samples,
     world_item_revisions,
     world_items,
 )
@@ -46,6 +47,7 @@ api_router.include_router(plot_thread_revisions.router)
 api_router.include_router(world_items.router)
 api_router.include_router(plot_threads.router)
 api_router.include_router(information_ledger.router)
+api_router.include_router(style_samples.router)
 api_router.include_router(generation_jobs.router)
 api_router.include_router(events.router)
 

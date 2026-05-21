@@ -511,12 +511,14 @@ async def test_context_builder_assemble_basic_segments(db_session):
 
     # 段顺序：B2 在 world_rules / plot_threads 后各加 actions；
     # C2 把 recent_summary 拆为 recent_scenes (L1) + arc_summaries (L2-L4)；
+    # C4 在 characters 之后插入 style_samples；
     # C5 在 arc_summaries 后注入 information_visibility（trusted）。
     labels = [s.label for s in ctx.segments]
     assert labels == [
         "hard_constraints",
         "task",
         "characters",
+        "style_samples",
         "world_rules",
         "world_actions",
         "plot_threads",
@@ -532,6 +534,7 @@ async def test_context_builder_assemble_basic_segments(db_session):
     assert "task" in trusted_labels
     assert "recent_scenes" in trusted_labels
     assert "arc_summaries" in trusted_labels
+    assert "style_samples" in trusted_labels
     untrusted_labels = {s.label for s in ctx.segments if not s.trusted}
     assert untrusted_labels == {"memory_recall"}
 

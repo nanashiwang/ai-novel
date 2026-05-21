@@ -108,6 +108,7 @@ ERROR_CODES: frozenset[str] = frozenset(
         "character_revision_not_found",
         "plot_thread_not_found",
         "information_ledger_not_found",
+        "style_sample_not_found",
         # 额度
         "quota_insufficient",
         "quota_not_in_plan",

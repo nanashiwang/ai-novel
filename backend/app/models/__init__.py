@@ -18,6 +18,7 @@ from .project import NovelSpec, Project
 from .quota import QuotaBalance, QuotaReservation
 from .revision import RevisionAppliedChange, RevisionMessage, RevisionProposal, RevisionSession
 from .scene import Scene
+from .style_sample import StyleSample
 from .system_setting import SystemSetting
 from .usage import UsageEvent
 from .user import User
@@ -52,6 +53,7 @@ __all__ = [
     "RevisionMessage",
     "RevisionAppliedChange",
     "Scene",
+    "StyleSample",
     "SystemSetting",
     "UsageEvent",
     "User",
