@@ -20,6 +20,7 @@ from app.repositories import (
     ProjectRepository,
 )
 from app.services.entitlement.service import require_entitlement
+from app.services.event_bus import build_event, publish_event_fire_and_forget
 from app.services.quota.service import quota_service
 from app.workflows.starter import workflow_starter
 
@@ -712,6 +713,22 @@ class GenerationService:
             return None
         job.status = "cancelled"
         await session.flush()
+        # SSE：让前端立刻收到取消事件
+        if job.project_id:
+            publish_event_fire_and_forget(
+                f"project:{job.project_id}",
+                build_event(
+                    "job.cancelled",
+                    {
+                        "job_id": job.id,
+                        "job_type": job.job_type,
+                        "status": "cancelled",
+                        "project_id": job.project_id,
+                        "scene_id": (job.input_payload or {}).get("scene_id"),
+                        "chapter_id": (job.input_payload or {}).get("chapter_id"),
+                    },
+                ),
+            )
         return job
 
 

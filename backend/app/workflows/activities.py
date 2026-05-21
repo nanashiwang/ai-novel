@@ -44,6 +44,7 @@ from app.repositories import (
 )
 from app.services.auditor.service import auditor_service
 from app.services.context_builder.service import context_builder
+from app.services.event_bus import build_event, publish_event_fire_and_forget
 from app.services.memory import memory_service
 from app.services.novel_planner.service import novel_planner_service
 from app.services.quota.service import quota_service
@@ -504,6 +505,11 @@ async def mark_job_status(
     2. 把 project.status 从 job 启动时设置的过渡态回滚（防止前端永久卡在
        "圣经生成中" 等中间态，影响重试入口）。
     两项操作都是幂等的。
+
+    Sprint 12-A：每次状态变化向 ``project:{project_id}`` channel 推一条
+    SSE 事件（``job.queued/running/succeeded/failed/cancelled``），让前端
+    不再依赖 1.5s 轮询。publish 是 fire-and-forget，不阻塞 commit，
+    Redis 不可达时优雅降级到 in-memory bus（同进程内仍生效）。
     """
     async with _activity_session() as session:
         repo = GenerationJobRepository(session)
@@ -530,6 +536,23 @@ async def mark_job_status(
         # 只在 succeeded/failed/cancelled 终态计数，避免 queued→running 双重计数
         if status in {"succeeded", "failed", "cancelled"}:
             JOBS_CREATED.labels(job_type=job.job_type, status=status).inc()
+        # SSE 事件：fire-and-forget，不阻塞 commit
+        if job.project_id:
+            publish_event_fire_and_forget(
+                f"project:{job.project_id}",
+                build_event(
+                    f"job.{status}",
+                    {
+                        "job_id": job.id,
+                        "job_type": job.job_type,
+                        "status": status,
+                        "project_id": job.project_id,
+                        "scene_id": (job.input_payload or {}).get("scene_id"),
+                        "chapter_id": (job.input_payload or {}).get("chapter_id"),
+                        "error_message": error_message,
+                    },
+                ),
+            )
         return {
             "updated": True,
             "status": status,
