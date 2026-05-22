@@ -10,4 +10,5 @@ def test_runtime_schema_fixes_include_recent_generation_columns():
     assert "export_files ADD COLUMN IF NOT EXISTS file_size" in statements
     assert "usage_events ADD COLUMN IF NOT EXISTS event_metadata" in statements
     assert "usage_events ADD COLUMN IF NOT EXISTS updated_at" in statements
+    assert "model_calls ADD COLUMN IF NOT EXISTS metadata" in statements
     assert "monthly_generated_words" in statements
