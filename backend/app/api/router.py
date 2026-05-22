@@ -22,7 +22,7 @@ from app.api import (
     world_item_revisions,
     world_items,
 )
-from app.api.admin import content_reviews, logs, metrics, plans, settings, users
+from app.api.admin import content_reviews, logs, metrics, plans, prompt_experiments, settings, users
 from app.api.admin import jobs as admin_jobs
 from app.api.admin import organizations as admin_orgs
 
@@ -60,3 +60,4 @@ api_router.include_router(logs.router)
 api_router.include_router(content_reviews.router)
 api_router.include_router(settings.router)
 api_router.include_router(metrics.router)
+api_router.include_router(prompt_experiments.router)

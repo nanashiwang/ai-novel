@@ -473,6 +473,28 @@ _POSTGRES_SCHEMA_FIXES = [
         "CREATE INDEX IF NOT EXISTS ix_information_ledger_status "
         "ON information_ledger(status)"
     ),
+    # Sprint 15-D1：prompt 实验登记（A/B 分流）
+    (
+        "CREATE TABLE IF NOT EXISTS prompt_experiments ("
+        "id VARCHAR(64) PRIMARY KEY, "
+        "organization_id VARCHAR(64) NOT NULL, "
+        "prompt_key VARCHAR(160) NOT NULL, "
+        "variant_a_version VARCHAR(32) NOT NULL DEFAULT 'v1', "
+        "variant_b_version VARCHAR(32) NOT NULL DEFAULT 'v2', "
+        "traffic_split_pct INTEGER NOT NULL DEFAULT 50, "
+        "status VARCHAR(16) NOT NULL DEFAULT 'draft', "
+        "started_at TIMESTAMPTZ NULL, "
+        "ended_at TIMESTAMPTZ NULL, "
+        "notes TEXT NOT NULL DEFAULT '', "
+        "created_by VARCHAR(64) NULL, "
+        "created_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
+        "updated_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+        ")"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_prompt_experiments_active "
+        "ON prompt_experiments(organization_id, prompt_key, status)"
+    ),
 ]
 
 

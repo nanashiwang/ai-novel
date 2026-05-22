@@ -24,6 +24,7 @@ from app.models.plan import Plan, PlanFeature
 from app.models.plot_thread import PlotThread
 from app.models.plot_thread_revision import PlotThreadRevision
 from app.models.project import NovelSpec, Project
+from app.models.prompt_experiment import PromptExperiment
 from app.models.quota import QuotaBalance, QuotaReservation
 from app.models.revision import (
     RevisionAppliedChange,
@@ -124,6 +125,11 @@ class WorldItemRevisionRepository(BaseRepository[WorldItemRevision]):
 class PlotThreadRevisionRepository(BaseRepository[PlotThreadRevision]):
     model = PlotThreadRevision
     id_prefix = "ptr"
+
+
+class PromptExperimentRepository(BaseRepository[PromptExperiment]):
+    model = PromptExperiment
+    id_prefix = "pexp"
 
 
 class MemoryRepository(BaseRepository[MemoryEntry]):
@@ -252,6 +258,7 @@ __all__ = [
     "PlotThreadRepository",
     "PlotThreadRevisionRepository",
     "ProjectRepository",
+    "PromptExperimentRepository",
     "QuotaBalanceRepository",
     "QuotaReservationRepository",
     "RevisionSessionRepository",

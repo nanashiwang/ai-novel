@@ -15,6 +15,7 @@ from app.core.config import get_settings
 from app.models.common import new_id
 from app.models.model_call import ModelCall
 from app.services.model_gateway.providers import AnthropicMessagesProvider, OpenAIChatProvider
+from app.services.prompt_router import RoutingResult, prompt_router
 from app.services.system_settings import ModelGatewayConfig, system_settings_service
 
 _logger = logging.getLogger(__name__)
@@ -121,6 +122,44 @@ class ModelGateway:
         config = await system_settings_service.get_model_config(session)
         self.configure(config)
 
+    async def _apply_prompt_routing(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str | None,
+        prompt_key: str,
+        baseline_version: str,
+        metadata: dict[str, Any] | None,
+    ) -> tuple[str, dict[str, Any] | None]:
+        """Sprint 15-D1：在 model_gateway 入口处询问 PromptRouter。
+
+        命中 A/B 实验时把最终生效的 prompt_version 与 experiment_id/variant
+        合并回 metadata，落到 model_calls.metadata_json；未命中时透传 baseline。
+        """
+        try:
+            routing: RoutingResult = await prompt_router.route(
+                session,
+                organization_id=organization_id,
+                prompt_key=prompt_key,
+                baseline_version=baseline_version,
+                project_id=project_id,
+            )
+        except Exception:  # noqa: BLE001
+            # 路由失败不能阻断主流程；记日志透传 baseline
+            _logger.warning("prompt_router_failed", exc_info=True)
+            return baseline_version, metadata
+
+        if not routing.experiment_id:
+            return baseline_version, metadata
+
+        merged = dict(metadata or {})
+        merged["experiment_id"] = routing.experiment_id
+        merged["variant"] = routing.variant
+        if routing.original_version:
+            merged["original_prompt_version"] = routing.original_version
+        return routing.prompt_version, merged
+
     async def generate_json(
         self,
         session: AsyncSession,
@@ -138,6 +177,15 @@ class ModelGateway:
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         await self.refresh_from_settings(session)
+        effective_key = prompt_key or task_type
+        effective_version, effective_metadata = await self._apply_prompt_routing(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            prompt_key=effective_key,
+            baseline_version=prompt_version,
+            metadata=metadata,
+        )
         started = time.perf_counter()
         try:
             response_json = await self._provider.complete_json(
@@ -153,8 +201,8 @@ class ModelGateway:
                 project_id=project_id,
                 job_id=job_id,
                 task_type=task_type,
-                prompt_key=prompt_key or task_type,
-                prompt_version=prompt_version,
+                prompt_key=effective_key,
+                prompt_version=effective_version,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 response_json=None,
@@ -170,14 +218,14 @@ class ModelGateway:
             project_id=project_id,
             job_id=job_id,
             task_type=task_type,
-            prompt_key=prompt_key or task_type,
-            prompt_version=prompt_version,
+            prompt_key=effective_key,
+            prompt_version=effective_version,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             response_json=response_json,
             response_text=None,
             started=started,
-            metadata=metadata,
+            metadata=effective_metadata,
         )
         return response_json
 
@@ -197,6 +245,15 @@ class ModelGateway:
         metadata: dict[str, Any] | None = None,
     ) -> str:
         await self.refresh_from_settings(session)
+        effective_key = prompt_key or task_type
+        effective_version, effective_metadata = await self._apply_prompt_routing(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            prompt_key=effective_key,
+            baseline_version=prompt_version,
+            metadata=metadata,
+        )
         started = time.perf_counter()
         try:
             response_text = await self._provider.complete_text(
@@ -211,8 +268,8 @@ class ModelGateway:
                 project_id=project_id,
                 job_id=job_id,
                 task_type=task_type,
-                prompt_key=prompt_key or task_type,
-                prompt_version=prompt_version,
+                prompt_key=effective_key,
+                prompt_version=effective_version,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 response_json=None,
@@ -228,14 +285,14 @@ class ModelGateway:
             project_id=project_id,
             job_id=job_id,
             task_type=task_type,
-            prompt_key=prompt_key or task_type,
-            prompt_version=prompt_version,
+            prompt_key=effective_key,
+            prompt_version=effective_version,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             response_json=None,
             response_text=response_text,
             started=started,
-            metadata=metadata,
+            metadata=effective_metadata,
         )
         return response_text
 

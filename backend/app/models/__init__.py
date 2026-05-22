@@ -15,6 +15,7 @@ from .plan import Plan, PlanFeature
 from .plot_thread import PlotThread
 from .plot_thread_revision import PlotThreadRevision
 from .project import NovelSpec, Project
+from .prompt_experiment import PromptExperiment
 from .quota import QuotaBalance, QuotaReservation
 from .revision import RevisionAppliedChange, RevisionMessage, RevisionProposal, RevisionSession
 from .scene import Scene
@@ -46,6 +47,7 @@ __all__ = [
     "PlotThread",
     "PlotThreadRevision",
     "Project",
+    "PromptExperiment",
     "QuotaBalance",
     "QuotaReservation",
     "RevisionSession",
