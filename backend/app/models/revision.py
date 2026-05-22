@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import JSON, ForeignKey, String, Text
+from sqlalchemy import JSON, Boolean, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -52,6 +52,10 @@ class RevisionProposal(Base, TenantMixin, TimestampMixin):
     reason: Mapped[str] = mapped_column(Text, default="")
     impact: Mapped[list[str]] = mapped_column(JSON, default=list)
     patch: Mapped[dict] = mapped_column(JSON, default=dict)
+    group_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    group_title: Mapped[str] = mapped_column(String(200), default="")
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+    risk_notes: Mapped[list[str]] = mapped_column(JSON, default=list)
     status: Mapped[str] = mapped_column(String(32), default="pending")
 
 

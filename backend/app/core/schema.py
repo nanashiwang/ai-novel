@@ -203,6 +203,10 @@ _POSTGRES_SCHEMA_FIXES = [
       reason TEXT NOT NULL DEFAULT '',
       impact JSONB NOT NULL DEFAULT '[]',
       patch JSONB NOT NULL DEFAULT '{}',
+      group_id TEXT,
+      group_title TEXT NOT NULL DEFAULT '',
+      is_primary BOOLEAN NOT NULL DEFAULT false,
+      risk_notes JSONB NOT NULL DEFAULT '[]',
       status TEXT NOT NULL DEFAULT 'pending',
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -213,6 +217,23 @@ _POSTGRES_SCHEMA_FIXES = [
     (
         "CREATE INDEX IF NOT EXISTS ix_revision_proposals_target "
         "ON revision_proposals(target_type, target_id)"
+    ),
+    "ALTER TABLE revision_proposals ADD COLUMN IF NOT EXISTS group_id TEXT",
+    (
+        "ALTER TABLE revision_proposals ADD COLUMN IF NOT EXISTS "
+        "group_title TEXT NOT NULL DEFAULT ''"
+    ),
+    (
+        "ALTER TABLE revision_proposals ADD COLUMN IF NOT EXISTS "
+        "is_primary BOOLEAN NOT NULL DEFAULT false"
+    ),
+    (
+        "ALTER TABLE revision_proposals ADD COLUMN IF NOT EXISTS "
+        "risk_notes JSONB NOT NULL DEFAULT '[]'"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_revision_proposals_group_id "
+        "ON revision_proposals(group_id)"
     ),
     """
     CREATE TABLE IF NOT EXISTS revision_applied_changes (

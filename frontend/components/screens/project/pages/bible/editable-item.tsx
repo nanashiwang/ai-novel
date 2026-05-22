@@ -1,6 +1,6 @@
 "use client";
 
-import { Pencil } from "lucide-react";
+import { Pencil, Sparkles } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -12,9 +12,10 @@ export type EditableItemProps = {
   extraBadge?: ReactNode;
   text: string;
   onEdit: () => void;
+  onOptimize?: () => void;
 };
 
-export function EditableItem({ title, badge, text, onEdit, extraBadge }: EditableItemProps) {
+export function EditableItem({ title, badge, text, onEdit, onOptimize, extraBadge }: EditableItemProps) {
   return (
     <div className="group relative rounded-2xl border border-slate-200 bg-white p-4">
       <div className="flex items-start justify-between gap-3">
@@ -22,6 +23,16 @@ export function EditableItem({ title, badge, text, onEdit, extraBadge }: Editabl
         <div className="flex items-center gap-2">
           {badge ? <Badge tone="slate">{badge}</Badge> : null}
           {extraBadge}
+          {onOptimize ? (
+            <button
+              type="button"
+              onClick={onOptimize}
+              className="rounded-md p-1 text-slate-400 opacity-0 transition group-hover:opacity-100 hover:bg-cyan-50 hover:text-cyan-700"
+              aria-label="AI 优化"
+            >
+              <Sparkles className="size-3.5" />
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={onEdit}

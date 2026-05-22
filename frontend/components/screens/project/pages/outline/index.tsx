@@ -12,8 +12,10 @@ import { DataTable } from "@/components/ui/data-table";
 import { ProjectHeader } from "@/components/screens/project/project-frame";
 import { BibleBlock } from "@/components/screens/project/shared/bible-block";
 import {
+  type Chapter,
   chaptersApi,
   type GenerationJob,
+  type RevisionTargetType,
   jobsApi,
   projectsApi,
   scenesApi,
@@ -21,6 +23,16 @@ import {
 import { useProjectEvents, type ProjectEvent } from "@/lib/hooks/use-event-source";
 import { ApiError } from "@/lib/http";
 import { useScopedKey } from "@/lib/use-scoped-key";
+import { RevisionCopilotDrawer } from "../bible/revision-copilot-drawer";
+
+type RevisionDrawerConfig = {
+  scope: string;
+  targetType?: RevisionTargetType | null;
+  targetId?: string | null;
+  title: string;
+  description?: string;
+  starterPrompts: string[];
+};
 
 export function OutlinePage({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
@@ -106,6 +118,7 @@ export function OutlinePage({ projectId }: { projectId: string }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [sceneCountMode, setSceneCountMode] = useState<"auto" | "manual">("auto");
   const [manualSceneCount, setManualSceneCount] = useState(3);
+  const [revisionConfig, setRevisionConfig] = useState<RevisionDrawerConfig | null>(null);
   const active = chapters.find((c) => c.id === activeId) ?? chapters[0];
 
   // 当前激活章节的 scene_plan 任务（按 input_payload.chapter_id 精确匹配）
@@ -125,6 +138,40 @@ export function OutlinePage({ projectId }: { projectId: string }) {
     queryFn: () => scenesApi.list(projectId, active?.id),
     enabled: !!active,
   });
+
+  const invalidateRevisionTargets = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: chaptersKey });
+    queryClient.invalidateQueries({ queryKey: scenesKey });
+    queryClient.invalidateQueries({ queryKey: jobsKey });
+    queryClient.invalidateQueries({ queryKey: projectKey });
+  }, [queryClient, chaptersKey, scenesKey, jobsKey, projectKey]);
+
+  const openOutlineRevision = () => {
+    setRevisionConfig({
+      scope: "outline",
+      targetType: null,
+      title: "优化章节大纲",
+      description: "重点优化未写章节的标题、摘要、目标、冲突和钩子；已有场景的章节不会自动改。",
+      starterPrompts: [
+        "请优化未写章节的节奏、冲突和钩子，不创建、不删除、不重排章节；如影响人物或剧情线，请给出同组联动提案。",
+        "请检查当前大纲是否有节奏断层或重复冲突，只给出可安全应用到无场景章节的修改。",
+      ],
+    });
+  };
+
+  const openChapterRevision = (chapter: Chapter) => {
+    setRevisionConfig({
+      scope: "chapter",
+      targetType: "chapter",
+      targetId: chapter.id,
+      title: `优化第 ${chapter.chapter_index} 章`,
+      description: "只优化当前章节大纲；如果该章已有场景，应用时会被后端拒绝，避免破坏正文链路。",
+      starterPrompts: [
+        "请优化这一章的标题、摘要、章节目标、核心冲突和结尾钩子；如影响人物或剧情线，请给出同组联动提案。",
+        "请检查这一章是否承接前后章节，并补强情绪钩子和剧情推进。",
+      ],
+    });
+  };
 
   // SSE：监听项目任务状态变化（替代 1.5s 轮询）
   const handleProjectEvent = useCallback(
@@ -194,17 +241,26 @@ export function OutlinePage({ projectId }: { projectId: string }) {
                   : "调用模型规划三幕推进，每章产出标题、摘要、目标、冲突、结尾钩子。"}
               </p>
             </div>
-            <Button
-              onClick={() => generate.mutate()}
-              disabled={generate.isPending || isGenerating}
-            >
-              {isGenerating ? (
-                <RefreshCw className="size-4 animate-spin" />
-              ) : (
-                <Sparkles className="size-4" />
-              )}
-              {generateOutlineLabel}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="secondary"
+                onClick={openOutlineRevision}
+                disabled={chapters.length === 0}
+              >
+                <Sparkles className="size-4" /> AI 优化大纲
+              </Button>
+              <Button
+                onClick={() => generate.mutate()}
+                disabled={generate.isPending || isGenerating}
+              >
+                {isGenerating ? (
+                  <RefreshCw className="size-4 animate-spin" />
+                ) : (
+                  <Sparkles className="size-4" />
+                )}
+                {generateOutlineLabel}
+              </Button>
+            </div>
           </div>
           {latestJob ? (
             <div className="grid gap-3 md:grid-cols-3">
@@ -253,7 +309,14 @@ export function OutlinePage({ projectId }: { projectId: string }) {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle>当前章节大纲</CardTitle>
-              <Badge tone="violet">可生成场景拆分</Badge>
+              <div className="flex items-center gap-2">
+                <Badge tone={scenes.length > 0 ? "amber" : "violet"}>
+                  {scenes.length > 0 ? "已有场景，自动应用会受限" : "可安全优化"}
+                </Badge>
+                <Button size="sm" variant="secondary" onClick={() => openChapterRevision(active)}>
+                  <Sparkles className="size-3.5" /> AI 优化
+                </Button>
+              </div>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-4 md:grid-cols-2">
@@ -349,6 +412,19 @@ export function OutlinePage({ projectId }: { projectId: string }) {
           </Card>
         ) : null}
       </div>
+      {revisionConfig ? (
+        <RevisionCopilotDrawer
+          projectId={projectId}
+          scope={revisionConfig.scope}
+          targetType={revisionConfig.targetType}
+          targetId={revisionConfig.targetId}
+          title={revisionConfig.title}
+          description={revisionConfig.description}
+          starterPrompts={revisionConfig.starterPrompts}
+          onClose={() => setRevisionConfig(null)}
+          onApplied={invalidateRevisionTargets}
+        />
+      ) : null}
     </div>
   );
 }

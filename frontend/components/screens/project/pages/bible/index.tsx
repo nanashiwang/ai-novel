@@ -28,6 +28,7 @@ import {
   type BiblePlotThread,
   type BibleWorldItem,
   type GenerateBiblePayload,
+  type RevisionTargetType,
   characterRevisionsApi,
   plotThreadRevisionsApi,
   projectsApi,
@@ -50,6 +51,26 @@ import { RevisionCopilotDrawer } from "./revision-copilot-drawer";
 import { SpecEditDialog } from "./spec-edit-dialog";
 import { WillGenerateList } from "./will-generate-list";
 import { WorldItemEditDialog } from "./world-item-edit-dialog";
+
+type RevisionDrawerConfig = {
+  scope: string;
+  targetType?: RevisionTargetType | null;
+  targetId?: string | null;
+  title: string;
+  description?: string;
+  starterPrompts: string[];
+};
+
+const CORE_REVISION_CONFIG: RevisionDrawerConfig = {
+  scope: "story_bible",
+  targetType: "story_bible",
+  title: "优化核心设定",
+  description: "重点优化 Premise / Theme / Genre / Tone / POV / Style / continuity_rules，并检查跨模块影响。",
+  starterPrompts: [
+    "请优化核心设定，让 Premise、Theme、Tone、POV 和 Style Guide 更一致；如影响人物或大纲，请给出同组联动提案。",
+    "请检查当前核心设定是否足以支撑长篇连载，补强 continuity_rules 和长期冲突约束。",
+  ],
+};
 
 export function BiblePage({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
@@ -145,8 +166,7 @@ export function BiblePage({ projectId }: { projectId: string }) {
   const [prefs, setPrefs] = useState<CreativePrefs>(DEFAULT_PREFS);
   const [directionPreviewOpen, setDirectionPreviewOpen] = useState(false);
   const [specEditing, setSpecEditing] = useState(false);
-  const [revisionOpen, setRevisionOpen] = useState(false);
-  const [revisionAutoStartKey, setRevisionAutoStartKey] = useState(0);
+  const [revisionConfig, setRevisionConfig] = useState<RevisionDrawerConfig | null>(null);
   const [editChar, setEditChar] = useState<BibleCharacter | "new" | null>(null);
   const [editWorld, setEditWorld] = useState<BibleWorldItem | "new" | null>(null);
   const [editThread, setEditThread] = useState<BiblePlotThread | "new" | null>(null);
@@ -209,6 +229,7 @@ export function BiblePage({ projectId }: { projectId: string }) {
     queryClient.invalidateQueries({ queryKey: charactersKey });
     queryClient.invalidateQueries({ queryKey: worldItemsKey });
     queryClient.invalidateQueries({ queryKey: plotThreadsKey });
+    queryClient.invalidateQueries({ queryKey: chaptersKey });
     queryClient.invalidateQueries({ queryKey: pendingCountsKey });
     queryClient.invalidateQueries({ queryKey: worldPendingKey });
     queryClient.invalidateQueries({ queryKey: plotPendingKey });
@@ -252,9 +273,8 @@ export function BiblePage({ projectId }: { projectId: string }) {
     regenerateOutline.mutate();
   };
 
-  const startAiOptimization = () => {
-    setRevisionAutoStartKey((key) => key + 1);
-    setRevisionOpen(true);
+  const startAiOptimization = (config: RevisionDrawerConfig = CORE_REVISION_CONFIG) => {
+    setRevisionConfig(config);
   };
 
   return (
@@ -303,7 +323,7 @@ export function BiblePage({ projectId }: { projectId: string }) {
                 <Settings2 className="size-4" /> {prefsOpen ? "收起创作偏好" : "创作偏好"}
               </Button>
               {spec ? (
-                <Button variant="secondary" onClick={startAiOptimization}>
+                <Button variant="secondary" onClick={() => startAiOptimization()}>
                   <Sparkles className="size-4" /> AI 优化设定
                 </Button>
               ) : null}
@@ -382,7 +402,7 @@ export function BiblePage({ projectId }: { projectId: string }) {
               <CardTitle>核心设定</CardTitle>
               <div className="flex items-center gap-2">
                 <Badge tone="violet">{spec.genre || "未分类"}</Badge>
-                <Button size="sm" variant="secondary" onClick={startAiOptimization}>
+                <Button size="sm" variant="secondary" onClick={() => startAiOptimization()}>
                   <Sparkles className="size-3.5" /> AI 优化
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => setSpecEditing(true)}>
@@ -399,7 +419,7 @@ export function BiblePage({ projectId }: { projectId: string }) {
               </div>
               <BibleBlock title="Style Guide" text={spec.style_guide || "—"} />
               <div className="grid gap-3 md:grid-cols-2">
-                {spec.constraints.map((item) => (
+                {[...(spec.constraints ?? []), ...(spec.continuity_rules ?? [])].map((item) => (
                   <BibleItem key={item} title="约束 / 规则" text={item} />
                 ))}
               </div>
@@ -439,6 +459,19 @@ export function BiblePage({ projectId }: { projectId: string }) {
                             <Badge tone="amber">{pendingCount} 项待审核</Badge>
                           ) : undefined
                         }
+                        onOptimize={() =>
+                          startAiOptimization({
+                            scope: "character",
+                            targetType: "character",
+                            targetId: character.id,
+                            title: `优化人物：${character.name}`,
+                            description: "重点优化人物动机、秘密、性格、弧光、关系和当前状态，并检查对剧情线/大纲的影响。",
+                            starterPrompts: [
+                              "请优化这个人物的动机、秘密、性格和弧光；如影响关系、剧情线或章节大纲，请给出同组联动提案。",
+                              "请检查这个人物是否能支撑长篇成长线，补强 current_state 和 relationships 的可推进信息。",
+                            ],
+                          })
+                        }
                         onEdit={() => setEditChar(character)}
                       />
                     );
@@ -470,6 +503,19 @@ export function BiblePage({ projectId }: { projectId: string }) {
                           ) : null
                         }
                         text={thread.description}
+                        onOptimize={() =>
+                          startAiOptimization({
+                            scope: "plot_thread",
+                            targetType: "plot_thread",
+                            targetId: thread.id,
+                            title: `优化剧情线：${thread.title}`,
+                            description: "重点优化主线/副线/伏笔/冲突推进，并检查人物、世界观和大纲联动。",
+                            starterPrompts: [
+                              "请优化这条剧情线的冲突推进、伏笔和阶段目标；如影响人物或章节大纲，请给出同组联动提案。",
+                              "请检查这条剧情线是否有足够的中长期推进力，并补强关键转折和回收路径。",
+                            ],
+                          })
+                        }
                         onEdit={() => setEditThread(thread)}
                       />
                     );
@@ -503,6 +549,19 @@ export function BiblePage({ projectId }: { projectId: string }) {
                         ) : null
                       }
                       text={item.description}
+                      onOptimize={() =>
+                        startAiOptimization({
+                          scope: "world_item",
+                          targetType: "world_item",
+                          targetId: item.id,
+                          title: `优化世界观：${item.name}`,
+                          description: "重点优化地点、势力、硬规则、资源体系，并检查人物/剧情线/大纲联动。",
+                          starterPrompts: [
+                            "请优化这个世界观条目的规则、边界和长篇可持续性；如影响人物或剧情线，请给出同组联动提案。",
+                            "请检查这个设定是否存在漏洞或与核心设定冲突，并给出可应用的修正方案。",
+                          ],
+                        })
+                      }
                       onEdit={() => setEditWorld(item)}
                     />
                   );
@@ -595,12 +654,16 @@ export function BiblePage({ projectId }: { projectId: string }) {
           }}
         />
       ) : null}
-      {revisionOpen ? (
+      {revisionConfig ? (
         <RevisionCopilotDrawer
           projectId={projectId}
-          autoStartKey={revisionAutoStartKey}
-          autoStartMessage="请检查当前故事圣经、人物、世界观和剧情线，直接生成最值得应用的 3 个设定优化提案。优先补强人物动机、秘密、弧光、核心冲突和长篇可持续规则。"
-          onClose={() => setRevisionOpen(false)}
+          scope={revisionConfig.scope}
+          targetType={revisionConfig.targetType}
+          targetId={revisionConfig.targetId}
+          title={revisionConfig.title}
+          description={revisionConfig.description}
+          starterPrompts={revisionConfig.starterPrompts}
+          onClose={() => setRevisionConfig(null)}
           onApplied={invalidateAll}
         />
       ) : null}

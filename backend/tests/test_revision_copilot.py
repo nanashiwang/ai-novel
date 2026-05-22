@@ -3,7 +3,15 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import select
 
-from app.models import Character, Project, RevisionAppliedChange, RevisionProposal, RevisionSession
+from app.models import (
+    Chapter,
+    Character,
+    Project,
+    RevisionAppliedChange,
+    RevisionProposal,
+    RevisionSession,
+    Scene,
+)
 
 
 async def _register_with_project(client, email: str) -> tuple[str, str]:
@@ -44,6 +52,7 @@ async def test_revision_chat_creates_applyable_proposals(client, db_session):
     assert body["reply"]
     assert [m["role"] for m in body["messages"]] == ["user", "assistant"]
     assert len(body["proposals"]) == 4
+    assert all("group_id" in p and "risk_notes" in p for p in body["proposals"])
     assert {p["target_type"] for p in body["proposals"]} == {
         "story_bible",
         "character",
@@ -276,3 +285,289 @@ async def test_apply_null_patch_proposal_returns_readable_conflict(client, db_se
     error = applied.json()["error"]
     assert error["code"] == "revision_patch_empty"
     assert "重新生成 AI 优化" in error["message"]
+
+
+@pytest.mark.asyncio
+async def test_apply_proposal_group_updates_all_targets(client, db_session):
+    token, project_id = await _register_with_project(client, "revision-group@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    project = await db_session.get(Project, project_id)
+    assert project is not None
+
+    session = RevisionSession(
+        id="rev_session_group_success",
+        organization_id=project.organization_id,
+        project_id=project_id,
+        created_by=project.created_by,
+        scope="story_bible",
+        title="成组应用测试",
+        status="active",
+    )
+    proposals = [
+        RevisionProposal(
+            id="rev_prop_group_spec",
+            organization_id=project.organization_id,
+            session_id=session.id,
+            project_id=project_id,
+            target_type="story_bible",
+            target_id=None,
+            action="update",
+            title="强化主题",
+            reason="核心设定变更",
+            impact=["world_items"],
+            patch={"theme": "成组应用后的主题"},
+            group_id="revgrp_success",
+            group_title="核心设定与世界规则联动",
+            is_primary=True,
+            risk_notes=["会改变世界规则解释"],
+            status="pending",
+        ),
+        RevisionProposal(
+            id="rev_prop_group_world",
+            organization_id=project.organization_id,
+            session_id=session.id,
+            project_id=project_id,
+            target_type="world_item",
+            target_id=None,
+            action="create",
+            title="新增联动规则",
+            reason="补足世界规则",
+            impact=["story_bible"],
+            patch={
+                "type": "rule",
+                "name": "记忆代价",
+                "description": "记忆越珍贵，交换代价越不可逆。",
+                "importance": "high",
+                "is_hard_rule": True,
+            },
+            group_id="revgrp_success",
+            group_title="核心设定与世界规则联动",
+            is_primary=False,
+            risk_notes=["会改变世界规则解释"],
+            status="pending",
+        ),
+    ]
+    db_session.add_all([session, *proposals])
+    await db_session.commit()
+
+    applied = await client.post(
+        f"/api/v1/projects/{project_id}/revisions/proposal-groups/revgrp_success/apply",
+        headers=headers,
+    )
+
+    assert applied.status_code == 200, applied.text
+    body = applied.json()
+    assert len(body["proposals"]) == 2
+    assert len(body["applied_change_ids"]) == 2
+    assert {p["status"] for p in body["proposals"]} == {"applied"}
+
+    spec = await client.get(f"/api/v1/projects/{project_id}/spec", headers=headers)
+    assert spec.json()["theme"] == "成组应用后的主题"
+    world_items = await client.get(f"/api/v1/projects/{project_id}/world-items", headers=headers)
+    assert any(row["name"] == "记忆代价" for row in world_items.json())
+
+
+@pytest.mark.asyncio
+async def test_apply_proposal_group_rolls_back_when_one_fails(client, db_session):
+    token, project_id = await _register_with_project(client, "revision-group-rollback@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    project = await db_session.get(Project, project_id)
+    assert project is not None
+
+    chapter = Chapter(
+        id="chapter_with_scene_group",
+        organization_id=project.organization_id,
+        project_id=project_id,
+        volume_id=None,
+        chapter_index=1,
+        title="旧章节",
+        summary="旧摘要",
+    )
+    scene = Scene(
+        id="scene_for_group_conflict",
+        organization_id=project.organization_id,
+        project_id=project_id,
+        chapter_id=chapter.id,
+        scene_index=1,
+        title="已有场景",
+    )
+    session = RevisionSession(
+        id="rev_session_group_rollback",
+        organization_id=project.organization_id,
+        project_id=project_id,
+        created_by=project.created_by,
+        scope="outline",
+        title="回滚测试",
+        status="active",
+    )
+    proposals = [
+        RevisionProposal(
+            id="rev_prop_group_rollback_spec",
+            organization_id=project.organization_id,
+            session_id=session.id,
+            project_id=project_id,
+            target_type="story_bible",
+            target_id=None,
+            action="update",
+            title="不应落库的主题",
+            reason="测试回滚",
+            impact=["chapters"],
+            patch={"theme": "不应被写入"},
+            group_id="revgrp_rollback",
+            group_title="失败回滚组",
+            is_primary=True,
+            status="pending",
+        ),
+        RevisionProposal(
+            id="rev_prop_group_rollback_chapter",
+            organization_id=project.organization_id,
+            session_id=session.id,
+            project_id=project_id,
+            target_type="chapter",
+            target_id=chapter.id,
+            action="update",
+            title="已有场景章节",
+            reason="测试冲突",
+            impact=["chapters"],
+            patch={"summary": "不应被写入的摘要"},
+            group_id="revgrp_rollback",
+            group_title="失败回滚组",
+            is_primary=False,
+            status="pending",
+        ),
+    ]
+    db_session.add_all([chapter, scene, session, *proposals])
+    await db_session.commit()
+
+    applied = await client.post(
+        f"/api/v1/projects/{project_id}/revisions/proposal-groups/revgrp_rollback/apply",
+        headers=headers,
+    )
+
+    assert applied.status_code == 409, applied.text
+    assert applied.json()["error"]["code"] == "chapter_has_scenes"
+
+    spec = await client.get(f"/api/v1/projects/{project_id}/spec", headers=headers)
+    assert spec.json()["theme"] != "不应被写入"
+    await db_session.refresh(chapter)
+    assert chapter.summary == "旧摘要"
+    rows = (
+        await db_session.execute(
+            select(RevisionProposal).where(RevisionProposal.group_id == "revgrp_rollback")
+        )
+    ).scalars().all()
+    assert {row.status for row in rows} == {"pending"}
+
+
+@pytest.mark.asyncio
+async def test_apply_chapter_patch_only_without_scenes(client, db_session):
+    token, project_id = await _register_with_project(client, "revision-chapter@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    project = await db_session.get(Project, project_id)
+    assert project is not None
+
+    chapter = Chapter(
+        id="chapter_without_scene",
+        organization_id=project.organization_id,
+        project_id=project_id,
+        volume_id=None,
+        chapter_index=1,
+        title="旧标题",
+        summary="旧摘要",
+    )
+    session = RevisionSession(
+        id="rev_session_chapter",
+        organization_id=project.organization_id,
+        project_id=project_id,
+        created_by=project.created_by,
+        scope="chapter",
+        title="章节测试",
+        status="active",
+    )
+    proposal = RevisionProposal(
+        id="rev_prop_chapter",
+        organization_id=project.organization_id,
+        session_id=session.id,
+        project_id=project_id,
+        target_type="chapter",
+        target_id=chapter.id,
+        action="update",
+        title="优化章节",
+        reason="强化钩子",
+        impact=["chapters"],
+        patch={"title": "新标题", "ending_hook": "新的结尾钩子"},
+        status="pending",
+    )
+    db_session.add_all([chapter, session, proposal])
+    await db_session.commit()
+
+    applied = await client.post(
+        f"/api/v1/projects/{project_id}/revisions/proposals/{proposal.id}/apply",
+        headers=headers,
+    )
+
+    assert applied.status_code == 200, applied.text
+    await db_session.refresh(chapter)
+    assert chapter.title == "新标题"
+    assert chapter.ending_hook == "新的结尾钩子"
+
+
+@pytest.mark.asyncio
+async def test_apply_chapter_patch_with_scenes_returns_conflict(client, db_session):
+    token, project_id = await _register_with_project(
+        client, "revision-chapter-conflict@example.com"
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    project = await db_session.get(Project, project_id)
+    assert project is not None
+
+    chapter = Chapter(
+        id="chapter_with_scene",
+        organization_id=project.organization_id,
+        project_id=project_id,
+        volume_id=None,
+        chapter_index=1,
+        title="旧标题",
+        summary="旧摘要",
+    )
+    scene = Scene(
+        id="scene_for_chapter_conflict",
+        organization_id=project.organization_id,
+        project_id=project_id,
+        chapter_id=chapter.id,
+        scene_index=1,
+        title="已有场景",
+    )
+    session = RevisionSession(
+        id="rev_session_chapter_conflict",
+        organization_id=project.organization_id,
+        project_id=project_id,
+        created_by=project.created_by,
+        scope="chapter",
+        title="章节冲突测试",
+        status="active",
+    )
+    proposal = RevisionProposal(
+        id="rev_prop_chapter_conflict",
+        organization_id=project.organization_id,
+        session_id=session.id,
+        project_id=project_id,
+        target_type="chapter",
+        target_id=chapter.id,
+        action="update",
+        title="不安全章节修改",
+        reason="测试冲突",
+        impact=["chapters"],
+        patch={"summary": "不应应用"},
+        status="pending",
+    )
+    db_session.add_all([chapter, scene, session, proposal])
+    await db_session.commit()
+
+    applied = await client.post(
+        f"/api/v1/projects/{project_id}/revisions/proposals/{proposal.id}/apply",
+        headers=headers,
+    )
+
+    assert applied.status_code == 409, applied.text
+    assert applied.json()["error"]["code"] == "chapter_has_scenes"

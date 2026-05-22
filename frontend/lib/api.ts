@@ -72,6 +72,7 @@ export type BibleSpec = {
   narrative_pov: string;
   style_guide: string;
   constraints: string[];
+  continuity_rules: string[];
 };
 
 export type BibleCharacter = {
@@ -109,7 +110,8 @@ export type RevisionTargetType =
   | "story_bible"
   | "character"
   | "world_item"
-  | "plot_thread";
+  | "plot_thread"
+  | "chapter";
 
 export type RevisionProposal = {
   id: string;
@@ -122,6 +124,10 @@ export type RevisionProposal = {
   patch: Record<string, unknown>;
   reason: string;
   impact: string[];
+  group_id: string | null;
+  group_title: string;
+  is_primary: boolean;
+  risk_notes: string[];
   status: string;
 };
 
@@ -375,6 +381,10 @@ export const revisionApi = {
   applyProposal: (projectId: string, proposalId: string) =>
     http.post<{ proposal: RevisionProposal; applied_change_id: string }>(
       `/projects/${projectId}/revisions/proposals/${proposalId}/apply`,
+    ),
+  applyProposalGroup: (projectId: string, groupId: string) =>
+    http.post<{ proposals: RevisionProposal[]; applied_change_ids: string[] }>(
+      `/projects/${projectId}/revisions/proposal-groups/${groupId}/apply`,
     ),
 };
 
