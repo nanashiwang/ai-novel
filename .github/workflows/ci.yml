@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    name: backend pytest + lint + eval gate
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: sqlite+aiosqlite:///:memory:
+      REDIS_URL: memory://
+      JWT_SECRET: ci-secret-min-32-chars-aaaaaaaaaa
+      RATE_LIMIT_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install backend deps
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - name: Ruff
+        working-directory: backend
+        run: ruff check app tests
+      - name: Pytest (no postgres container)
+        working-directory: backend
+        run: pytest -q --ignore=tests/test_quota_race_postgres.py
+      - name: Eval CI gate (objective metrics regression)
+        working-directory: backend
+        # 退出码 1 表示退化阻断；2 表示 baseline 缺失（仅警告）
+        run: python -m app.evals.ci_gate
+
+  frontend:
+    name: frontend lint + typecheck + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install deps
+        working-directory: frontend
+        run: npm ci
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+      - name: Typecheck
+        working-directory: frontend
+        run: npx tsc --noEmit
+      - name: Build
+        working-directory: frontend
+        run: npm run build

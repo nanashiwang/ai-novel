@@ -1,0 +1,25 @@
+{
+  "dataset": "all",
+  "aggregate": {
+    "dialogue_ratio": {
+      "mean": 0.1319,
+      "min": 0.1222,
+      "max": 0.1495
+    },
+    "lexical_diversity": {
+      "mean": 0.5002,
+      "min": 0.4541,
+      "max": 0.5452
+    },
+    "sensory_density_total": {
+      "mean": 0.038,
+      "min": 0.0291,
+      "max": 0.0452
+    },
+    "judge_aggregate": {
+      "mean": 3.0,
+      "min": 3.0,
+      "max": 3.0
+    }
+  }
+}
