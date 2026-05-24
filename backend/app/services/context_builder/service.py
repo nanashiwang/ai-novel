@@ -273,7 +273,17 @@ class ContextBuilder:
         organization_id = project.organization_id
         project_id = project.id
 
-        task_text = self._fmt_scene_task(project, chapter, scene, previous_excerpt)
+        chapter_position, chapter_words_written = await self._chapter_progress(
+            session, organization_id=organization_id, chapter=chapter, scene=scene
+        )
+        task_text = self._fmt_scene_task(
+            project,
+            chapter,
+            scene,
+            previous_excerpt,
+            chapter_position=chapter_position,
+            chapter_words_written=chapter_words_written,
+        )
         pov_name = (scene.pov_character_name or "").strip() or None
         scene_query = self._scene_style_query(scene)
 
@@ -431,21 +441,96 @@ class ContextBuilder:
             "退场状态、微冲突、必须包含、必须避免、情绪变化、揭示与钩子。"
         )
 
+    async def _chapter_progress(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        chapter: Chapter,
+        scene: Scene,
+    ) -> tuple[tuple[int, int] | None, int | None]:
+        """Sprint 16-E2：返回 ((当前场序号, 总场数), 本章已写字数)。
+
+        - 总场数优先取 chapter.scene_beats 长度，其次按 chapter 下 scene 数 fallback
+        - 已写字数：scene 表中同 chapter_id 的 drafts.word_count 总和；查询失败回 0
+        """
+        try:
+            scene_count_stmt = (
+                select(Scene.scene_index)
+                .where(
+                    Scene.organization_id == organization_id,
+                    Scene.chapter_id == chapter.id,
+                )
+                .order_by(Scene.scene_index.asc())
+            )
+            scene_indices = [
+                row[0] for row in (await session.execute(scene_count_stmt)).all()
+            ]
+            total = len(scene_indices) or len(list(chapter.scene_beats or []))
+            current = (
+                (scene_indices.index(scene.scene_index) + 1)
+                if scene.scene_index in scene_indices
+                else (scene.scene_index or 1)
+            )
+            position = (max(1, current), max(1, total)) if total else None
+        except Exception:  # noqa: BLE001
+            position = None
+
+        try:
+            from sqlalchemy import func as _sa_func  # noqa: PLC0415
+
+            from app.models.draft_version import DraftVersion  # noqa: PLC0415
+
+            words_stmt = select(
+                _sa_func.coalesce(_sa_func.sum(DraftVersion.word_count), 0)
+            ).where(
+                DraftVersion.organization_id == organization_id,
+                DraftVersion.chapter_id == chapter.id,
+                DraftVersion.version_type == "draft",
+                DraftVersion.scene_id != scene.id,
+            )
+            words_written = int((await session.execute(words_stmt)).scalar_one() or 0)
+        except Exception:  # noqa: BLE001
+            words_written = 0
+        return position, words_written
+
     def _fmt_scene_task(
         self,
         project: Project,
         chapter: Chapter,
         scene: Scene,
         previous_excerpt: str,
+        *,
+        chapter_position: tuple[int, int] | None = None,
+        chapter_words_written: int | None = None,
     ) -> str:
         pov_name = (getattr(scene, "pov_character_name", None) or "").strip()
         pov_line = f"POV 视角主角：{pov_name}\n" if pov_name else ""
+        # Sprint 16-E2：注入章字数预算与位置，让 writer 主动控字数
+        budget_lines: list[str] = []
+        chapter_target = getattr(chapter, "target_words", 0) or 0
+        if chapter_position:
+            cur, total = chapter_position
+            budget_lines.append(
+                f"位置：你在写第 {cur}/{total} 场（顺序写作，前后场之间应保持连贯）"
+            )
+            if chapter_target > 0 and total > 0:
+                per_scene = max(400, chapter_target // total)
+                remaining = chapter_target - (chapter_words_written or 0)
+                budget_lines.append(
+                    f"字数预算：本场目标约 {per_scene} 字；本章总预算 {chapter_target} 字，"
+                    f"剩余 {max(0, remaining)} 字（含本场）。请严格控制不要 overshoot"
+                )
+        elif chapter_target > 0:
+            budget_lines.append(f"字数预算：本章总预算 {chapter_target} 字")
+        budget_block = ("\n".join(budget_lines) + "\n") if budget_lines else ""
         return (
             f"项目：{project.title}\n"
             f"章节：第 {chapter.chapter_index} 章《{chapter.title}》\n"
             f"章节摘要：{chapter.summary}\n"
             f"章节目标：{chapter.goal}\n"
             f"章节冲突：{chapter.conflict}\n"
+            f"{budget_block}"
             f"---\n"
             f"当前场景 #{scene.scene_index}：{scene.title}\n"
             f"时间/地点：{scene.time_marker} / {scene.location}\n"

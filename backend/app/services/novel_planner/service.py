@@ -115,9 +115,11 @@ class NovelPlannerService:
             1500,
             (project.target_word_count or 0) // max(1, project.target_chapter_count or 1),
         )
+        twc = project.target_word_count or "未指定"
+        tcc = project.target_chapter_count or "未指定"
         budget_hint = (
-            f"\n字数预算：每章默认目标字数约 {default_chapter_words} 字（来自项目级目标"
-            f"{project.target_word_count or '未指定'} ÷ {project.target_chapter_count or '未指定'}）。"
+            f"\n字数预算：每章默认目标字数约 {default_chapter_words} 字"
+            f"（来自项目级目标 {twc} ÷ {tcc}）。"
             "对节奏轻的过渡章可下调 20%，转折/高潮章可上调 20%，整体不要偏离默认值过多。"
             "scene_beats 列出本章 2-4 场的功能要点（每条一句话，按时间顺序），"
             "决定 scene_count 与跨场连贯性；scene 数偏少（2-3）通常比偏多更可读。"
@@ -185,6 +187,22 @@ class NovelPlannerService:
             if scenes_per_chapter is not None
             else "场景数：请根据本章复杂度自行判断，范围 1-8 个；过渡章少，高潮/群像章多。\n"
         )
+        # Sprint 16-E2：把 chapter 的字数预算 + scene_beats 显式塞进 prompt，
+        # 让 LLM 拆出来的 scene 与大纲阶段定的拍点保持一致。
+        beats = list(chapter.scene_beats or [])
+        beats_block = ""
+        if beats:
+            joined = "\n".join(f"  {i + 1}. {b}" for i, b in enumerate(beats))
+            beats_block = (
+                "\n本章 scene_beats（大纲阶段已��定好的功能顺序，"
+                "请严格按顺序拆，不要增删或重排）：\n" + joined + "\n"
+            )
+        budget_block = ""
+        if chapter.target_words and chapter.target_words > 0:
+            budget_block = (
+                f"\n本章字数预算：{chapter.target_words} 字，"
+                f"平摊后单场约 {expected_words} 字（±15% 区间）。\n"
+            )
         roster_block = (
             f"\n已登记人物名册（scene 出场人物必须优先从这里选择，不要凭空替换主线角色姓名）：\n"
             f"{character_roster}\n"
@@ -201,6 +219,8 @@ class NovelPlannerService:
             f"章节目标：{chapter.goal}\n"
             f"章节冲突：{chapter.conflict}\n"
             f"结尾钩子：{chapter.ending_hook}\n"
+            f"{beats_block}"
+            f"{budget_block}"
             f"{scene_count_instruction}"
             f"单场景目标字数：{expected_words}\n"
             "要求：每个 scene 必须有 scene_purpose、entry_state、exit_state、"
@@ -372,7 +392,11 @@ class NovelPlannerService:
     ) -> ScenePlanContract:
         scenes: list[ScenePlanItem] = []
         for index in range(1, scenes_per_chapter + 1):
-            previous = f"承接场景 {index - 1} 的新信息与情绪压力" if index > 1 else "承接上一章结尾钩子"
+            previous = (
+                f"承接场景 {index - 1} 的新信息与情绪压力"
+                if index > 1
+                else "承接上一章结尾钩子"
+            )
             exit_state = (
                 f"第 {index} 个推进点完成，但留下新的行动压力"
                 if index < scenes_per_chapter

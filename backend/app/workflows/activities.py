@@ -4,8 +4,8 @@
 """
 from __future__ import annotations
 
-import logging
 import json
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -52,8 +52,8 @@ from app.services.auditor.service import auditor_service
 from app.services.context_builder.service import context_builder
 from app.services.event_bus import build_event, publish_event_fire_and_forget
 from app.services.ledger import ledger_service
-from app.services.model_gateway.service import model_gateway
 from app.services.memory import memory_service
+from app.services.model_gateway.service import model_gateway
 from app.services.moderation import log_moderation_event, moderation_service
 from app.services.novel_planner.service import novel_planner_service
 from app.services.quota.service import quota_service
@@ -1170,7 +1170,20 @@ async def _plan_and_persist_scenes_for_chapter(
     被 generate_scene_cards（项目级循环）和 generate_chapter_scene_cards
     （单章模式）两个 activity 复用。返回写入的 Scene ORM 对象列表，调用方
     可以基于它做 memory 写入等后处理。
+
+    Sprint 16-E2：当 chapter.scene_beats 非空时，scene 数取 beats 长度（覆盖
+    调用方传入的 scenes_per_chapter）；同时按 chapter.target_words / scene 数
+    精准给每场 target_words，避免一锅端把字数算炸。
     """
+    effective_scene_count = scenes_per_chapter
+    beats = list(chapter.scene_beats or [])
+    if beats:
+        effective_scene_count = max(1, min(len(beats), 6))
+    effective_expected_words = expected_words
+    if chapter.target_words and chapter.target_words > 0 and effective_scene_count:
+        effective_expected_words = max(
+            400, chapter.target_words // max(1, effective_scene_count)
+        )
     contract = await novel_planner_service.plan_scenes(
         session,
         organization_id=job.organization_id,
@@ -1179,11 +1192,11 @@ async def _plan_and_persist_scenes_for_chapter(
         project=project,
         bible=spec,
         chapter=chapter,
-        scenes_per_chapter=scenes_per_chapter,
-        expected_words=expected_words,
+        scenes_per_chapter=effective_scene_count,
+        expected_words=effective_expected_words,
         character_roster=await _character_roster_for_prompt(session, job),
     )
-    scene_limit = scenes_per_chapter or 8
+    scene_limit = effective_scene_count or 8
     scene_repo = SceneRepository(session)
     created: list[Scene] = []
     for item in contract.scenes[:scene_limit]:
@@ -1413,11 +1426,28 @@ async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
             if draft.scene_id and draft.version_type == "draft"
         }
         estimate_words = _payload_int(payload, "estimate_words", 20000)
-        target_words = max(600, estimate_words // max(1, len(scenes)))
         force = bool(payload.get("force_regenerate_drafts"))
         created = 0
         reused = 0
         total_words = sum(draft.word_count for draft in draft_by_scene.values())
+        # Sprint 16-E2：按 chapter 分组算 target_words / scene，让每场都贴合
+        # chapter.target_words 预算；旧 chapter（target_words=0）回落到旧的
+        # estimate_words 平摊逻辑。
+        scenes_by_chapter: dict[str, list[Scene]] = {}
+        for scene in scenes:
+            scenes_by_chapter.setdefault(scene.chapter_id, []).append(scene)
+        chapter_target_words: dict[str, int] = {}
+        for chapter_id, chapter_scenes in scenes_by_chapter.items():
+            chapter = chapter_by_id[chapter_id]
+            scene_count = max(1, len(chapter_scenes))
+            if chapter.target_words and chapter.target_words > 0:
+                chapter_target_words[chapter_id] = max(
+                    400, chapter.target_words // scene_count
+                )
+            else:
+                chapter_target_words[chapter_id] = max(
+                    600, estimate_words // max(1, len(scenes))
+                )
         previous_excerpt = ""
         for scene in scenes:
             chapter = chapter_by_id[scene.chapter_id]
@@ -1425,6 +1455,7 @@ async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
                 previous_excerpt = draft_by_scene[scene.id].content[-800:]
                 reused += 1
                 continue
+            target_words = chapter_target_words[chapter.id]
             draft = await writer_service.write_scene_draft(
                 session,
                 organization_id=job_row.organization_id,
