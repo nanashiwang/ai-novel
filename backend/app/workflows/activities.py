@@ -235,6 +235,81 @@ async def _run_ledger_check(
         _logger.warning("ledger_check_failed", exc_info=True)
 
 
+async def _run_chapter_in_extracts(
+    session: AsyncSession,
+    *,
+    organization_id: str,
+    project_id: str,
+    job_id: str | None,
+    chapter: Chapter,
+    scene: Scene,
+    draft: DraftVersion,
+    created_by: str | None,
+) -> None:
+    """Sprint 16-E4：章内同步等待 character/world/plot 三链推演落库。
+
+    与单 scene WriteSceneWorkflow 已有的等待逻辑对齐——批量模式
+    （write_scene_drafts / write_chapter_scenes_for_full_novel）之前完全没跑
+    character_revisions / world_item_revisions / plot_thread_revisions
+    extract，下一 scene 看不到推演结果。这里复用主 session 同步跑，让同章
+    后续 scene 写作能立刻看到上一场的推演产出（pending 状态，用户审核后
+    才会通过 ContextBuilder world_actions / plot_actions 段进入下一章 prompt）。
+
+    任何异常都 swallow + warn，绝不阻断写作主流程。
+    """
+    if not draft or not draft.content:
+        return
+    try:
+        from app.services.character_tracker.extract import (  # noqa: PLC0415
+            extract_state_changes_from_scene as _extract_char,
+        )
+
+        await _extract_char(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            scene_id=scene.id,
+            scene_content=draft.content,
+            created_by=created_by or "system",
+        )
+    except Exception:  # noqa: BLE001
+        _logger.warning("inchapter_character_extract_failed", exc_info=True)
+
+    try:
+        from app.services.world_tracker.extract import (  # noqa: PLC0415
+            extract_world_changes_from_scene as _extract_world,
+        )
+
+        await _extract_world(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            job_id=job_id,
+            chapter=chapter,
+            scene=scene,
+            draft=draft,
+        )
+    except Exception:  # noqa: BLE001
+        _logger.warning("inchapter_world_extract_failed", exc_info=True)
+
+    try:
+        from app.services.plot_thread_tracker.extract import (  # noqa: PLC0415
+            extract_plot_thread_changes_from_scene as _extract_plot,
+        )
+
+        await _extract_plot(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            job_id=job_id,
+            chapter=chapter,
+            scene=scene,
+            draft=draft,
+        )
+    except Exception:  # noqa: BLE001
+        _logger.warning("inchapter_plot_extract_failed", exc_info=True)
+
+
 async def _delete_project_rows(
     session: AsyncSession,
     job: GenerationJob,
@@ -1506,6 +1581,18 @@ async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
                 scene=scene,
                 draft=saved,
             )
+            # Sprint 16-E4：章内同步等待三链推演（与 single scene workflow 行为对齐）
+            if get_settings().inchapter_extract_enabled:
+                await _run_chapter_in_extracts(
+                    session,
+                    organization_id=job_row.organization_id,
+                    project_id=job_row.project_id,
+                    job_id=job_row.id,
+                    chapter=chapter,
+                    scene=scene,
+                    draft=saved,
+                    created_by=job_row.user_id,
+                )
             previous_excerpt = draft.content[-800:]
             total_words += word_count
             created += 1
@@ -1994,6 +2081,18 @@ async def write_chapter_scenes_for_full_novel(
                 scene=scene,
                 draft=saved,
             )
+            # Sprint 16-E4：章内同步等待三链推演（与 single scene workflow 对齐）
+            if get_settings().inchapter_extract_enabled:
+                await _run_chapter_in_extracts(
+                    session,
+                    organization_id=job_row.organization_id,
+                    project_id=job_row.project_id,
+                    job_id=job_row.id,
+                    chapter=chapter,
+                    scene=scene,
+                    draft=saved,
+                    created_by=job_row.user_id,
+                )
             drafted += 1
             words_written += word_count
             budget_left = max(0, budget_left - word_count)

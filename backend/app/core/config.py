@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     anthropic_base_url: str = "https://api.anthropic.com/v1"
     default_model: str = "gpt-5.5"
     model_gateway_timeout_seconds: float = 300.0
+    # 长输出后台任务（如全项目重构提案）允许比普通请求更久。
+    model_gateway_long_timeout_seconds: float = 900.0
 
     # Sprint 14-C3 多 agent 场景写作：
     # - "single"（默认）：保留原 WriterService.write_scene_draft 单次 JSON 生成路径
@@ -82,6 +84,13 @@ class Settings(BaseSettings):
     embedding_provider: str = "stub"
     embedding_model: str = "text-embedding-3-small"
     embedding_dims: int = 1536
+
+    # 章内同步推演（Sprint 16-E4）
+    # 默认 False：批量章模式（write_scene_drafts / write_chapter_scenes_for_full_novel）
+    # 不在 scene 写完后跑 character/world/plot extract，保持原吞吐。
+    # 设为 True 时会与 single scene workflow 行为对齐，每场后同步落 pending
+    # revisions——延迟会涨 30-50%，但与 character_revisions 审核闭环更紧。
+    inchapter_extract_enabled: bool = False
 
     @property
     def cors_origin_list(self) -> list[str]:
