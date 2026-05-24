@@ -110,6 +110,12 @@ class ChapterPlanItem(APIModel):
     conflict: str = ""
     ending_hook: str = ""
     volume_index: int | None = None
+    # Sprint 16-E1：字数预算与场景拍点。
+    # target_words 为 0 时 activity 会按 spec.target_word_count /
+    # target_chapter_count 反推默认值；scene_beats 为空时回落到调用方
+    # 显式指定的 scenes_per_chapter。
+    target_words: int = 0
+    scene_beats: list[str] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
@@ -126,6 +132,21 @@ class ChapterPlanItem(APIModel):
         if isinstance(value, dict):
             return "；".join(f"{key}: {item}" for key, item in value.items())
         return "" if value is None else str(value)
+
+    @field_validator("scene_beats", mode="before")
+    @classmethod
+    def normalize_scene_beats(cls, value: Any) -> list[str]:
+        if value is None or value == "":
+            return []
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        # LLM 偶尔会输出 string，按行 / 中文分号拆分
+        if isinstance(value, str):
+            for sep in ("\n", "；", ";"):
+                if sep in value:
+                    return [s.strip() for s in value.split(sep) if s.strip()]
+            return [value.strip()] if value.strip() else []
+        return [str(value)]
 
 
 class ChapterPlanContract(APIModel):

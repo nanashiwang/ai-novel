@@ -110,6 +110,18 @@ class NovelPlannerService:
             if character_roster
             else ""
         )
+        # Sprint 16-E1：明确每章��数预算与场景拍点，让 writer 路径有抓手控字数 + 场景连贯
+        default_chapter_words = max(
+            1500,
+            (project.target_word_count or 0) // max(1, project.target_chapter_count or 1),
+        )
+        budget_hint = (
+            f"\n字数预算：每章默认目标字数约 {default_chapter_words} 字（来自项目级目标"
+            f"{project.target_word_count or '未指定'} ÷ {project.target_chapter_count or '未指定'}）。"
+            "对节奏轻的过渡章可下调 20%，转折/高潮章可上调 20%，整体不要偏离默认值过多。"
+            "scene_beats 列出本章 2-4 场的功能要点（每条一句话，按时间顺序），"
+            "决定 scene_count 与跨场连贯性；scene 数偏少（2-3）通常比偏多更可读。"
+        )
         user_prompt = (
             "请把故事圣经拆成章节大纲，采用三幕式推进，但不要输出幕名层级。\n"
             f"全书目标章节数：{target_total_chapters}\n"
@@ -118,8 +130,9 @@ class NovelPlannerService:
             f"项目：{project.title}\n"
             f"故事圣经：\n{self._dump_contract(bible)}\n"
             f"{roster_block}\n"
+            f"{budget_hint}\n"
             "要求：chapter_index 必须使用实际章节序号；每章必须有明确目标、冲突、"
-            "结尾钩子；只返回 JSON。"
+            "结尾钩子、target_words、scene_beats；只返回 JSON。"
         )
         raw = await model_gateway.generate_json(
             session,

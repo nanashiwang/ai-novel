@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -15,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio import activity
 
 from app.contracts import MAX_OUTLINE_CHAPTERS, OUTLINE_CHAPTER_BATCH_SIZE
+from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal
 from app.core.exceptions import NotFoundError
 from app.core.metrics import JOBS_CREATED
@@ -38,14 +40,19 @@ from app.repositories import (
     NovelSpecRepository,
     PlotThreadRepository,
     ProjectRepository,
+    RevisionMessageRepository,
+    RevisionProposalRepository,
+    RevisionSessionRepository,
     SceneRepository,
     UsageEventRepository,
     WorldItemRepository,
 )
+from app.schemas.story_generation import StoryBibleContract
 from app.services.auditor.service import auditor_service
 from app.services.context_builder.service import context_builder
 from app.services.event_bus import build_event, publish_event_fire_and_forget
 from app.services.ledger import ledger_service
+from app.services.model_gateway.service import model_gateway
 from app.services.memory import memory_service
 from app.services.moderation import log_moderation_event, moderation_service
 from app.services.novel_planner.service import novel_planner_service
@@ -465,6 +472,299 @@ async def _sync_bible_plot_threads(session: AsyncSession, job: GenerationJob, bi
     return count
 
 
+def _public_attrs(row: Any, fields: set[str]) -> dict[str, Any]:
+    return {field: getattr(row, field) for field in fields if hasattr(row, field)}
+
+
+async def _revision_rewrite_context(
+    session: AsyncSession,
+    *,
+    organization_id: str,
+    project: Project,
+) -> dict[str, Any]:
+    spec = await NovelSpecRepository(session).get_by(
+        organization_id=organization_id,
+        project_id=project.id,
+    )
+    characters = await CharacterRepository(session).list(
+        organization_id=organization_id,
+        project_id=project.id,
+        limit=80,
+        order_by=Character.created_at.asc(),
+    )
+    world_items = await WorldItemRepository(session).list(
+        organization_id=organization_id,
+        project_id=project.id,
+        limit=120,
+        order_by=WorldItem.created_at.asc(),
+    )
+    plot_threads = await PlotThreadRepository(session).list(
+        organization_id=organization_id,
+        project_id=project.id,
+        limit=80,
+        order_by=PlotThread.created_at.asc(),
+    )
+    chapters = await ChapterRepository(session).list(
+        organization_id=organization_id,
+        project_id=project.id,
+        limit=200,
+        order_by=Chapter.chapter_index.asc(),
+    )
+    return {
+        "project": _public_attrs(
+            project,
+            {
+                "id",
+                "title",
+                "genre",
+                "target_word_count",
+                "target_chapter_count",
+                "style",
+                "target_reader",
+                "status",
+            },
+        ),
+        "story_bible": None
+        if not spec
+        else _public_attrs(
+            spec,
+            {
+                "id",
+                "premise",
+                "theme",
+                "genre",
+                "tone",
+                "target_reader",
+                "narrative_pov",
+                "style_guide",
+                "constraints",
+                "continuity_rules",
+            },
+        ),
+        "characters": [
+            _public_attrs(
+                row,
+                {
+                    "id",
+                    "name",
+                    "role",
+                    "description",
+                    "personality",
+                    "motivation",
+                    "secret",
+                    "arc",
+                    "relationships",
+                    "current_state",
+                },
+            )
+            for row in characters
+        ],
+        "world_items": [
+            _public_attrs(
+                row,
+                {
+                    "id",
+                    "type",
+                    "name",
+                    "description",
+                    "rules",
+                    "related_characters",
+                    "importance",
+                    "is_hard_rule",
+                },
+            )
+            for row in world_items
+        ],
+        "plot_threads": [
+            _public_attrs(
+                row,
+                {
+                    "id",
+                    "title",
+                    "thread_type",
+                    "description",
+                    "status",
+                    "related_characters",
+                },
+            )
+            for row in plot_threads
+        ],
+        "chapters": [
+            _public_attrs(
+                row,
+                {
+                    "id",
+                    "chapter_index",
+                    "title",
+                    "summary",
+                    "goal",
+                    "conflict",
+                    "ending_hook",
+                    "status",
+                },
+            )
+            for row in chapters
+        ],
+    }
+
+
+def _story_bible_contract_schema() -> dict[str, Any]:
+    return StoryBibleContract.model_json_schema()
+
+
+def _revision_story_bible_counts(bible: StoryBibleContract) -> dict[str, int]:
+    return {
+        "characters": len(bible.main_characters or []),
+        "locations": len(bible.locations or []),
+        "factions": len(bible.factions or []),
+        "world_rules": len(bible.world_rules or []),
+        "plot_threads": len(bible.plot_threads or []),
+    }
+
+
+def _revision_context_counts(context: dict[str, Any]) -> dict[str, int]:
+    return {
+        "characters": len(context.get("characters") or []),
+        "world_items": len(context.get("world_items") or []),
+        "plot_threads": len(context.get("plot_threads") or []),
+        "chapters": len(context.get("chapters") or []),
+    }
+
+
+@activity.defn(name="revision_rewrite_proposal")
+async def revision_rewrite_proposal(job: dict[str, Any]) -> dict[str, Any]:
+    """后台生成全项目重构提案，不直接改故事资产。"""
+    async with _activity_session() as session:
+        job_row = await _load_job(session, job["id"])
+        project = await _load_project(session, job_row)
+        payload = job_row.input_payload or {}
+        session_id = str(payload.get("revision_session_id") or "")
+        revision_session = await RevisionSessionRepository(session).get(
+            session_id,
+            organization_id=job_row.organization_id,
+        )
+        if not revision_session or revision_session.project_id != job_row.project_id:
+            raise NotFoundError("revision_session_not_found")
+
+        context = await _revision_rewrite_context(
+            session,
+            organization_id=job_row.organization_id,
+            project=project,
+        )
+        compact_context = {
+            "project": context.get("project"),
+            "story_bible": context.get("story_bible"),
+            "characters": (context.get("characters") or [])[:12],
+            "world_items": (context.get("world_items") or [])[:20],
+            "plot_threads": (context.get("plot_threads") or [])[:20],
+            "chapter_count": len(context.get("chapters") or []),
+            "chapter_samples": (context.get("chapters") or [])[:8],
+        }
+        user_prompt = json.dumps(
+            {
+                "current_context": compact_context,
+                "user_request": str(payload.get("message") or ""),
+                "focus": {
+                    "scope": payload.get("scope") or "story_bible",
+                    "target_type": payload.get("target_type"),
+                    "target_id": payload.get("target_id"),
+                },
+                "output_contract": "StoryBibleContract",
+            },
+            ensure_ascii=False,
+        )
+        model_timeout = max(
+            get_settings().model_gateway_timeout_seconds,
+            get_settings().model_gateway_long_timeout_seconds,
+        )
+        raw = await model_gateway.generate_json(
+            session,
+            organization_id=job_row.organization_id,
+            project_id=job_row.project_id,
+            job_id=job_row.id,
+            task_type="revision_rewrite_proposal",
+            system_prompt=(
+                "你是商业长篇小说总编辑。用户要求的是全项目级重构：必须基于当前项目"
+                "全局上下文和用户修改要求，直接输出一份完整新版故事圣经。输出必须符合"
+                "StoryBibleContract 本体，不要包裹 reply/story_bible 外层对象，不要输出建议清单。"
+                "要把 Premise、Theme、Genre、Tone、POV、Style、人物、世界观、剧情线全部"
+                "重写到可直接落库的结构。AI 只生成预览提案，不能直接改库。"
+            ),
+            user_prompt=user_prompt,
+            schema=_story_bible_contract_schema(),
+            prompt_key="revision/story_bible_rewrite",
+            prompt_version="v2",
+            temperature=0.7,
+            metadata={
+                "revision_session_id": session_id,
+                "timeout_seconds": model_timeout,
+            },
+            timeout_seconds=model_timeout,
+        )
+        story_data = raw.get("story_bible") if isinstance(raw, dict) else None
+        bible = StoryBibleContract.model_validate(story_data or raw)
+        normalized = novel_planner_service._normalize_story_bible(
+            bible,
+            project,
+            str(payload.get("message") or ""),
+        )
+        raw_summary = ""
+        risk_notes: list[str] = []
+        if isinstance(raw, dict):
+            raw_summary = str(raw.get("reply") or raw.get("summary") or "").strip()
+            if isinstance(raw.get("risk_notes"), list):
+                risk_notes = [str(item) for item in raw["risk_notes"] if str(item).strip()]
+        reply = raw_summary or "已生成一份完整新版故事圣经，可预览后应用。"
+        patch = {
+            "story_bible": normalized.model_dump(),
+            "rewrite_plan": reply,
+            "impact_counts": {
+                "current": _revision_context_counts(context),
+                "new": _revision_story_bible_counts(normalized),
+            },
+        }
+        proposal = await RevisionProposalRepository(session).create(
+            organization_id=job_row.organization_id,
+            project_id=job_row.project_id,
+            session_id=session_id,
+            target_type="story_bible_bundle",
+            target_id=None,
+            action="update",
+            title="全项目重构：新版故事圣经快照",
+            patch=patch,
+            reason="基于当前全局上下文生成完整新版故事圣经；应用后可接入后续大纲、场景和正文重构。",
+            impact=[
+                "story_bible",
+                "characters",
+                "world_items",
+                "plot_threads",
+                "chapters",
+                "scenes",
+                "drafts",
+            ],
+            group_id=None,
+            group_title="",
+            is_primary=True,
+            risk_notes=risk_notes
+            or ["全项目重构会使旧大纲、场景和正文与新版设定不再一致。"],
+            status="pending",
+        )
+        await RevisionMessageRepository(session).create(
+            organization_id=job_row.organization_id,
+            project_id=job_row.project_id,
+            session_id=session_id,
+            role="assistant",
+            content=reply,
+        )
+        await _settle_job_usage(session, job_row, amount=job_row.reserved_quota)
+        return {
+            "revision_session_id": session_id,
+            "proposal_ids": [proposal.id],
+            "proposal_count": 1,
+            "story_bible_counts": _revision_story_bible_counts(normalized),
+        }
+
+
 async def _settle_job_usage(session: AsyncSession, job: GenerationJob, amount: int) -> None:
     tenant = type("Tenant", (), {"organization_id": job.organization_id})()
     result = await session.execute(
@@ -809,10 +1109,18 @@ async def generate_chapter_outline(job: dict[str, Any]) -> dict[str, Any]:
             character_roster=await _character_roster_for_prompt(session, job_row),
         )
         existing_indices = {chapter.chapter_index for chapter in existing}
+        # Sprint 16-E1：当 LLM 没给 target_words 时，按项目级目标字数反推默认值。
+        # project.target_word_count / target_chapter_count 都是 ProjectCreate 必给字段，
+        # 默认 300_000 / 48 → 6250 字/章；可在 outline 阶段被 LLM 覆盖。
+        default_target = max(
+            500,
+            (project.target_word_count or 0) // max(1, project.target_chapter_count or 1),
+        )
         created = 0
         for item in contract.chapters:
             if item.chapter_index in existing_indices:
                 continue
+            chapter_target = item.target_words if item.target_words > 0 else default_target
             await chapter_repo.create(
                 organization_id=job_row.organization_id,
                 project_id=job_row.project_id,
@@ -824,6 +1132,8 @@ async def generate_chapter_outline(job: dict[str, Any]) -> dict[str, Any]:
                 conflict=item.conflict,
                 ending_hook=item.ending_hook,
                 status="planned",
+                target_words=chapter_target,
+                scene_beats=list(item.scene_beats or []),
             )
             created += 1
         total_chapters = len(existing) + created
@@ -1127,7 +1437,7 @@ async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
                 previous_scene_excerpt=previous_excerpt,
                 target_words=target_words,
             )
-            word_count = draft.word_count or len(draft.content)
+            word_count = len(draft.content)
             saved = await draft_repo.create(
                 organization_id=job_row.organization_id,
                 project_id=job_row.project_id,
@@ -1230,7 +1540,7 @@ async def run_scene_writing(job: dict[str, Any]) -> dict[str, Any]:
             previous_scene_excerpt=previous_excerpt,
             target_words=target_words,
         )
-        word_count = draft.word_count or len(draft.content)
+        word_count = len(draft.content)
 
         # 版本链：把本 scene 的最新 draft 作为父版本
         parent_version_id = await _latest_draft_id(session, scene)
@@ -1615,7 +1925,7 @@ async def write_chapter_scenes_for_full_novel(
                 previous_scene_excerpt=previous_excerpt,
                 target_words=target_words,
             )
-            word_count = draft.word_count or len(draft.content)
+            word_count = len(draft.content)
             saved = await draft_repo.create(
                 organization_id=job_row.organization_id,
                 project_id=job_row.project_id,
@@ -1878,7 +2188,7 @@ async def rewrite_scene(job: dict[str, Any]) -> dict[str, Any]:
             issues=issues,
             target_words=target_words,
         )
-        word_count = new_draft.word_count or len(new_draft.content)
+        word_count = len(new_draft.content)
         saved = await draft_repo.create(
             organization_id=job_row.organization_id,
             project_id=job_row.project_id,
@@ -2005,6 +2315,7 @@ ALL_ACTIVITIES = [
     audit_scene,
     rewrite_scene,
     run_full_novel_pipeline,
+    revision_rewrite_proposal,
     extract_character_state_from_scene,
     refine_character_arcs_from_outline,
     # Sprint 12-B full-novel orchestrator activities

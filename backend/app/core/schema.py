@@ -495,6 +495,9 @@ _POSTGRES_SCHEMA_FIXES = [
         "CREATE INDEX IF NOT EXISTS ix_prompt_experiments_active "
         "ON prompt_experiments(organization_id, prompt_key, status)"
     ),
+    # Sprint 16-E1：chapter 字数预算与场景拍点
+    "ALTER TABLE chapters ADD COLUMN IF NOT EXISTS target_words INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE chapters ADD COLUMN IF NOT EXISTS scene_beats JSONB NOT NULL DEFAULT '[]'::jsonb",
 ]
 
 
