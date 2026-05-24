@@ -43,6 +43,7 @@ from app.services.model_gateway.service import _estimate_tokens
 SegmentLabel = Literal[
     "hard_constraints",
     "task",
+    "chapter_arc",
     "characters",
     "character_actions",
     "style_samples",
@@ -65,10 +66,12 @@ _DEFAULT_TOTAL_BUDGET = 8000
 # Sprint 14-C2：拆 recent_summary → recent_scenes (L1) + arc_summaries (L2-L4)。
 # Sprint 14-C4：新增 style_samples（风格样本向量召回）。
 # Sprint 14-C5：新增 information_visibility（信息释放 ledger 段）。
+# Sprint 16-E3：新增 chapter_arc（章内 scene_beats + 你在第 N 场）。
 # 验证：sum(_SEGMENT_BUDGET_PCT.values()) == 1.0
 _SEGMENT_BUDGET_PCT: dict[SegmentLabel, float] = {
-    "hard_constraints": 0.13,
-    "task": 0.13,
+    "hard_constraints": 0.12,
+    "task": 0.12,
+    "chapter_arc": 0.04,
     "characters": 0.09,
     "character_actions": 0.09,
     "style_samples": 0.06,
@@ -79,12 +82,13 @@ _SEGMENT_BUDGET_PCT: dict[SegmentLabel, float] = {
     "recent_scenes": 0.05,
     "arc_summaries": 0.06,
     "information_visibility": 0.05,
-    "memory_recall": 0.08,
+    "memory_recall": 0.06,
 }
 
 _TRUSTED_LABELS: set[SegmentLabel] = {
     "hard_constraints",
     "task",
+    "chapter_arc",
     "characters",
     "character_actions",
     "style_samples",
@@ -187,6 +191,7 @@ class ContextBuilder:
         segments_data: list[tuple[SegmentLabel, str, bool]] = [
             ("hard_constraints", self._fmt_hard_constraints(spec), True),
             ("task", self._fmt_chapter_task(project, chapter), True),
+            ("chapter_arc", self._fmt_chapter_arc(chapter, None), True),
             (
                 "characters",
                 await self._fmt_characters(session, organization_id, project_id),
@@ -290,6 +295,11 @@ class ContextBuilder:
         segments_data: list[tuple[SegmentLabel, str, bool]] = [
             ("hard_constraints", self._fmt_hard_constraints(spec), True),
             ("task", task_text, True),
+            (
+                "chapter_arc",
+                self._fmt_chapter_arc(chapter, chapter_position),
+                True,
+            ),
             (
                 "characters",
                 await self._fmt_characters(
@@ -493,6 +503,33 @@ class ContextBuilder:
         except Exception:  # noqa: BLE001
             words_written = 0
         return position, words_written
+
+    def _fmt_chapter_arc(
+        self,
+        chapter: Chapter,
+        position: tuple[int, int] | None,
+    ) -> str:
+        """Sprint 16-E3：注入本章 scene_beats（拍点顺序）+ 当前位置标号。
+
+        让 writer 在写第 N 场时清楚前后场的功能边界——主动埋伏笔、避免
+        把本应留给后场的信息提前抖出来。无 scene_beats 时返回空串。
+        """
+        beats = list(chapter.scene_beats or [])
+        if not beats:
+            return ""
+        lines: list[str] = ["本章 scene 拍点（按时间顺序，不要重排或合并）："]
+        marker_idx = position[0] - 1 if position else -1
+        for i, beat in enumerate(beats):
+            prefix = "→ " if i == marker_idx else "  "
+            lines.append(f"{prefix}{i + 1}. {beat}")
+        if position:
+            cur, total = position
+            lines.append(
+                f"你现在在写第 {cur}/{total} 场（标记为 →）。"
+                "之前的场已经写过；之后的场是你写完后续将要写的——"
+                "请只完成本场，不要把后续 beats 的信息提前展开。"
+            )
+        return "\n".join(lines)
 
     def _fmt_scene_task(
         self,

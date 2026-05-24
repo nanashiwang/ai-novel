@@ -222,5 +222,5 @@ async def test_segment_budget_sums_to_one():
     assert abs(total - 1.0) < 1e-6, total
     # 新段必须存在且预算为 0.06
     assert _SEGMENT_BUDGET_PCT["style_samples"] == pytest.approx(0.06)
-    # memory_recall 合并 C2+C4+C5 后落到 0.08（C5 又挤了 0.01 出来）
-    assert _SEGMENT_BUDGET_PCT["memory_recall"] == pytest.approx(0.08)
+    # memory_recall 合并 C2+C4+C5+E3 后落到 0.06（chapter_arc 又挤了 0.02 出来）
+    assert _SEGMENT_BUDGET_PCT["memory_recall"] == pytest.approx(0.06)
