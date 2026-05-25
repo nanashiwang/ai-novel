@@ -28,6 +28,7 @@ import {
   type BiblePlotThread,
   type BibleWorldItem,
   type GenerateBiblePayload,
+  type RevisionMode,
   type RevisionTargetType,
   characterRevisionsApi,
   plotThreadRevisionsApi,
@@ -59,6 +60,7 @@ type RevisionDrawerConfig = {
   title: string;
   description?: string;
   starterPrompts: string[];
+  defaultMode?: RevisionMode;
 };
 
 const CORE_REVISION_CONFIG: RevisionDrawerConfig = {
@@ -66,8 +68,9 @@ const CORE_REVISION_CONFIG: RevisionDrawerConfig = {
   targetType: "story_bible",
   title: "优化核心设定",
   description: "重点优化 Premise / Theme / Genre / Tone / POV / Style / continuity_rules，并检查跨模块影响。",
+  defaultMode: "full_project_rewrite",
   starterPrompts: [
-    "请优化核心设定，让 Premise、Theme、Tone、POV 和 Style Guide 更一致；如影响人物或大纲，请给出同组联动提案。",
+    "请把当前项目重构成更强商业类型方向，生成一份完整新版故事圣经；如果是大改，请走全项目重构。",
     "请检查当前核心设定是否足以支撑长篇连载，补强 continuity_rules 和长期冲突约束。",
   ],
 };
@@ -82,6 +85,8 @@ export function BiblePage({ projectId }: { projectId: string }) {
   const worldItemsKey = useScopedKey("project", projectId, "world-items");
   const plotThreadsKey = useScopedKey("project", projectId, "plot-threads");
   const chaptersKey = useScopedKey("project", projectId, "chapters");
+  const scenesKey = useScopedKey("project", projectId, "scenes");
+  const versionsKey = useScopedKey("project", projectId, "versions");
   const preflightKey = useScopedKey("project", projectId, "preflight", "generate_bible");
   const jobsKey = useScopedKey("jobs");
   const pendingCountsKey = useScopedKey(
@@ -230,6 +235,9 @@ export function BiblePage({ projectId }: { projectId: string }) {
     queryClient.invalidateQueries({ queryKey: worldItemsKey });
     queryClient.invalidateQueries({ queryKey: plotThreadsKey });
     queryClient.invalidateQueries({ queryKey: chaptersKey });
+    queryClient.invalidateQueries({ queryKey: scenesKey });
+    queryClient.invalidateQueries({ queryKey: versionsKey });
+    queryClient.invalidateQueries({ queryKey: jobsKey });
     queryClient.invalidateQueries({ queryKey: pendingCountsKey });
     queryClient.invalidateQueries({ queryKey: worldPendingKey });
     queryClient.invalidateQueries({ queryKey: plotPendingKey });
@@ -663,6 +671,7 @@ export function BiblePage({ projectId }: { projectId: string }) {
           title={revisionConfig.title}
           description={revisionConfig.description}
           starterPrompts={revisionConfig.starterPrompts}
+          defaultMode={revisionConfig.defaultMode}
           onClose={() => setRevisionConfig(null)}
           onApplied={invalidateAll}
         />

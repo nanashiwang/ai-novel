@@ -24,6 +24,7 @@ JOB_TYPES: frozenset[str] = frozenset(
         "generate_bible",
         "generate_outline",
         "generate_scene_plan",
+        "revision_rewrite_proposal",
         "write_scene",
         "full_novel",
         "audit_scene",
@@ -126,6 +127,7 @@ ERROR_CODES: frozenset[str] = frozenset(
         "revision_proposal_already_applied",
         "revision_action_not_supported",
         "revision_target_not_supported",
+        "story_bible_bundle_invalid",
         "world_item_revision_not_found",
         "plot_thread_revision_not_found",
         # 套餐 / 组织管理

@@ -1,4 +1,5 @@
 """生成任务服务（ORM 化）。"""
+
 from __future__ import annotations
 
 import hashlib
@@ -369,9 +370,15 @@ class GenerationService:
         target_chapters: int | None = None,
         scenes_per_chapter: int | None = None,
         write_drafts: bool = True,
+        force_regenerate_spec: bool = False,
+        force_regenerate_outline: bool = False,
+        force_regenerate_scenes: bool = False,
+        force_regenerate_drafts: bool = False,
+        require_full_novel_entitlement: bool = True,
     ) -> GenerationJob:
         require_permission(user, "generation_job:create", tenant)
-        require_entitlement(tenant, "generation:full_novel")
+        if require_full_novel_entitlement:
+            require_entitlement(tenant, "generation:full_novel")
 
         project = await ProjectRepository(session).get(
             project_id, organization_id=tenant.organization_id
@@ -397,6 +404,10 @@ class GenerationService:
                 "target_chapters": target_chapters,
                 "scenes_per_chapter": scenes_per_chapter,
                 "write_drafts": write_drafts,
+                "force_regenerate_spec": force_regenerate_spec,
+                "force_regenerate_outline": force_regenerate_outline,
+                "force_regenerate_scenes": force_regenerate_scenes,
+                "force_regenerate_drafts": force_regenerate_drafts,
             },
         )
         await quota_service.reserve_quota(
@@ -411,6 +422,84 @@ class GenerationService:
         if workflow_starter.is_local_workflow(job.workflow_id):
             session.sync_session.info.setdefault("after_commit_tasks", []).append(
                 ("full_novel", job.id)
+            )
+        return job
+
+    async def create_revision_rewrite_proposal_job(
+        self,
+        session: AsyncSession,
+        user: CurrentUser,
+        tenant: TenantContext,
+        *,
+        project_id: str,
+        revision_session_id: str,
+        message: str,
+        scope: str,
+        target_type: str | None = None,
+        target_id: str | None = None,
+        estimate_words: int = 3000,
+    ) -> GenerationJob:
+        require_permission(user, "generation_job:create", tenant)
+        require_entitlement(tenant, "generation:chapter")
+
+        project = await ProjectRepository(session).get(
+            project_id, organization_id=tenant.organization_id
+        )
+        if not project:
+            raise NotFoundError("project_not_found")
+        ensure_same_tenant(project.organization_id, tenant)
+
+        estimate_words = max(1, estimate_words)
+        canonical_input = {
+            "revision_session_id": revision_session_id,
+            "message": message,
+            "scope": scope,
+            "target_type": target_type,
+            "target_id": target_id,
+        }
+        dedupe = _compute_dedupe_key(
+            organization_id=tenant.organization_id,
+            project_id=project_id,
+            job_type="revision_rewrite_proposal",
+            target_id=revision_session_id,
+            canonical_input=canonical_input,
+        )
+        existing = await _find_active_by_dedupe_key(
+            session,
+            organization_id=tenant.organization_id,
+            dedupe_key=dedupe,
+        )
+        if existing is not None:
+            return existing
+
+        job = await GenerationJobRepository(session).create(
+            organization_id=tenant.organization_id,
+            user_id=user.id,
+            project_id=project_id,
+            job_type="revision_rewrite_proposal",
+            status="queued",
+            priority=PLAN_QUEUE.get(tenant.plan_code, "queue_standard"),
+            plan_code=tenant.plan_code,
+            reserved_quota=estimate_words,
+            consumed_quota=0,
+            input_payload={
+                **canonical_input,
+                "estimate_words": estimate_words,
+            },
+            dedupe_key=dedupe,
+        )
+        await quota_service.reserve_quota(
+            session,
+            tenant,
+            job_id=job.id,
+            quota_key="monthly_generated_words",
+            amount=estimate_words,
+        )
+        job.workflow_id = workflow_starter.start_revision_rewrite_proposal({"id": job.id})
+        await session.flush()
+        if workflow_starter.is_local_workflow(job.workflow_id):
+            session.sync_session.info.setdefault("after_commit_tasks", []).append(
+                ("revision_rewrite_proposal", job.id)
             )
         return job
 
@@ -607,7 +696,9 @@ class GenerationService:
 
         if job.job_type == "generate_bible":
             new_job = await self.create_bible_job(
-                session, user, tenant,
+                session,
+                user,
+                tenant,
                 project_id=job.project_id,
                 estimate_words=int(payload.get("estimate_words") or 2000),
                 topic=str(payload.get("topic") or ""),
@@ -615,7 +706,9 @@ class GenerationService:
             )
         elif job.job_type == "generate_outline":
             new_job = await self.create_outline_job(
-                session, user, tenant,
+                session,
+                user,
+                tenant,
                 project_id=job.project_id,
                 target_chapters=payload.get("target_chapters"),
                 estimate_words=int(payload.get("estimate_words") or 3000),
@@ -623,7 +716,9 @@ class GenerationService:
             )
         elif job.job_type == "generate_scene_plan":
             new_job = await self.create_scene_plan_job(
-                session, user, tenant,
+                session,
+                user,
+                tenant,
                 project_id=job.project_id,
                 chapter_id=str(payload.get("chapter_id") or ""),
                 scenes_per_chapter=(
@@ -637,21 +732,27 @@ class GenerationService:
             )
         elif job.job_type == "write_scene":
             new_job = await self.create_write_scene_job(
-                session, user, tenant,
+                session,
+                user,
+                tenant,
                 project_id=job.project_id,
                 scene_id=str(payload.get("scene_id") or ""),
                 target_words=int(payload.get("target_words") or 1200),
             )
         elif job.job_type == "audit_scene":
             new_job = await self.create_audit_scene_job(
-                session, user, tenant,
+                session,
+                user,
+                tenant,
                 project_id=job.project_id,
                 scene_id=str(payload.get("scene_id") or ""),
                 estimate_words=int(payload.get("estimate_words") or 500),
             )
         elif job.job_type == "rewrite_scene":
             new_job = await self.create_rewrite_scene_job(
-                session, user, tenant,
+                session,
+                user,
+                tenant,
                 project_id=job.project_id,
                 scene_id=str(payload.get("scene_id") or ""),
                 target_words=int(payload.get("target_words") or 1200),
@@ -659,7 +760,9 @@ class GenerationService:
             )
         elif job.job_type == "full_novel":
             new_job = await self.create_full_novel_job(
-                session, user, tenant,
+                session,
+                user,
+                tenant,
                 project_id=job.project_id,
                 estimate_words=int(payload.get("estimate_words") or 20000),
                 mode=str(payload.get("mode") or "full_novel"),
@@ -671,6 +774,23 @@ class GenerationService:
                     else None
                 ),
                 write_drafts=bool(payload.get("write_drafts", True)),
+                force_regenerate_spec=bool(payload.get("force_regenerate_spec")),
+                force_regenerate_outline=bool(payload.get("force_regenerate_outline")),
+                force_regenerate_scenes=bool(payload.get("force_regenerate_scenes")),
+                force_regenerate_drafts=bool(payload.get("force_regenerate_drafts")),
+            )
+        elif job.job_type == "revision_rewrite_proposal":
+            new_job = await self.create_revision_rewrite_proposal_job(
+                session,
+                user,
+                tenant,
+                project_id=job.project_id,
+                revision_session_id=str(payload.get("revision_session_id") or ""),
+                message=str(payload.get("message") or ""),
+                scope=str(payload.get("scope") or "story_bible"),
+                target_type=payload.get("target_type"),
+                target_id=payload.get("target_id"),
+                estimate_words=int(payload.get("estimate_words") or 3000),
             )
         else:
             raise ConflictError("unknown_job_type")

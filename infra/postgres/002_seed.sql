@@ -1,7 +1,6 @@
 INSERT INTO users (id, email, display_name, platform_role, is_platform_staff)
 VALUES
-  ('user_writer', 'writer@example.com', '玄夜', 'user', false),
-  ('user_admin', 'admin@novelflow.ai', 'Admin', 'super_admin', true)
+  ('user_writer', 'writer@example.com', '玄夜', 'user', false)
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO organizations (id, name, owner_user_id, status)
@@ -10,8 +9,7 @@ ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO organization_members (id, organization_id, user_id, role, status)
 VALUES
-  ('mem_writer', 'org_personal', 'user_writer', 'owner', 'active'),
-  ('mem_admin', 'org_personal', 'user_admin', 'owner', 'active')
+  ('mem_writer', 'org_personal', 'user_writer', 'owner', 'active')
 ON CONFLICT (organization_id, user_id) DO NOTHING;
 
 INSERT INTO plans (id, code, name, description, price_monthly, status)

@@ -1,7 +1,7 @@
 """数据库种子脚本。
 
 用途：首次启动或本地开发时执行 `python -m app.repositories.seed`，
-注入套餐 / 套餐特性 / 默认管理员账号 / 演示组织与项目，使 UI 可立即看到内容。
+注入套餐 / 套餐特性 / 演示组织与项目，使 UI 可立即看到内容。
 
 幂等：以 `code` / `email` / `id` 为键判断，已存在则跳过。
 """
@@ -13,7 +13,6 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 
 from app.core.database import AsyncSessionLocal
-from app.core.passwords import hash_password
 from app.models import (
     Organization,
     OrganizationMember,
@@ -122,20 +121,20 @@ async def _seed_plans(session) -> None:
             )
 
 
-async def _seed_admin(session) -> tuple[User, Organization]:
-    existing = await session.execute(select(User).where(User.email == "admin@novelflow.ai"))
-    admin = existing.scalar_one_or_none()
-    if not admin:
-        admin = User(
-            id="user_admin",
-            email="admin@novelflow.ai",
-            password_hash=hash_password("admin123456"),
-            display_name="平台管理员",
+async def _seed_demo_user(session) -> tuple[User, Organization]:
+    existing = await session.execute(select(User).where(User.email == "writer@example.com"))
+    writer = existing.scalar_one_or_none()
+    if not writer:
+        writer = User(
+            id="user_writer",
+            email="writer@example.com",
+            password_hash=None,
+            display_name="玄夜",
             status="active",
-            is_platform_staff=True,
-            platform_role="super_admin",
+            is_platform_staff=False,
+            platform_role="user",
         )
-        session.add(admin)
+        session.add(writer)
         await session.flush()
 
     existing_org = await session.execute(
@@ -147,7 +146,7 @@ async def _seed_admin(session) -> tuple[User, Organization]:
             id="org_personal",
             name="personal-workspace",
             type="personal",
-            owner_user_id=admin.id,
+            owner_user_id=writer.id,
             plan_code="Pro",
             status="active",
         )
@@ -157,7 +156,7 @@ async def _seed_admin(session) -> tuple[User, Organization]:
     existing_member = await session.execute(
         select(OrganizationMember).where(
             OrganizationMember.organization_id == org.id,
-            OrganizationMember.user_id == admin.id,
+            OrganizationMember.user_id == writer.id,
         )
     )
     if not existing_member.scalar_one_or_none():
@@ -165,12 +164,12 @@ async def _seed_admin(session) -> tuple[User, Organization]:
             OrganizationMember(
                 id=new_id("mem"),
                 organization_id=org.id,
-                user_id=admin.id,
+                user_id=writer.id,
                 role="owner",
                 status="active",
             )
         )
-    return admin, org
+    return writer, org
 
 
 async def _seed_quota(session, organization_id: str) -> None:
@@ -229,11 +228,11 @@ async def _seed_demo_project(session, organization_id: str, user_id: str) -> Non
 async def seed() -> None:
     async with AsyncSessionLocal() as session:
         await _seed_plans(session)
-        admin, org = await _seed_admin(session)
+        writer, org = await _seed_demo_user(session)
         await _seed_quota(session, org.id)
-        await _seed_demo_project(session, org.id, admin.id)
+        await _seed_demo_project(session, org.id, writer.id)
         await session.commit()
-    print("[seed] 完成：plans / admin / demo org / quota / demo project 已写入。")
+    print("[seed] 完成：plans / demo org / quota / demo project 已写入。")
 
 
 if __name__ == "__main__":

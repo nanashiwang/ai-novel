@@ -109,6 +109,11 @@ class WorkflowStarter:
     def start_generate_bible(self, job: dict) -> str:
         return self._fire_and_forget("GenerateBibleWorkflow", job, "generate-bible")
 
+    def start_revision_rewrite_proposal(self, job: dict) -> str:
+        return self._fire_and_forget(
+            "RevisionRewriteProposalWorkflow", job, "revision-rewrite-proposal"
+        )
+
     def start_generate_outline(self, job: dict) -> str:
         return self._fire_and_forget("GenerateOutlineWorkflow", job, "generate-outline")
 
@@ -134,6 +139,9 @@ class WorkflowStarter:
 
     def run_local_generate_bible(self, job_id: str) -> None:
         self._run_local("generate_bible", job_id)
+
+    def run_local_revision_rewrite_proposal(self, job_id: str) -> None:
+        self._run_local("revision_rewrite_proposal", job_id)
 
     def run_local_generate_outline(self, job_id: str) -> None:
         self._run_local("generate_outline", job_id)
@@ -166,6 +174,7 @@ class WorkflowStarter:
             generate_chapter_outline,
             generate_chapter_scene_cards,
             mark_job_status,
+            revision_rewrite_proposal,
             rewrite_scene,
             run_full_novel_pipeline,
             run_scene_writing,
@@ -185,6 +194,8 @@ class WorkflowStarter:
                 result = await rewrite_scene({"id": job_id})
             elif job_type == "full_novel":
                 result = await run_full_novel_pipeline({"id": job_id})
+            elif job_type == "revision_rewrite_proposal":
+                result = await revision_rewrite_proposal({"id": job_id})
             else:
                 result = await run_scene_writing({"id": job_id})
             await mark_job_status(job_id, "succeeded", None, result)

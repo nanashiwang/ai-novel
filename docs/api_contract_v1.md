@@ -241,6 +241,7 @@
 | 值 | Sprint | 启动器 | 说明 |
 |---|---|---|---|
 | `generate_bible` | ✅ 1 | `start_generate_bible` | StoryBible 闭环 |
+| `revision_rewrite_proposal` | ✅ AI 优化 | `start_revision_rewrite_proposal` | 后台生成完整故事圣经重构提案 |
 | `generate_outline` | ✅ 2 | `start_generate_outline` | Outline 闭环 |
 | `generate_scene_plan` | ✅ 3 | `start_generate_scene_plan` | 单章 scene cards 拆分 |
 | `write_scene` | ✅ 1（升级 4） | `start_write_scene` | 单场景写作 |
@@ -370,6 +371,7 @@ created ──→ bible_generating ──→ bible_ready ──→ outline_gener
 | `revision_proposal_already_applied` | 试图重复应用同一个 AI 共创提案 |
 | `revision_action_not_supported` | AI 共创提案 action 超出 update/create 范围 |
 | `revision_target_not_supported` | AI 共创提案 target_type 不可应用 |
+| `story_bible_bundle_invalid` | 完整故事圣经快照提案缺少可应用 story_bible |
 
 **新增规则**：所有新 error code 必须先登记到本表与 `app/contracts.py::ERROR_CODES`，命名必须 snake_case，资源不存在统一用 `<resource>_not_found`。`tests/test_contract_consistency.py` 会扫描代码字面量，未登记的值在 CI 中会失败。
 
