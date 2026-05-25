@@ -44,6 +44,7 @@ class ModelProvider(Protocol):
         user_prompt: str,
         schema: dict[str, Any],
         temperature: float,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]: ...
 
     async def complete_text(
@@ -53,6 +54,7 @@ class ModelProvider(Protocol):
         system_prompt: str,
         user_prompt: str,
         temperature: float,
+        timeout_seconds: float | None = None,
     ) -> str: ...
 
 
@@ -175,6 +177,7 @@ class ModelGateway:
         prompt_version: str = "v1",
         temperature: float = 0.7,
         metadata: dict[str, Any] | None = None,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         await self.refresh_from_settings(session)
         effective_key = prompt_key or task_type
@@ -188,13 +191,16 @@ class ModelGateway:
         )
         started = time.perf_counter()
         try:
-            response_json = await self._provider.complete_json(
-                model=self._default_model,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                schema=schema,
-                temperature=temperature,
-            )
+            kwargs: dict[str, Any] = {
+                "model": self._default_model,
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
+                "schema": schema,
+                "temperature": temperature,
+            }
+            if timeout_seconds is not None:
+                kwargs["timeout_seconds"] = timeout_seconds
+            response_json = await self._provider.complete_json(**kwargs)
         except Exception as exc:
             await self._record_failed_call_best_effort(
                 organization_id=organization_id,
@@ -243,6 +249,7 @@ class ModelGateway:
         prompt_version: str = "v1",
         temperature: float = 0.7,
         metadata: dict[str, Any] | None = None,
+        timeout_seconds: float | None = None,
     ) -> str:
         await self.refresh_from_settings(session)
         effective_key = prompt_key or task_type
@@ -256,12 +263,15 @@ class ModelGateway:
         )
         started = time.perf_counter()
         try:
-            response_text = await self._provider.complete_text(
-                model=self._default_model,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                temperature=temperature,
-            )
+            kwargs: dict[str, Any] = {
+                "model": self._default_model,
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
+                "temperature": temperature,
+            }
+            if timeout_seconds is not None:
+                kwargs["timeout_seconds"] = timeout_seconds
+            response_text = await self._provider.complete_text(**kwargs)
         except Exception as exc:
             await self._record_failed_call_best_effort(
                 organization_id=organization_id,

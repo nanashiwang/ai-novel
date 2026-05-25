@@ -13,10 +13,12 @@ from app.services.model_gateway.providers import OpenAIChatProvider
 
 def _sse_body(chunks: list[str], with_done: bool = True) -> bytes:
     """生成 OpenAI 兼容的 SSE 响应体。"""
+    import json
+
     lines = []
     for ch in chunks:
         payload = (
-            f'{{"choices":[{{"delta":{{"content":"{ch}"}},"index":0}}]}}'
+            f'{{"choices":[{{"delta":{{"content":{json.dumps(ch, ensure_ascii=False)}}},"index":0}}]}}'
         )
         lines.append(f"data: {payload}\n")
     if with_done:
@@ -100,6 +102,45 @@ async def test_stream_handles_400_by_raising():
         )
     # 错误正文应该被携带
     assert "Stream must be set to true" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_stream_retries_transient_503(monkeypatch):
+    """中转网关短暂过载时，stream 分支应自动重试。"""
+
+    calls = 0
+
+    async def fake_sleep(_: float) -> None:
+        return None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(
+                503,
+                content=b'{"error":{"code":"system_cpu_overloaded"}}',
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            content=_sse_body(['{"ok": true}']),
+            headers={"Content-Type": "text/event-stream"},
+            request=request,
+        )
+
+    monkeypatch.setattr("app.services.model_gateway.providers.asyncio.sleep", fake_sleep)
+    provider = _make_provider(handler)
+    result = await provider.complete_json(
+        model="gpt-4o-mini",
+        system_prompt="sys",
+        user_prompt="user",
+        schema={"properties": {"ok": {"type": "boolean"}}},
+        temperature=0.0,
+    )
+
+    assert result == {"ok": True}
+    assert calls == 2
 
 
 @pytest.mark.asyncio

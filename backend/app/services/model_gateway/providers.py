@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import Any
 
 import httpx
@@ -51,7 +52,7 @@ async def _post_json(
     last_timeout: httpx.TimeoutException | None = None
     for attempt in range(max(1, attempts)):
         try:
-            response = await client.post(path, json=payload)
+            response = await client.post(path, json=payload, timeout=timeout_seconds)
         except httpx.TimeoutException as exc:
             last_timeout = exc
             if attempt >= attempts - 1:
@@ -71,6 +72,8 @@ async def _stream_chat_completion(
     path: str,
     *,
     payload: dict[str, Any],
+    timeout_seconds: float,
+    attempts: int = 3,
 ) -> str:
     """以 SSE 方式调用 OpenAI 兼容的 /chat/completions 并拼出完整文本。
 
@@ -83,39 +86,75 @@ async def _stream_chat_completion(
     - 上游中途断流：当前实现以"已经收到的片段"作为结果返回，但若没有任何
       content 又没有 [DONE]，视为异常抛 ValueError。
     """
+    max_attempts = max(1, attempts)
+    for attempt in range(max_attempts):
+        try:
+            return await _stream_chat_completion_once(
+                client,
+                path,
+                payload=payload,
+                timeout_seconds=timeout_seconds,
+            )
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code
+            if status_code not in _TRANSIENT_STATUS_CODES or attempt >= max_attempts - 1:
+                raise
+            await asyncio.sleep(min(2**attempt, 5))
+    raise RuntimeError("unreachable_stream_retry_state")
+
+
+async def _stream_chat_completion_once(
+    client: httpx.AsyncClient,
+    path: str,
+    *,
+    payload: dict[str, Any],
+    timeout_seconds: float,
+) -> str:
+    started = time.monotonic()
     chunks: list[str] = []
     received_done = False
-    async with client.stream("POST", path, json={**payload, "stream": True}) as resp:
-        if resp.status_code >= 400:
-            body = (await resp.aread()).decode("utf-8", errors="replace")[:1000]
-            raise httpx.HTTPStatusError(
-                f"upstream_returned_{resp.status_code} body={body}",
-                request=resp.request,
-                response=resp,
-            )
-        async for raw_line in resp.aiter_lines():
-            if not raw_line:
-                continue
-            # 兼容 OpenAI 官方格式：每条数据行以 "data: " 开头
-            line = raw_line.strip()
-            if not line.startswith("data:"):
-                continue
-            data = line[5:].strip()
-            if data == "[DONE]":
-                received_done = True
-                break
-            try:
-                obj = json.loads(data)
-            except json.JSONDecodeError:
-                # 个别中转网关可能塞 keep-alive 噪音，忽略
-                continue
-            try:
-                delta = obj["choices"][0].get("delta") or {}
-            except (KeyError, IndexError):
-                continue
-            piece = delta.get("content")
-            if piece:
-                chunks.append(piece)
+    try:
+        async with asyncio.timeout(timeout_seconds):
+            async with client.stream(
+                "POST",
+                path,
+                json={**payload, "stream": True},
+                timeout=timeout_seconds,
+            ) as resp:
+                if resp.status_code >= 400:
+                    body = (await resp.aread()).decode("utf-8", errors="replace")[:1000]
+                    raise httpx.HTTPStatusError(
+                        f"upstream_returned_{resp.status_code} body={body}",
+                        request=resp.request,
+                        response=resp,
+                    )
+                async for raw_line in resp.aiter_lines():
+                    if time.monotonic() - started > timeout_seconds:
+                        raise TimeoutError(f"model_gateway_timeout_after_{timeout_seconds:g}s")
+                    if not raw_line:
+                        continue
+                    # 兼容 OpenAI 官方格式：每条数据行以 "data: " 开头
+                    line = raw_line.strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        received_done = True
+                        break
+                    try:
+                        obj = json.loads(data)
+                    except json.JSONDecodeError:
+                        # 个别中转网关可能塞 keep-alive 噪音，忽略
+                        continue
+                    try:
+                        delta = obj["choices"][0].get("delta") or {}
+                    except (KeyError, IndexError):
+                        continue
+                    piece = delta.get("content")
+                    if piece:
+                        chunks.append(piece)
+    except TimeoutError as exc:
+        raise TimeoutError(f"model_gateway_timeout_after_{timeout_seconds:g}s") from exc
     if not chunks and not received_done:
         raise ValueError("stream_returned_empty_response")
     return "".join(chunks)
@@ -229,7 +268,9 @@ class OpenAIChatProvider:
         system_prompt: str,
         user_prompt: str,
         temperature: float,
+        timeout_seconds: float | None = None,
     ) -> str:
+        request_timeout = timeout_seconds or self.timeout
         payload: dict[str, Any] = {
             "model": model,
             "messages": [
@@ -241,13 +282,16 @@ class OpenAIChatProvider:
         async with self._client() as client:
             if self.stream:
                 return await _stream_chat_completion(
-                    client, "/chat/completions", payload=payload
+                    client,
+                    "/chat/completions",
+                    payload=payload,
+                    timeout_seconds=request_timeout,
                 )
             response = await _post_json(
                 client,
                 "/chat/completions",
                 payload=payload,
-                timeout_seconds=self.timeout,
+                timeout_seconds=request_timeout,
             )
             _raise_for_status(response)
             data = response.json()
@@ -261,7 +305,9 @@ class OpenAIChatProvider:
         user_prompt: str,
         schema: dict[str, Any],
         temperature: float,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
+        request_timeout = timeout_seconds or self.timeout
         schema_instruction = self._schema_instruction(schema)
         payload = self._chat_payload(
             model=model,
@@ -272,7 +318,7 @@ class OpenAIChatProvider:
         if self._use_response_format:
             payload["response_format"] = {"type": "json_object"}
 
-        text = await self._complete_json_text(payload)
+        text = await self._complete_json_text(payload, timeout_seconds=request_timeout)
         try:
             return _parse_json_from_text(text)
         except ModelJsonParseError:
@@ -287,7 +333,9 @@ class OpenAIChatProvider:
             )
             if self._use_response_format:
                 repair_payload["response_format"] = {"type": "json_object"}
-            return _parse_json_from_text(await self._complete_json_text(repair_payload))
+            return _parse_json_from_text(
+                await self._complete_json_text(repair_payload, timeout_seconds=request_timeout)
+            )
 
     def _schema_instruction(self, schema: dict[str, Any]) -> str:
         return (
@@ -317,14 +365,22 @@ class OpenAIChatProvider:
             "temperature": temperature,
         }
 
-    async def _complete_json_text(self, payload: dict[str, Any]) -> str:
+    async def _complete_json_text(
+        self,
+        payload: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> str:
         async with self._client() as client:
             if self.stream:
                 # 流式分支：拼出完整文本后走原有 _parse_json_from_text；
                 # response_format 在中转 API 上常不支持，stream 失败时摘掉它再试一次。
                 try:
                     return await _stream_chat_completion(
-                        client, "/chat/completions", payload=payload
+                        client,
+                        "/chat/completions",
+                        payload=payload,
+                        timeout_seconds=timeout_seconds,
                     )
                 except httpx.HTTPStatusError:
                     if "response_format" not in payload:
@@ -332,13 +388,16 @@ class OpenAIChatProvider:
                     fallback = dict(payload)
                     fallback.pop("response_format", None)
                     return await _stream_chat_completion(
-                        client, "/chat/completions", payload=fallback
+                        client,
+                        "/chat/completions",
+                        payload=fallback,
+                        timeout_seconds=timeout_seconds,
                     )
             response = await _post_json(
                 client,
                 "/chat/completions",
                 payload=payload,
-                timeout_seconds=self.timeout,
+                timeout_seconds=timeout_seconds,
             )
             try:
                 _raise_for_status(response)
@@ -351,7 +410,7 @@ class OpenAIChatProvider:
                     client,
                     "/chat/completions",
                     payload=fallback_payload,
-                    timeout_seconds=self.timeout,
+                    timeout_seconds=timeout_seconds,
                 )
                 _raise_for_status(response)
             data = response.json()
@@ -394,7 +453,9 @@ class AnthropicMessagesProvider:
         system_prompt: str,
         user_prompt: str,
         temperature: float,
+        timeout_seconds: float | None = None,
     ) -> str:
+        request_timeout = timeout_seconds or self.timeout
         async with self._client() as client:
             response = await _post_json(
                 client,
@@ -406,7 +467,7 @@ class AnthropicMessagesProvider:
                     "temperature": temperature,
                     "max_tokens": self.max_tokens,
                 },
-                timeout_seconds=self.timeout,
+                timeout_seconds=request_timeout,
             )
             _raise_for_status(response)
             data = response.json()
@@ -424,6 +485,7 @@ class AnthropicMessagesProvider:
         user_prompt: str,
         schema: dict[str, Any],
         temperature: float,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         prompt = (
             f"{user_prompt}\n\n"
@@ -435,5 +497,6 @@ class AnthropicMessagesProvider:
             system_prompt=system_prompt,
             user_prompt=prompt,
             temperature=temperature,
+            timeout_seconds=timeout_seconds,
         )
         return _parse_json_from_text(text)
