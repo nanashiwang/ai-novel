@@ -15,6 +15,15 @@ export type UseSceneVersionsArgs = {
   activeScene?: Scene;
 };
 
+function normalizeVersionContent(content: string): string {
+  return content.replace(/\s+$/g, "");
+}
+
+function hasMeaningfulContentChange(current: string, previous?: DraftVersion): boolean {
+  if (!previous) return current.trim().length > 0;
+  return normalizeVersionContent(current) !== normalizeVersionContent(previous.content);
+}
+
 /**
  * 写作工作台：当前 scene 的 draft_versions 管理。
  *
@@ -60,6 +69,9 @@ export function useSceneVersions({ projectId, activeChapter, activeScene }: UseS
       if (!activeScene || !activeChapter) {
         return Promise.reject(new Error("no_active_scene"));
       }
+      if (!hasMeaningfulContentChange(content, displayedVersion)) {
+        return Promise.reject(new Error("no_content_change"));
+      }
       return versionsApi.create(projectId, {
         chapter_id: activeChapter.id,
         scene_id: activeScene.id,
@@ -77,6 +89,10 @@ export function useSceneVersions({ projectId, activeChapter, activeScene }: UseS
       setDisplayedVersionId(null);
     },
     onError: (e: unknown) => {
+      if (e instanceof Error && e.message === "no_content_change") {
+        toast.info("正文没有变化，无需保存新版本");
+        return;
+      }
       toast.error(e instanceof ApiError ? e.message : "保存失败");
     },
   });
@@ -86,6 +102,9 @@ export function useSceneVersions({ projectId, activeChapter, activeScene }: UseS
     mutationFn: ({ content, format }: { content: string; format: ContentFormat }) => {
       if (!activeScene || !activeChapter) {
         return Promise.reject(new Error("no_active_scene"));
+      }
+      if (!hasMeaningfulContentChange(content, displayedVersion)) {
+        return Promise.resolve(undefined);
       }
       return versionsApi.create(projectId, {
         chapter_id: activeChapter.id,
@@ -98,7 +117,8 @@ export function useSceneVersions({ projectId, activeChapter, activeScene }: UseS
         parent_version_id: displayedVersion?.id ?? null,
       });
     },
-    onSuccess: () => {
+    onSuccess: (version) => {
+      if (!version) return;
       queryClient.invalidateQueries({ queryKey: versionsKey });
       setDisplayedVersionId(null);
     },

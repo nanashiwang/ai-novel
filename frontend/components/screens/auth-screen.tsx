@@ -16,10 +16,8 @@ export function AuthScreen({ mode }: { mode: "login" | "register" }) {
   const { login, register } = useAuth();
   const isLogin = mode === "login";
 
-  // 仅在开发模式下预填 admin 凭据，便于本地演示；生产构建留空
-  const devDefaults = process.env.NODE_ENV !== "production";
-  const [email, setEmail] = useState(isLogin && devDefaults ? "admin@novelflow.ai" : "");
-  const [password, setPassword] = useState(isLogin && devDefaults ? "admin123456" : "");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -94,7 +92,7 @@ export function AuthScreen({ mode }: { mode: "login" | "register" }) {
             </h2>
             <p className="mt-2 text-sm text-slate-500">
               {isLogin
-                ? "默认 admin 账号：admin@novelflow.ai / admin123456"
+                ? "使用你的邮箱和密码登录工作台。"
                 : "注册成功后自动创建个人组织，并绑定 Free 套餐。"}
             </p>
           </div>

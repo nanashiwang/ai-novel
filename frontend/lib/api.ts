@@ -111,7 +111,10 @@ export type RevisionTargetType =
   | "character"
   | "world_item"
   | "plot_thread"
-  | "chapter";
+  | "chapter"
+  | "story_bible_bundle";
+
+export type RevisionMode = "patch" | "full_project_rewrite";
 
 export type RevisionProposal = {
   id: string;
@@ -152,6 +155,7 @@ export type RevisionChatRequest = {
   scope?: string;
   target_type?: RevisionTargetType | null;
   target_id?: string | null;
+  mode?: RevisionMode;
 };
 
 export type RevisionChatResponse = {
@@ -159,6 +163,7 @@ export type RevisionChatResponse = {
   reply: string;
   messages: RevisionMessage[];
   proposals: RevisionProposal[];
+  job?: GenerationJob | null;
 };
 
 export type Bible = {
@@ -382,6 +387,22 @@ export const revisionApi = {
     http.post<{ proposal: RevisionProposal; applied_change_id: string }>(
       `/projects/${projectId}/revisions/proposals/${proposalId}/apply`,
     ),
+  applyProposalWithRebuild: (
+    projectId: string,
+    proposalId: string,
+    payload: {
+      estimate_words?: number;
+      topic?: string;
+      target_chapters?: number | null;
+      scenes_per_chapter?: number;
+      write_drafts?: boolean;
+    } = {},
+  ) =>
+    http.post<{
+      proposal: RevisionProposal;
+      applied_change_id: string;
+      job: GenerationJob;
+    }>(`/projects/${projectId}/revisions/proposals/${proposalId}/apply-with-rebuild`, payload),
   applyProposalGroup: (projectId: string, groupId: string) =>
     http.post<{ proposals: RevisionProposal[]; applied_change_ids: string[] }>(
       `/projects/${projectId}/revisions/proposal-groups/${groupId}/apply`,
