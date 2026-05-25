@@ -99,7 +99,7 @@ _POSTGRES_SCHEMA_FIXES = [
     ),
     # draft_versions：富文本格式标识（Sprint 4-C：升级编辑器为 markdown）
     (
-        "ALTER TABLE draft_versions ADD COLUMN IF NOT EXISTS "
+        "ALTER TABLE IF EXISTS draft_versions ADD COLUMN IF NOT EXISTS "
         "content_format VARCHAR(16) NOT NULL DEFAULT 'text'"
     ),
     "ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS event_metadata JSONB",

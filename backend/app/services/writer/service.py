@@ -7,6 +7,7 @@ from app.models.project import NovelSpec, Project
 from app.models.scene import Scene
 from app.schemas.story_generation import SceneDraftContract
 from app.services.context_builder.service import context_builder
+from app.services.model_gateway.providers import ModelJsonParseError
 from app.services.model_gateway.service import model_gateway
 from app.services.prompt_manager.service import prompt_manager
 
@@ -76,27 +77,40 @@ class WriterService:
             + "要求：正文有画面、有动作、有对话，避免总结式大纲；"
             + "只返回 JSON，字段必须可直接落库。"
         )
-        raw = await model_gateway.generate_json(
-            session,
-            organization_id=organization_id,
-            project_id=project_id,
-            job_id=job_id,
-            task_type="write_scene_draft",
-            system_prompt=prompt,
-            user_prompt=user_prompt,
-            schema=SceneDraftContract.model_json_schema(),
-            prompt_key=_PROMPT_WRITE_SCENE,
-            prompt_version=_PROMPT_VERSION,
-            metadata={
-                "scene_id": scene.id,
-                "chapter_id": chapter.id,
-                # 把 ContextBuilder 的诊断指标记到 metadata，便于运维侧观察预算分配
-                "context_total_tokens": ctx.total_tokens,
-                "context_truncated_segments": [
-                    s.label for s in ctx.segments if s.truncated
-                ],
-            },
-        )
+        try:
+            raw = await model_gateway.generate_json(
+                session,
+                organization_id=organization_id,
+                project_id=project_id,
+                job_id=job_id,
+                task_type="write_scene_draft",
+                system_prompt=prompt,
+                user_prompt=user_prompt,
+                schema=SceneDraftContract.model_json_schema(),
+                prompt_key=_PROMPT_WRITE_SCENE,
+                prompt_version=_PROMPT_VERSION,
+                metadata={
+                    "scene_id": scene.id,
+                    "chapter_id": chapter.id,
+                    # 把 ContextBuilder 的诊断指标记到 metadata，便于运维侧观察预算分配
+                    "context_total_tokens": ctx.total_tokens,
+                    "context_truncated_segments": [
+                        s.label for s in ctx.segments if s.truncated
+                    ],
+                },
+            )
+        except ModelJsonParseError as exc:
+            content = exc.raw_text.strip()
+            if not content:
+                raise
+            return SceneDraftContract(
+                scene_id=scene.id,
+                title=scene.title,
+                content=content,
+                word_count=len(content),
+                continuity_notes=["模型返回纯文本，已按正文兜底保存。"],
+                unresolved_threads=[scene.hook] if scene.hook else [],
+            )
         draft = SceneDraftContract.model_validate(
             {**raw, "scene_id": raw.get("scene_id") or scene.id}
         )
