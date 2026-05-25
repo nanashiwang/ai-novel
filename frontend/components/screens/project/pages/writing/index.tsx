@@ -9,7 +9,7 @@ import {
   Trash2,
   Wand2,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Badge, StatusBadge } from "@/components/ui/badge";
@@ -34,6 +34,8 @@ import { useSceneVersions } from "./use-scene-versions";
 
 export function WritingWorkspacePage({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
+  const activeWriteJobIds = useRef<Set<string>>(new Set());
+  const notifiedWriteJobIds = useRef<Set<string>>(new Set());
   const chaptersKey = useScopedKey("project", projectId, "chapters");
   const preflightKey = useScopedKey("project", projectId, "preflight", "write_scene");
 
@@ -119,7 +121,8 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
         target_words: 1200,
       });
     },
-    onSuccess: () => {
+    onSuccess: (job) => {
+      activeWriteJobIds.current.add(job.id);
       toast.success("已提交场景写作任务");
       queryClient.invalidateQueries({ queryKey: jobsKey });
       queryClient.invalidateQueries({ queryKey: scenesKey });
@@ -131,6 +134,40 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
       toast.error(e instanceof ApiError ? e.message : "提交失败");
     },
   });
+
+  useEffect(() => {
+    if (!latestSceneJob) return;
+    if (latestSceneJob.status === "queued" || latestSceneJob.status === "running") {
+      activeWriteJobIds.current.add(latestSceneJob.id);
+      return;
+    }
+    if (notifiedWriteJobIds.current.has(latestSceneJob.id)) return;
+
+    const shouldRefresh = activeWriteJobIds.current.has(latestSceneJob.id);
+    notifiedWriteJobIds.current.add(latestSceneJob.id);
+    if (!shouldRefresh) return;
+
+    if (latestSceneJob.status === "succeeded") {
+      queryClient.invalidateQueries({ queryKey: versionsKey });
+      queryClient.invalidateQueries({ queryKey: scenesKey });
+      queryClient.invalidateQueries({ queryKey: preflightKey });
+      setDisplayedVersionId(null);
+      toast.success("场景生成完成");
+    } else if (latestSceneJob.status === "failed") {
+      toast.error(
+        latestSceneJob.error_message
+          ? `场景生成失败：${latestSceneJob.error_message}`
+          : "场景生成失败",
+      );
+    }
+  }, [
+    latestSceneJob,
+    preflightKey,
+    queryClient,
+    scenesKey,
+    setDisplayedVersionId,
+    versionsKey,
+  ]);
 
   return (
     <div className="space-y-4">

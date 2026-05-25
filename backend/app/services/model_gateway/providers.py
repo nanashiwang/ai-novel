@@ -18,6 +18,15 @@ import httpx
 _TRANSIENT_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
 
+class ModelJsonParseError(ValueError):
+    """Raised when model output cannot be parsed as JSON while preserving raw text."""
+
+    def __init__(self, message: str, *, raw_text: str) -> None:
+        self.raw_text = raw_text
+        raw_head = raw_text[:1000] if raw_text else "<empty response>"
+        super().__init__(f"{message} raw_head={raw_head!r}")
+
+
 def _raise_for_status(response: httpx.Response) -> None:
     """保留上游错误正文，方便从日志判断是模型、参数还是网关问题。"""
     try:
@@ -113,6 +122,7 @@ async def _stream_chat_completion(
 
 
 def _parse_json_from_text(text: str) -> dict[str, Any]:
+    raw_text = text
     text = text.strip()
     if text.startswith("```"):
         lines = text.splitlines()
@@ -127,8 +137,15 @@ def _parse_json_from_text(text: str) -> dict[str, Any]:
         start = text.find("{")
         end = text.rfind("}")
         if start < 0 or end <= start:
-            raise
-        parsed = json.loads(text[start : end + 1])
+            raise ModelJsonParseError("model_json_parse_failed", raw_text=raw_text) from None
+        try:
+            parsed = json.loads(text[start : end + 1])
+        except json.JSONDecodeError as exc:
+            raise ModelJsonParseError(
+                f"model_json_parse_failed {exc.msg} at line {exc.lineno} "
+                f"column {exc.colno};",
+                raw_text=raw_text,
+            ) from exc
     if not isinstance(parsed, dict):
         raise ValueError("model_json_response_must_be_object")
     return parsed
@@ -258,7 +275,9 @@ class OpenAIChatProvider:
         text = await self._complete_json_text(payload)
         try:
             return _parse_json_from_text(text)
-        except json.JSONDecodeError:
+        except ModelJsonParseError:
+            # 第一次 JSON 解析失败时走 repair prompt 重试一次；若仍失败让 ModelJsonParseError
+            # 透传给上层（writer / multi-agent）兜底用 raw_text 当正文保存。
             repair_system, repair_user = _json_repair_prompt(text, schema)
             repair_payload = self._chat_payload(
                 model=model,

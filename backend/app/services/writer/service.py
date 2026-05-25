@@ -8,6 +8,7 @@ from app.models.project import NovelSpec, Project
 from app.models.scene import Scene
 from app.schemas.story_generation import SceneDraftContract
 from app.services.context_builder.service import context_builder
+from app.services.model_gateway.providers import ModelJsonParseError
 from app.services.model_gateway.service import model_gateway
 from app.services.prompt_manager.service import prompt_manager
 from app.services.writer.drafter import scene_drafter_agent
@@ -126,26 +127,41 @@ class WriterService:
             + "要求：正文有画面、有动作、有对话，避免总结式大纲；"
             + "只返回 JSON，字段必须可直接落库。"
         )
-        raw = await model_gateway.generate_json(
-            session,
-            organization_id=organization_id,
-            project_id=project_id,
-            job_id=job_id,
-            task_type="write_scene_draft",
-            system_prompt=prompt,
-            user_prompt=user_prompt,
-            schema=SceneDraftContract.model_json_schema(),
-            prompt_key=_PROMPT_WRITE_SCENE,
-            prompt_version=_PROMPT_VERSION,
-            metadata={
-                "scene_id": scene.id,
-                "chapter_id": chapter.id,
-                "pipeline_step": "single",
-                # 把 ContextBuilder 的诊断指标记到 metadata，便于运维侧观察预算分配
-                "context_total_tokens": ctx_total_tokens,
-                "context_truncated_segments": ctx_truncated,
-            },
-        )
+        try:
+            raw = await model_gateway.generate_json(
+                session,
+                organization_id=organization_id,
+                project_id=project_id,
+                job_id=job_id,
+                task_type="write_scene_draft",
+                system_prompt=prompt,
+                user_prompt=user_prompt,
+                schema=SceneDraftContract.model_json_schema(),
+                prompt_key=_PROMPT_WRITE_SCENE,
+                prompt_version=_PROMPT_VERSION,
+                metadata={
+                    "scene_id": scene.id,
+                    "chapter_id": chapter.id,
+                    "pipeline_step": "single",
+                    # 把 ContextBuilder 的诊断指标记到 metadata，便于运维侧观察预算分配
+                    "context_total_tokens": ctx_total_tokens,
+                    "context_truncated_segments": ctx_truncated,
+                },
+            )
+        except ModelJsonParseError as exc:
+            # 远端 6ddded0 兜底：模型返回纯文本（未按 JSON schema）时
+            # 直接把 raw_text 当作正文保存，避免整次 scene 写作 fail。
+            content = exc.raw_text.strip()
+            if not content:
+                raise
+            return SceneDraftContract(
+                scene_id=scene.id,
+                title=scene.title,
+                content=content,
+                word_count=len(content),
+                continuity_notes=["模型返回纯文本，已按正文兜底保存。"],
+                unresolved_threads=[scene.hook] if scene.hook else [],
+            )
         draft = SceneDraftContract.model_validate(
             {**raw, "scene_id": raw.get("scene_id") or scene.id}
         )
@@ -246,7 +262,8 @@ class WriterService:
             f"入场状态是{scene.entry_state or '承接上一场压力'}，"
             f"人物围绕“{scene.goal or '当前目标'}”行动。"
             f"冲突很快浮出水面：{scene.conflict or '他们的目标与现实阻力发生碰撞'}。"
-            f"本场必须推进：{'、'.join(scene.must_include or []) or scene.scene_purpose or '本章目标'}；"
+            f"本场必须推进："
+            f"{'、'.join(scene.must_include or []) or scene.scene_purpose or '本章目标'}；"
             f"需要避免：{'、'.join(scene.must_avoid or []) or '重复上一场已解决的信息'}。"
             f"情绪从{scene.emotion_start or '克制'}转向{scene.emotion_end or '紧绷'}，"
             f"并揭示出：{scene.reveal or '一个会改变后续判断的新事实'}。"
