@@ -46,7 +46,7 @@ def build_event(event_type: str, payload: dict[str, Any] | None = None) -> dict[
 class EventBus(Protocol):
     async def publish(self, channel: str, event: dict[str, Any]) -> None: ...
 
-    async def subscribe(self, channel: str) -> "Subscription": ...
+    async def subscribe(self, channel: str) -> Subscription: ...
 
     async def aclose(self) -> None: ...
 
@@ -75,7 +75,7 @@ class Subscription(Protocol):
 
 
 class _InMemorySubscription:
-    def __init__(self, bus: "InMemoryEventBus", channel: str, queue: asyncio.Queue) -> None:
+    def __init__(self, bus: InMemoryEventBus, channel: str, queue: asyncio.Queue) -> None:
         self._bus = bus
         self._channel = channel
         self._queue = queue

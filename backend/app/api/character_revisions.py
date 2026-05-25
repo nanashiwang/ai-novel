@@ -22,7 +22,7 @@ from app.core.permissions import require_permission
 from app.models.chapter import Chapter
 from app.models.character_revision import CharacterRevision
 from app.models.scene import Scene
-from app.repositories import CharacterRepository, CharacterRevisionRepository
+from app.repositories import CharacterRepository
 from app.schemas.common import APIModel
 from app.services.character_tracker import character_tracker
 

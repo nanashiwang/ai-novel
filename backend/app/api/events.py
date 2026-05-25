@@ -86,7 +86,7 @@ async def _resolve_user_and_project(
 def _format_sse(event_type: str, data: dict | str) -> bytes:
     """按 EventSource wire format 序列化。空行结尾标识一条完整 event。"""
     payload = data if isinstance(data, str) else json.dumps(data, ensure_ascii=False)
-    return f"event: {event_type}\ndata: {payload}\n\n".encode("utf-8")
+    return f"event: {event_type}\ndata: {payload}\n\n".encode()
 
 
 async def _event_stream(

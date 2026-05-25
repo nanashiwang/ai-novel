@@ -14,7 +14,13 @@ source .venv/bin/activate
 uvicorn app.main:app --reload --port 8000
 ```
 
-默认 admin 账号 `admin@novelflow.ai` / `admin123456`（参见 `infra/postgres/seed`），e2e 第二个用例会用它。
+项目不再内置默认 admin 账号。Admin Console 用例需要显式提供管理员账号：
+
+```bash
+E2E_ADMIN_EMAIL=you@example.com E2E_ADMIN_PASSWORD=your-password npm run e2e
+```
+
+未配置时会自动跳过 Admin Console 用例。
 
 ## 运行
 

@@ -99,11 +99,15 @@ test.describe("Golden path · 未触发 LLM 的端到端链路", () => {
     await page.waitForURL(/\/auth\/login/, { timeout: 10_000 });
   });
 
-  test("登录 admin 默认账号 → 访问 Admin Dashboard", async ({ page }) => {
-    // 使用 README 中 seed 的默认 admin 账号
+  test("登录指定管理员账号 → 访问 Admin Dashboard", async ({ page }) => {
+    test.skip(
+      !process.env.E2E_ADMIN_EMAIL || !process.env.E2E_ADMIN_PASSWORD,
+      "未配置 E2E_ADMIN_EMAIL / E2E_ADMIN_PASSWORD，跳过管理员后台用例",
+    );
+
     await page.goto("/auth/login");
-    await page.getByLabel("邮箱").fill("admin@novelflow.ai");
-    await page.getByLabel("密码").fill("admin123456");
+    await page.getByLabel("邮箱").fill(process.env.E2E_ADMIN_EMAIL!);
+    await page.getByLabel("密码").fill(process.env.E2E_ADMIN_PASSWORD!);
     await page.getByRole("button", { name: /登录工作台/ }).click();
 
     await page.waitForURL(/\/studio/, { timeout: 15_000 });

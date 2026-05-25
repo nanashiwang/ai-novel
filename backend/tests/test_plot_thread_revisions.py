@@ -206,8 +206,9 @@ async def test_extract_plot_thread_changes_from_scene_writes_pending(client, db_
     token, org_id, project_id = await _register_with_project(
         client, "thread4@example.com"
     )
-    from app.models import User
     from sqlalchemy import select as _sel
+
+    from app.models import User
 
     async with Session() as session:
         user = (

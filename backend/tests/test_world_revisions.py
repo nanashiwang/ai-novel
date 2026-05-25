@@ -301,8 +301,9 @@ async def test_extract_world_changes_from_scene_writes_pending(
         client, "world4@example.com"
     )
     # 获取 user_id 用于后续 DraftVersion 写入
-    from app.models import User
     from sqlalchemy import select as _sel
+
+    from app.models import User
 
     async with Session() as session:
         user = (
