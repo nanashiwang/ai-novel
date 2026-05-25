@@ -28,12 +28,15 @@ from app.evals.runner import run_eval
 DEFAULT_BASELINE_PATH = Path(__file__).resolve().parent / "baselines" / "eval_baseline.json"
 DEFAULT_THRESHOLD = 0.05  # 5% 退化容忍
 
-# 关键指标白名单：只对这些做 regression 校验；其它指标作为参考输出
-_GUARDED_KEYS: tuple[str, ...] = (
-    "dialogue_ratio",
-    "lexical_diversity",
-    "sensory_density_total",
-)
+# 关键指标白名单：方向 "down" 表示"越小越退化"（如 lexical_diversity），
+# "up" 表示"越大越退化"（如 target_overshoot_ratio：字数偏差越大越糟）。
+# 其它指标作为���考输出，不参与 gate。
+_GUARDED_KEYS: dict[str, str] = {
+    "dialogue_ratio": "down",
+    "lexical_diversity": "down",
+    "sensory_density_total": "down",
+    "target_overshoot_ratio": "up",
+}
 
 
 def _load_baseline(path: Path) -> dict[str, Any] | None:
@@ -52,19 +55,28 @@ def _check_regression(
 ) -> list[str]:
     """对比 current 与 baseline 的 aggregate.<key>.mean，返回违例描述列表。"""
     violations: list[str] = []
-    for key in _GUARDED_KEYS:
+    for key, direction in _GUARDED_KEYS.items():
         cur = ((current_agg or {}).get(key) or {}).get("mean")
         base = ((baseline_agg or {}).get(key) or {}).get("mean")
         if cur is None or base is None:
             continue
-        if base == 0:
-            continue
-        delta_pct = (cur - base) / base
-        if delta_pct < -threshold:
-            violations.append(
-                f"{key} 退化：current={cur:.4f} vs baseline={base:.4f} "
-                f"(下降 {abs(delta_pct):.2%}，阈值 {threshold:.0%})"
-            )
+        if direction == "down":
+            # 越小越退化：越界 = (base - cur) / base > threshold
+            if base == 0:
+                continue
+            delta_pct = (cur - base) / base
+            if delta_pct < -threshold:
+                violations.append(
+                    f"{key} 退化：current={cur:.4f} vs baseline={base:.4f} "
+                    f"(下降 {abs(delta_pct):.2%}，阈值 {threshold:.0%})"
+                )
+        else:  # "up": 越大越退化
+            # 越界 = (cur - base) > threshold（绝对差），适合 ratio/percentage 指标
+            if cur - base > threshold:
+                violations.append(
+                    f"{key} 退化：current={cur:.4f} vs baseline={base:.4f} "
+                    f"(上升 {cur - base:.4f}，阈值 +{threshold:.0%})"
+                )
     return violations
 
 

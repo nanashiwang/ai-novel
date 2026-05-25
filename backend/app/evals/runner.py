@@ -120,7 +120,10 @@ async def run_eval(
     samples = [load_sample(p) for p in paths]
     results: list[SampleResult] = []
     for sample in samples:
-        objective = compute_all_metrics(sample.reference_content)
+        objective = compute_all_metrics(
+            sample.reference_content,
+            target_words=sample.target_words,
+        )
         # judge 走 stub 时 session 传 None；判断在 judge_scene 内部完成
         judgment = await judge_scene(
             session=None,
@@ -177,6 +180,9 @@ def _build_aggregate(results: list[SampleResult]) -> dict[str, Any]:
     sensory = _values(
         lambda r: r.objective_metrics.get("sensory_density", {}).get("total", 0.0)
     )
+    overshoot = _values(
+        lambda r: r.objective_metrics.get("target_overshoot_ratio", 0.0)
+    )
     judge_agg = _values(lambda r: r.judge_aggregate)
 
     def _stats(values: list[float]) -> dict[str, float]:
@@ -190,6 +196,7 @@ def _build_aggregate(results: list[SampleResult]) -> dict[str, Any]:
         "dialogue_ratio": _stats(dialog),
         "lexical_diversity": _stats(lex_div),
         "sensory_density_total": _stats(sensory),
+        "target_overshoot_ratio": _stats(overshoot),
         "judge_aggregate": _stats(judge_agg),
     }
 

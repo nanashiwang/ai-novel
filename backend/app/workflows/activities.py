@@ -310,6 +310,57 @@ async def _run_chapter_in_extracts(
         _logger.warning("inchapter_plot_extract_failed", exc_info=True)
 
 
+_summarize_tasks: set[Any] = set()
+
+
+def _spawn_chapter_summarize(
+    *,
+    organization_id: str,
+    project_id: str,
+    chapter_id: str,
+    source: str,
+) -> None:
+    """Fire-and-forget 章节摘要（Sprint 16-E5）。
+
+    write_scene_drafts / write_chapter_scenes_for_full_novel 在本章全部 scene
+    都 drafted 时调用；走独立 session 跑 hierarchical_summarizer.summarize_chapter，
+    产 L2 摘要后续供 ContextBuilder arc_summaries 段召回。任何失败 swallow + warn。
+    """
+    if not chapter_id:
+        return
+    try:
+        import asyncio as _asyncio  # noqa: PLC0415
+
+        loop = _asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    async def _run() -> None:
+        try:
+            from app.services.memory.summarizer import (  # noqa: PLC0415
+                hierarchical_summarizer,
+            )
+
+            async with AsyncSessionLocal() as session:
+                await hierarchical_summarizer.summarize_chapter(
+                    session,
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    chapter_id=chapter_id,
+                )
+                await session.commit()
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "chapter_summarize_failed",
+                exc_info=True,
+                extra={"chapter_id": chapter_id, "source": source},
+            )
+
+    task = loop.create_task(_run())
+    _summarize_tasks.add(task)
+    task.add_done_callback(_summarize_tasks.discard)
+
+
 async def _delete_project_rows(
     session: AsyncSession,
     job: GenerationJob,
@@ -1599,6 +1650,20 @@ async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
         project.current_word_count = total_words
         project.completed_chapter_count = len(chapters) if scenes else 0
         project.status = "drafting"
+        # Sprint 16-E5：本次 batch 内每个有新 draft 落地的 chapter 触发一次
+        # summarize_chapter（fire-and-forget）。同章重复触发是安全的（summarizer
+        # 会追加新 L2 不覆盖），但用 set 去重避免无谓 LLM 调用。
+        for chapter_id in {
+            scene.chapter_id
+            for scene in scenes
+            if scene.id not in draft_by_scene or force
+        }:
+            _spawn_chapter_summarize(
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                chapter_id=chapter_id,
+                source="write_scene_drafts",
+            )
         return {
             "draft_count": created + reused,
             "created_draft_count": created,
@@ -2106,6 +2171,13 @@ async def write_chapter_scenes_for_full_novel(
         # 更新 chapter 状态：若本章所有 scenes 都已 drafted/reused → 标 drafted
         if drafted + reused == len(scenes) and skipped == 0:
             chapter.status = "drafted"
+            # Sprint 16-E5：章末 fire-and-forget summarize_chapter，产 L2 摘要
+            _spawn_chapter_summarize(
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                chapter_id=chapter.id,
+                source="write_chapter_scenes_for_full_novel",
+            )
         # 父 job 的 consumed_quota 临时累加，给后续 chapter 预算判断用；
         # 真正落 usage_event 由 finalize_full_novel 处理。
         job_row.consumed_quota = (job_row.consumed_quota or 0) + words_written

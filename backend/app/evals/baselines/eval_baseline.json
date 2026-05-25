@@ -16,6 +16,11 @@
       "min": 0.0291,
       "max": 0.0452
     },
+    "target_overshoot_ratio": {
+      "mean": 0.0647,
+      "min": 0.03,
+      "max": 0.1
+    },
     "judge_aggregate": {
       "mean": 3.0,
       "min": 3.0,

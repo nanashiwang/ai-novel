@@ -150,9 +150,26 @@ def paragraph_length_distribution(text: str) -> list[int]:
     return [len(p) for p in paragraphs if p]
 
 
-def compute_all_metrics(text: str) -> dict[str, Any]:
-    """一次性跑齐全部客观指标，供 runner 使用。"""
-    return {
+def target_overshoot_ratio(text: str, target_words: int) -> float:
+    """Sprint 16-E5：实际字数相对目标字数的偏差比例。
+
+    返回 abs(len(text) - target) / max(target, 1)。
+    - 0.0 = 完美命中
+    - 0.15 = 偏差 15%（v2 prompt 容忍上限）
+    - target<=0 时返 0（无目标无法对比）
+    """
+    if not target_words or target_words <= 0:
+        return 0.0
+    actual = len(text or "")
+    return round(abs(actual - target_words) / max(1, target_words), 4)
+
+
+def compute_all_metrics(text: str, *, target_words: int = 0) -> dict[str, Any]:
+    """一次性跑齐全部客观指标，供 runner 使用。
+
+    target_words 非零时附带 target_overshoot_ratio；为零时跳过该项。
+    """
+    metrics: dict[str, Any] = {
         "char_count": len(text or ""),
         "sentence_length": sentence_length_stats(text),
         "dialogue_ratio": dialogue_ratio(text),
@@ -160,3 +177,6 @@ def compute_all_metrics(text: str) -> dict[str, Any]:
         "sensory_density": sensory_word_density(text),
         "paragraph_lengths": paragraph_length_distribution(text),
     }
+    if target_words and target_words > 0:
+        metrics["target_overshoot_ratio"] = target_overshoot_ratio(text, target_words)
+    return metrics
