@@ -24,6 +24,7 @@ from app.services.quota.service import _resolve_plan_limit
 # 各 job_type 的默认预估消耗字数（与 generation_service 默认值对齐）
 DEFAULT_ESTIMATE_WORDS: dict[str, int] = {
     "generate_bible": 2000,
+    "revision_rewrite_proposal": 3000,
     "generate_outline": 3000,
     "generate_scene_plan": 1500,
     "write_scene": 4000,
@@ -35,6 +36,7 @@ DEFAULT_ESTIMATE_WORDS: dict[str, int] = {
 # job_type → 对应的 entitlement key。generation_service 中调
 # require_entitlement 的位置必须与本表保持一致。
 JOB_ENTITLEMENT: dict[str, str] = {
+    "revision_rewrite_proposal": "generation:chapter",
     "write_scene": "generation:scene",
     "rewrite_scene": "generation:scene",
     "full_novel": "generation:full_novel",

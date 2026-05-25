@@ -42,24 +42,22 @@ async def test_only_first_registered_user_becomes_super_admin(client):
 
 
 @pytest.mark.asyncio
-async def test_seed_users_do_not_block_first_real_registered_super_admin(client, db_session):
+async def test_demo_writer_seed_does_not_block_first_real_registered_super_admin(
+    client, db_session
+):
     await db_session.execute(
         text(
             """
             INSERT INTO users
               (id, email, password_hash, display_name, status, is_platform_staff, platform_role)
             VALUES
-              (:writer_id, :writer_email, :writer_hash, '演示作者', 'active', false, 'user'),
-              (:admin_id, :admin_email, :admin_hash, '种子管理员', 'active', true, 'super_admin')
+              (:writer_id, :writer_email, :writer_hash, '演示作者', 'active', false, 'user')
             """
         ),
         {
             "writer_id": "user_writer",
             "writer_email": "writer@example.com",
             "writer_hash": hash_password("writer123456"),
-            "admin_id": "user_admin",
-            "admin_email": "admin@novelflow.ai",
-            "admin_hash": hash_password("admin123456"),
         },
     )
     await db_session.commit()

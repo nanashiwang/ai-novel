@@ -19,6 +19,7 @@ from app.workflows.generate_bible import GenerateBibleWorkflow
 from app.workflows.generate_full_novel import GenerateFullNovelWorkflow
 from app.workflows.generate_outline import GenerateOutlineWorkflow
 from app.workflows.generate_scene_plan import GenerateScenePlanWorkflow
+from app.workflows.revision_rewrite_proposal import RevisionRewriteProposalWorkflow
 from app.workflows.rewrite_scene import RewriteSceneWorkflow
 from app.workflows.write_scene import WriteSceneWorkflow
 
@@ -51,6 +52,7 @@ async def main() -> None:
             GenerateFullNovelWorkflow,
             GenerateOutlineWorkflow,
             GenerateScenePlanWorkflow,
+            RevisionRewriteProposalWorkflow,
             RewriteSceneWorkflow,
             WriteSceneWorkflow,
         ],

@@ -19,7 +19,7 @@ from app.models.organization import Organization, OrganizationMember
 from app.models.user import User
 from app.services.auth.token_store import is_refresh_jti_revoked, revoke_refresh_jti
 
-BOOTSTRAP_SEED_EMAILS = {"admin@novelflow.ai", "writer@example.com"}
+BOOTSTRAP_SEED_EMAILS = {"writer@example.com"}
 
 
 @dataclass

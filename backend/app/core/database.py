@@ -37,6 +37,8 @@ def _run_after_commit_tasks(session) -> None:
     for task_type, job_id in tasks:
         if task_type == "generate_bible":
             workflow_starter.run_local_generate_bible(job_id)
+        elif task_type == "revision_rewrite_proposal":
+            workflow_starter.run_local_revision_rewrite_proposal(job_id)
         elif task_type == "generate_outline":
             workflow_starter.run_local_generate_outline(job_id)
         elif task_type == "generate_scene_plan":

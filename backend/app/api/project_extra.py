@@ -189,11 +189,13 @@ async def create_version(
         )
         if not scene or scene.project_id != project_id:
             raise NotFoundError("scene_not_found")
+    data = payload.model_dump()
+    data["word_count"] = len(data.get("content") or "")
     version = await DraftVersionRepository(db).create(
         organization_id=tenant.organization_id,
         project_id=project_id,
         created_by=user.id,
-        **payload.model_dump(),
+        **data,
     )
     await db.commit()
     return version
