@@ -482,11 +482,25 @@ class NovelPlannerService:
     ) -> ChapterPlanContract:
         chapters = []
         source = contract.chapters[:expected_count] if expected_count else contract.chapters
-        for offset, item in enumerate(source):
-            index = start_chapter_index + offset
+        expected_end = (
+            start_chapter_index + expected_count - 1 if expected_count else None
+        )
+        in_range = [
+            item
+            for item in source
+            if item.chapter_index >= start_chapter_index
+            and (expected_end is None or item.chapter_index <= expected_end)
+        ]
+        ordered = sorted(in_range, key=lambda item: item.chapter_index)
+        if len(ordered) != len(source):
+            ordered = list(source)
+        for offset, item in enumerate(ordered):
+            index = item.chapter_index
+            if index <= 0:
+                index = start_chapter_index + offset
             data = item.model_dump()
-            # 分批生成时模型常会把续写批次重新编号为 1..N。
-            # 这里以服务端请求的范围为准，避免重复章节或错位追加。
+            # 分批生成时优先尊重模型给出的真实 chapter_index，并按其排序；
+            # 只有模型漏编号/乱编号到批次范围外时，才回退到服务端顺序兜底。
             data["chapter_index"] = index
             data["title"] = data.get("title") or f"第{index}章"
             chapters.append(ChapterPlanItem(**data))

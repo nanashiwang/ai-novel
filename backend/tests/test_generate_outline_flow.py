@@ -284,6 +284,81 @@ async def test_generate_outline_appended_batch_uses_next_chapter_indices(
 
 
 @pytest.mark.asyncio
+async def test_generate_outline_appended_batch_preserves_model_chapter_indices_order(
+    client, db_engine, db_session, monkeypatch
+):
+    """模型倒序返回续写批次时，仍应按 chapter_index 正确落库，避免内容错章。"""
+    Session = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+    monkeypatch.setattr(activities, "AsyncSessionLocal", Session)
+
+    org_id, project_id, headers = await _setup_org_project_and_spec(
+        client,
+        db_session,
+        email="outline-append-order@example.com",
+        target_chapter_count=60,
+    )
+    for idx in range(1, 31):
+        db_session.add(
+            Chapter(
+                id=new_id("chapter"),
+                organization_id=org_id,
+                project_id=project_id,
+                volume_id=None,
+                chapter_index=idx,
+                title=f"已存在的第{idx}章",
+                summary="预置摘要",
+                goal="预置目标",
+                conflict="预置冲突",
+                ending_hook="预置钩子",
+                status="planned",
+            )
+        )
+    await db_session.commit()
+
+    from app.services.novel_planner.service import novel_planner_service
+    from app.schemas.story_generation import ChapterPlanContract, ChapterPlanItem
+
+    async def _reversed_batch(*args, **kwargs):
+        return ChapterPlanContract(
+            chapters=[
+                ChapterPlanItem(
+                    chapter_index=idx,
+                    title=f"模型返回第{idx}章",
+                    summary=f"摘要{idx}",
+                    goal=f"目标{idx}",
+                    conflict=f"冲突{idx}",
+                    ending_hook=f"钩子{idx}",
+                )
+                for idx in range(60, 30, -1)
+            ]
+        )
+
+    monkeypatch.setattr(novel_planner_service, "plan_chapters", _reversed_batch)
+
+    res = await client.post(
+        f"/api/v1/projects/{project_id}/outline/generate",
+        headers=headers,
+        json={"target_chapters": 60, "estimate_words": 3000},
+    )
+    assert res.status_code == 202, res.text
+    job = await _await_job_terminal(db_session, res.json()["id"])
+    assert job.status == "succeeded"
+
+    db_session.expire_all()
+    rows = (
+        await db_session.execute(
+            select(Chapter).where(Chapter.project_id == project_id).order_by(
+                Chapter.chapter_index.asc()
+            )
+        )
+    ).scalars().all()
+    assert len(rows) == 60
+    assert [row.chapter_index for row in rows] == list(range(1, 61))
+    assert rows[30].title == "模型返回第31章"
+    assert rows[59].title == "模型返回第60章"
+
+
+@pytest.mark.asyncio
 async def test_generate_outline_rejects_without_bible(client, db_engine, db_session, monkeypatch):
     """没有 NovelSpec 时拒绝，返回 404 novel_spec_not_found。"""
     Session = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
