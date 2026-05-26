@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chapter import Chapter
@@ -291,6 +291,13 @@ class ContextBuilder:
         )
         pov_name = (scene.pov_character_name or "").strip() or None
         scene_query = self._scene_style_query(scene)
+        previous_scene_ids = await self._previous_scene_ids(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            chapter=chapter,
+            scene=scene,
+        )
 
         segments_data: list[tuple[SegmentLabel, str, bool]] = [
             ("hard_constraints", self._fmt_hard_constraints(spec), True),
@@ -352,7 +359,11 @@ class ContextBuilder:
             (
                 "recent_scenes",
                 await self._fmt_recent_scene_summaries(
-                    session, organization_id, project_id, limit=3
+                    session,
+                    organization_id,
+                    project_id,
+                    limit=3,
+                    allowed_scene_ids=previous_scene_ids,
                 ),
                 True,
             ),
@@ -380,6 +391,7 @@ class ContextBuilder:
                     organization_id,
                     project_id,
                     focus_names=list(scene.characters or []),
+                    allowed_scene_ids=previous_scene_ids,
                 ),
                 False,
             ),
@@ -917,32 +929,42 @@ class ContextBuilder:
         project_id: str,
         *,
         limit: int = 3,
+        allowed_scene_ids: set[str] | None = None,
     ) -> str:
         """从 memory_entries 取最近的 L1 scene 摘要，按 created_at desc。
 
         若该项目还没积累 memory（例如刚生成第一章），返回空字符串而非占位
         文本，让 to_prompt() 自动跳过整段。
         """
-        repo = MemoryRepository(session)
-        rows = list(
-            await repo.list(
-                organization_id=organization_id,
-                project_id=project_id,
-                source_type="scene",
-                level="L1",
-                limit=limit,
-            )
+        if allowed_scene_ids is not None and not allowed_scene_ids:
+            return ""
+        stmt = (
+            select(MemoryEntry)
+            .where(MemoryEntry.organization_id == organization_id)
+            .where(MemoryEntry.project_id == project_id)
+            .where(MemoryEntry.source_type == "scene")
+            .where(MemoryEntry.level == "L1")
+            .order_by(MemoryEntry.created_at.desc())
+            .limit(limit)
         )
+        if allowed_scene_ids is not None:
+            stmt = stmt.where(MemoryEntry.source_id.in_(allowed_scene_ids))
+        result = await session.execute(stmt)
+        rows = list(result.scalars().all())
         if not rows:
             # 兜底：早期数据可能未设置 level；按 source_type='scene' 再查一次
-            rows = list(
-                await repo.list(
-                    organization_id=organization_id,
-                    project_id=project_id,
-                    source_type="scene",
-                    limit=limit,
-                )
+            fallback_stmt = (
+                select(MemoryEntry)
+                .where(MemoryEntry.organization_id == organization_id)
+                .where(MemoryEntry.project_id == project_id)
+                .where(MemoryEntry.source_type == "scene")
+                .order_by(MemoryEntry.created_at.desc())
+                .limit(limit)
             )
+            if allowed_scene_ids is not None:
+                fallback_stmt = fallback_stmt.where(MemoryEntry.source_id.in_(allowed_scene_ids))
+            fallback_result = await session.execute(fallback_stmt)
+            rows = list(fallback_result.scalars().all())
         if not rows:
             return ""
         parts: list[str] = []
@@ -1067,20 +1089,27 @@ class ContextBuilder:
         focus_names: list[str] | None = None,
         *,
         limit: int = 6,
+        allowed_scene_ids: set[str] | None = None,
     ) -> str:
         """按角色优先、时间倒序召回结构化记忆。
 
         当前版本先用数据库过滤和文本匹配；向量召回接入后可以替换这里的
         candidate 排序，但对 ContextBuilder 的输出契约保持不变。
         """
-        repo = MemoryRepository(session)
-        rows = list(
-            await repo.list(
-                organization_id=organization_id,
-                project_id=project_id,
-                limit=50,
-            )
+        if allowed_scene_ids is not None and not allowed_scene_ids:
+            return ""
+        stmt = (
+            select(MemoryEntry)
+            .where(MemoryEntry.organization_id == organization_id)
+            .where(MemoryEntry.project_id == project_id)
+            .order_by(MemoryEntry.created_at.desc())
+            .limit(50)
         )
+        if allowed_scene_ids is not None:
+            stmt = stmt.where(MemoryEntry.source_type == "scene")
+            stmt = stmt.where(MemoryEntry.source_id.in_(allowed_scene_ids))
+        result = await session.execute(stmt)
+        rows = list(result.scalars().all())
         if not rows:
             return ""
         focus_set = {name for name in (focus_names or []) if name}
@@ -1099,6 +1128,36 @@ class ContextBuilder:
             f"[{entry.memory_type}] {entry.title}：{entry.content}" for entry in selected
         ]
         return "\n---\n".join(parts)
+
+    async def _previous_scene_ids(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        chapter: Chapter,
+        scene: Scene,
+    ) -> set[str]:
+        """返回当前 scene 时间点之前的 scene id，避免后续剧情污染当前正文。"""
+        stmt = (
+            select(Scene.id)
+            .join(Chapter, Scene.chapter_id == Chapter.id)
+            .where(Scene.organization_id == organization_id)
+            .where(Scene.project_id == project_id)
+            .where(Chapter.organization_id == organization_id)
+            .where(Chapter.project_id == project_id)
+            .where(
+                or_(
+                    Chapter.chapter_index < chapter.chapter_index,
+                    and_(
+                        Chapter.chapter_index == chapter.chapter_index,
+                        Scene.scene_index < scene.scene_index,
+                    ),
+                )
+            )
+        )
+        result = await session.execute(stmt)
+        return set(result.scalars().all())
 
     # ------------------------------------------------------------------
     # 风格样本召回（Sprint 14-C4）

@@ -1233,6 +1233,7 @@ async def generate_chapter_outline(job: dict[str, Any]) -> dict[str, Any]:
             start_chapter_index=existing_count + 1,
             end_chapter_index=batch_target_chapters,
             character_roster=await _character_roster_for_prompt(session, job_row),
+            existing_outline=_chapter_outline_context(existing),
         )
         existing_indices = {chapter.chapter_index for chapter in existing}
         # Sprint 16-E1：当 LLM 没给 target_words 时，按项目级目标字数反推默认值。
@@ -1279,6 +1280,21 @@ async def generate_chapter_outline(job: dict[str, Any]) -> dict[str, Any]:
             "reused": False,
             "appended": bool(existing),
         }
+
+
+def _chapter_outline_context(chapters: list[Chapter], *, limit: int = 20) -> str:
+    """压缩前文大纲，供分批续写章节时承接剧情。"""
+    if not chapters:
+        return ""
+    ordered = sorted(chapters, key=lambda item: item.chapter_index)
+    selected = ordered[-limit:]
+    if ordered[0] not in selected:
+        selected = [ordered[0], *selected]
+    parts: list[str] = []
+    for chapter in selected:
+        summary = chapter.summary or chapter.goal or chapter.ending_hook or ""
+        parts.append(f"第{chapter.chapter_index}章《{chapter.title}》：{summary[:180]}")
+    return "\n".join(parts)
 
 
 async def _plan_and_persist_scenes_for_chapter(
@@ -1832,7 +1848,7 @@ async def _previous_scene_excerpt(session: AsyncSession, scene: Scene) -> str:
             organization_id=scene.organization_id,
             project_id=scene.project_id,
             scene_id=prev.id,
-            version_type="draft",
+            status="draft",
         )
     )
     if not drafts:
@@ -1842,14 +1858,14 @@ async def _previous_scene_excerpt(session: AsyncSession, scene: Scene) -> str:
 
 
 async def _latest_draft_id(session: AsyncSession, scene: Scene) -> str | None:
-    """取该 scene 的最新 draft id，用作新版本的 parent_version_id。"""
+    """取该 scene 的最新可用版本 id，用作审稿/重写/新版本父节点。"""
     repo = DraftVersionRepository(session)
     drafts = list(
         await repo.list(
             organization_id=scene.organization_id,
             project_id=scene.project_id,
             scene_id=scene.id,
-            version_type="draft",
+            status="draft",
             limit=1,
         )
     )
@@ -2288,6 +2304,17 @@ async def audit_scene(job: dict[str, Any]) -> dict[str, Any]:
         )
 
         issue_repo = ContinuityIssueRepository(session)
+        existing_open_issues = list(
+            await issue_repo.list(
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                scene_id=scene.id,
+                status="open",
+            )
+        )
+        for issue in existing_open_issues:
+            issue.status = "superseded"
+
         created_issues: list[dict[str, Any]] = []
         for item in contract.issues:
             row = await issue_repo.create(

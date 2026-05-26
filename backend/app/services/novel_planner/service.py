@@ -95,6 +95,7 @@ class NovelPlannerService:
         start_chapter_index: int = 1,
         end_chapter_index: int | None = None,
         character_roster: str = "",
+        existing_outline: str = "",
     ) -> ChapterPlanContract:
         prompt = prompt_manager.load(_PROMPT_PLAN_CHAPTERS, version=_PROMPT_VERSION)
         target_total_chapters = max(1, target_chapters)
@@ -108,6 +109,12 @@ class NovelPlannerService:
             f"\n\n已登记人物名册（章节主线人物、同桌/师生等关系必须与这里一致；"
             f"不要凭空替换主线角色姓名）：\n{character_roster}"
             if character_roster
+            else ""
+        )
+        existing_block = (
+            "\n\n已生成前文大纲（只能作为承接依据，不要重复生成这些章节）：\n"
+            f"{existing_outline}"
+            if existing_outline
             else ""
         )
         # Sprint 16-E1：明确每章��数预算与场景拍点，让 writer 路径有抓手控字数 + 场景连贯
@@ -129,9 +136,12 @@ class NovelPlannerService:
             f"全书目标章节数：{target_total_chapters}\n"
             f"本次只生成第 {start_chapter_index} 章到第 {end_chapter_index} 章，"
             f"共 {batch_count} 章；不要输出其他章节。\n"
+            "如果这是续写批次，必须承接前文大纲的因果、境界、势力和危机，"
+            "不要重新开局或提前大结局。\n"
             f"项目：{project.title}\n"
             f"故事圣经：\n{self._dump_contract(bible)}\n"
-            f"{roster_block}\n"
+            f"{roster_block}"
+            f"{existing_block}\n"
             f"{budget_hint}\n"
             "要求：chapter_index 必须使用实际章节序号；每章必须有明确目标、冲突、"
             "结尾钩子、target_words、scene_beats；只返回 JSON。"
@@ -162,7 +172,11 @@ class NovelPlannerService:
                 start_chapter_index=start_chapter_index,
                 target_chapters=end_chapter_index,
             )
-        return self._normalize_chapters(contract, start_chapter_index=start_chapter_index)
+        return self._normalize_chapters(
+            contract,
+            start_chapter_index=start_chapter_index,
+            expected_count=batch_count,
+        )
 
     async def plan_scenes(
         self,
@@ -464,11 +478,16 @@ class NovelPlannerService:
         contract: ChapterPlanContract,
         *,
         start_chapter_index: int = 1,
+        expected_count: int | None = None,
     ) -> ChapterPlanContract:
         chapters = []
-        for index, item in enumerate(contract.chapters, start=start_chapter_index):
+        source = contract.chapters[:expected_count] if expected_count else contract.chapters
+        for offset, item in enumerate(source):
+            index = start_chapter_index + offset
             data = item.model_dump()
-            data["chapter_index"] = data.get("chapter_index") or index
+            # 分批生成时模型常会把续写批次重新编号为 1..N。
+            # 这里以服务端请求的范围为准，避免重复章节或错位追加。
+            data["chapter_index"] = index
             data["title"] = data.get("title") or f"第{index}章"
             chapters.append(ChapterPlanItem(**data))
         return ChapterPlanContract(chapters=chapters)
