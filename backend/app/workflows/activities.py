@@ -361,6 +361,240 @@ def _spawn_chapter_summarize(
     task.add_done_callback(_summarize_tasks.discard)
 
 
+def _spawn_arc_summarize(
+    *,
+    organization_id: str,
+    project_id: str,
+    start_chapter_index: int,
+    end_chapter_index: int,
+    source: str,
+) -> None:
+    """Sprint 17-A 防漂移：fire-and-forget 每 10 章触发 L3 弧线摘要。
+
+    用于 ContextBuilder 的"距离衰减"召回：中距离（11-50 章）章节将优先
+    读 L3 弧摘而非 L2 全文，控制 token 增长。失败 swallow + warn。
+    """
+    if end_chapter_index < start_chapter_index:
+        return
+    try:
+        import asyncio as _asyncio  # noqa: PLC0415
+
+        loop = _asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    async def _run() -> None:
+        try:
+            from app.services.memory.summarizer import (  # noqa: PLC0415
+                hierarchical_summarizer,
+            )
+
+            async with AsyncSessionLocal() as session:
+                await hierarchical_summarizer.summarize_arc(
+                    session,
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    start_chapter_index=start_chapter_index,
+                    end_chapter_index=end_chapter_index,
+                )
+                await session.commit()
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "arc_summarize_failed",
+                exc_info=True,
+                extra={
+                    "start": start_chapter_index,
+                    "end": end_chapter_index,
+                    "source": source,
+                },
+            )
+
+    task = loop.create_task(_run())
+    _summarize_tasks.add(task)
+    task.add_done_callback(_summarize_tasks.discard)
+
+
+def _spawn_character_milestones(
+    *,
+    organization_id: str,
+    project_id: str,
+    chapter_index: int,
+    source: str,
+) -> None:
+    """Sprint 17-A 防漂移：fire-and-forget 给项目所有角色生成 milestone 快照。"""
+    if chapter_index <= 0:
+        return
+    try:
+        import asyncio as _asyncio  # noqa: PLC0415
+
+        loop = _asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    async def _run() -> None:
+        try:
+            from app.services.character_tracker.milestone import (  # noqa: PLC0415
+                create_milestones_for_project,
+            )
+
+            async with AsyncSessionLocal() as session:
+                await create_milestones_for_project(
+                    session,
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    chapter_index=chapter_index,
+                )
+                await session.commit()
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "character_milestones_failed",
+                exc_info=True,
+                extra={"chapter_index": chapter_index, "source": source},
+            )
+
+    task = loop.create_task(_run())
+    _summarize_tasks.add(task)
+    task.add_done_callback(_summarize_tasks.discard)
+
+
+def _spawn_long_range_audit(
+    *,
+    organization_id: str,
+    project_id: str,
+    chapter_id: str,
+    source: str,
+) -> None:
+    """Sprint 17-A 防漂移：fire-and-forget 对该章最后一个 drafted scene 做
+    long_range_continuity 审计（每 20 章触发一次）。失败 swallow + warn。"""
+    if not chapter_id:
+        return
+    try:
+        import asyncio as _asyncio  # noqa: PLC0415
+
+        loop = _asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    async def _run() -> None:
+        try:
+            from app.services.auditor.service import auditor_service  # noqa: PLC0415
+
+            async with AsyncSessionLocal() as session:
+                chapter = await ChapterRepository(session).get(
+                    chapter_id, organization_id=organization_id
+                )
+                if not chapter:
+                    return
+                scenes = list(
+                    await SceneRepository(session).list(
+                        organization_id=organization_id,
+                        project_id=project_id,
+                        chapter_id=chapter_id,
+                        order_by=Scene.scene_index.desc(),
+                    )
+                )
+                if not scenes:
+                    return
+                target_scene = scenes[0]
+                latest_draft_id = await _latest_draft_id(session, target_scene)
+                if not latest_draft_id:
+                    return
+                draft = await DraftVersionRepository(session).get(
+                    latest_draft_id, organization_id=organization_id
+                )
+                if not draft:
+                    return
+                project = await ProjectRepository(session).get(
+                    project_id, organization_id=organization_id
+                )
+                spec = await NovelSpecRepository(session).get_by(
+                    organization_id=organization_id, project_id=project_id
+                )
+                if not project or not spec:
+                    return
+                contract = await auditor_service.audit_scene_draft(
+                    session,
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    job_id=f"long_range_audit_{chapter_id}",
+                    project=project,
+                    spec=spec,
+                    chapter=chapter,
+                    scene=target_scene,
+                    draft_content=draft.content,
+                    mode="long_range",
+                )
+                issue_repo = ContinuityIssueRepository(session)
+                for item in contract.issues:
+                    await issue_repo.create(
+                        organization_id=organization_id,
+                        project_id=project_id,
+                        chapter_id=chapter_id,
+                        scene_id=target_scene.id,
+                        issue_type=item.issue_type,
+                        severity=item.severity,
+                        description=item.description,
+                        suggested_fix=item.suggested_fix,
+                        status="open",
+                    )
+                await session.commit()
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "long_range_audit_failed",
+                exc_info=True,
+                extra={"chapter_id": chapter_id, "source": source},
+            )
+
+    task = loop.create_task(_run())
+    _summarize_tasks.add(task)
+    task.add_done_callback(_summarize_tasks.discard)
+
+
+def _spawn_style_drift_check(
+    *,
+    organization_id: str,
+    project_id: str,
+    chapter_id: str,
+    chapter_index: int,
+    source: str,
+) -> None:
+    """Sprint 17-A 防漂移：fire-and-forget 每 100 章对比对白 embedding 距离。"""
+    if chapter_index <= 0 or not chapter_id:
+        return
+    try:
+        import asyncio as _asyncio  # noqa: PLC0415
+
+        loop = _asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    async def _run() -> None:
+        try:
+            from app.services.auditor.style_drift import (  # noqa: PLC0415
+                check_style_drift,
+            )
+
+            async with AsyncSessionLocal() as session:
+                await check_style_drift(
+                    session,
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    chapter_id=chapter_id,
+                    current_chapter_index=chapter_index,
+                )
+                await session.commit()
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "style_drift_check_failed",
+                exc_info=True,
+                extra={"chapter_id": chapter_id, "source": source},
+            )
+
+    task = loop.create_task(_run())
+    _summarize_tasks.add(task)
+    task.add_done_callback(_summarize_tasks.discard)
+
+
 async def _delete_project_rows(
     session: AsyncSession,
     job: GenerationJob,
@@ -1320,12 +1554,18 @@ async def _plan_and_persist_scenes_for_chapter(
     effective_scene_count = scenes_per_chapter
     beats = list(chapter.scene_beats or [])
     if beats:
-        effective_scene_count = max(1, min(len(beats), 6))
+        effective_scene_count = max(2, min(len(beats), 6))
     effective_expected_words = expected_words
     if chapter.target_words and chapter.target_words > 0 and effective_scene_count:
         effective_expected_words = max(
             400, chapter.target_words // max(1, effective_scene_count)
         )
+    previous_chapter_context = await context_builder.build_previous_chapter_context(
+        session,
+        organization_id=job.organization_id,
+        project_id=job.project_id,
+        chapter=chapter,
+    )
     contract = await novel_planner_service.plan_scenes(
         session,
         organization_id=job.organization_id,
@@ -1337,6 +1577,7 @@ async def _plan_and_persist_scenes_for_chapter(
         scenes_per_chapter=effective_scene_count,
         expected_words=effective_expected_words,
         character_roster=await _character_roster_for_prompt(session, job),
+        previous_chapter_context=previous_chapter_context,
     )
     scene_limit = effective_scene_count or 8
     scene_repo = SceneRepository(session)
@@ -1406,7 +1647,7 @@ async def generate_scene_cards(job: dict[str, Any]) -> dict[str, Any]:
         )
         raw_scenes_per_chapter = payload.get("scenes_per_chapter")
         scenes_per_chapter = (
-            max(1, min(int(raw_scenes_per_chapter), 8))
+            max(2, min(int(raw_scenes_per_chapter), 8))
             if raw_scenes_per_chapter is not None
             else None
         )
@@ -1486,7 +1727,7 @@ async def generate_chapter_scene_cards(job: dict[str, Any]) -> dict[str, Any]:
 
         raw_scenes_per_chapter = payload.get("scenes_per_chapter")
         scenes_per_chapter = (
-            max(1, min(int(raw_scenes_per_chapter), 8))
+            max(2, min(int(raw_scenes_per_chapter), 8))
             if raw_scenes_per_chapter is not None
             else None
         )
@@ -1594,7 +1835,7 @@ async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
         for scene in scenes:
             chapter = chapter_by_id[scene.chapter_id]
             if scene.id in draft_by_scene and not force:
-                previous_excerpt = draft_by_scene[scene.id].content[-800:]
+                previous_excerpt = draft_by_scene[scene.id].content[-1500:]
                 reused += 1
                 continue
             target_words = chapter_target_words[chapter.id]
@@ -1660,7 +1901,7 @@ async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
                     draft=saved,
                     created_by=job_row.user_id,
                 )
-            previous_excerpt = draft.content[-800:]
+            previous_excerpt = draft.content[-1500:]
             total_words += word_count
             created += 1
         project.current_word_count = total_words
@@ -1669,17 +1910,66 @@ async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
         # Sprint 16-E5：本次 batch 内每个有新 draft 落地的 chapter 触发一次
         # summarize_chapter（fire-and-forget）。同章重复触发是安全的（summarizer
         # 会追加新 L2 不覆盖），但用 set 去重避免无谓 LLM 调用。
-        for chapter_id in {
+        touched_chapter_ids = {
             scene.chapter_id
             for scene in scenes
             if scene.id not in draft_by_scene or force
-        }:
+        }
+        for chapter_id in touched_chapter_ids:
             _spawn_chapter_summarize(
                 organization_id=job_row.organization_id,
                 project_id=job_row.project_id,
                 chapter_id=chapter_id,
                 source="write_scene_drafts",
             )
+        # Sprint 17-A 防漂移：每 10 章触发一次 L3 弧线摘要
+        for chapter_id in touched_chapter_ids:
+            chap = chapter_by_id.get(chapter_id)
+            if chap and chap.chapter_index and chap.chapter_index % 10 == 0:
+                _spawn_arc_summarize(
+                    organization_id=job_row.organization_id,
+                    project_id=job_row.project_id,
+                    start_chapter_index=chap.chapter_index - 9,
+                    end_chapter_index=chap.chapter_index,
+                    source="write_scene_drafts",
+                )
+        # Sprint 17-A 防漂移：每 50 章触发角色 milestone snapshot
+        max_touched_index = max(
+            (
+                chapter_by_id[cid].chapter_index
+                for cid in touched_chapter_ids
+                if cid in chapter_by_id
+            ),
+            default=0,
+        )
+        if max_touched_index and max_touched_index % 50 == 0:
+            _spawn_character_milestones(
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                chapter_index=max_touched_index,
+                source="write_scene_drafts",
+            )
+        # Sprint 17-A 防漂移：每 20 章触发长程审计
+        for chapter_id in touched_chapter_ids:
+            chap = chapter_by_id.get(chapter_id)
+            if chap and chap.chapter_index and chap.chapter_index % 20 == 0:
+                _spawn_long_range_audit(
+                    organization_id=job_row.organization_id,
+                    project_id=job_row.project_id,
+                    chapter_id=chap.id,
+                    source="write_scene_drafts",
+                )
+        # Sprint 17-A 防漂移：每 100 章触发风格漂移检测
+        for chapter_id in touched_chapter_ids:
+            chap = chapter_by_id.get(chapter_id)
+            if chap and chap.chapter_index and chap.chapter_index % 100 == 0:
+                _spawn_style_drift_check(
+                    organization_id=job_row.organization_id,
+                    project_id=job_row.project_id,
+                    chapter_id=chap.id,
+                    chapter_index=chap.chapter_index,
+                    source="write_scene_drafts",
+                )
         return {
             "draft_count": created + reused,
             "created_draft_count": created,
@@ -1823,38 +2113,70 @@ async def run_scene_writing(job: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _previous_scene_excerpt(session: AsyncSession, scene: Scene) -> str:
-    """取同章前一个 scene 的最新 draft 末尾 800 字。
+    """取前一场景的最新 draft 末尾片段，跨章自动回溯到上一章末场。
 
-    没有前一场景或前一场景没有 draft 时返回空字符串。失败不会阻断主流程。
+    - 同章内：直接取 scene_index - 1 的最新 draft 末尾 1500 字。
+    - 新章首场（scene_index == 1）：回溯到上一章 chapter_index - 1 的最后
+      一个 scene，取其最新 draft 末尾 1500 字，让 writer 能承接前章结尾。
+    - 找不到上一章 / 上一场或没有 draft 时返回空字符串。失败不阻断主流程。
     """
-    if scene.scene_index <= 1:
-        return ""
+    excerpt_chars = 1500
     scene_repo = SceneRepository(session)
-    siblings = list(
-        await scene_repo.list(
-            organization_id=scene.organization_id,
-            project_id=scene.project_id,
-            chapter_id=scene.chapter_id,
-        )
-    )
-    prev = next(
-        (s for s in siblings if s.scene_index == scene.scene_index - 1), None
-    )
-    if not prev:
-        return ""
     draft_repo = DraftVersionRepository(session)
+
+    prev_scene: Scene | None = None
+    if scene.scene_index > 1:
+        siblings = list(
+            await scene_repo.list(
+                organization_id=scene.organization_id,
+                project_id=scene.project_id,
+                chapter_id=scene.chapter_id,
+            )
+        )
+        prev_scene = next(
+            (s for s in siblings if s.scene_index == scene.scene_index - 1), None
+        )
+    else:
+        chap_repo = ChapterRepository(session)
+        cur_chapter = await chap_repo.get(
+            scene.chapter_id, organization_id=scene.organization_id
+        )
+        if cur_chapter and cur_chapter.chapter_index > 1:
+            chapters = list(
+                await chap_repo.list(
+                    organization_id=scene.organization_id,
+                    project_id=scene.project_id,
+                )
+            )
+            prev_chapter = next(
+                (c for c in chapters if c.chapter_index == cur_chapter.chapter_index - 1),
+                None,
+            )
+            if prev_chapter:
+                prev_scenes = list(
+                    await scene_repo.list(
+                        organization_id=scene.organization_id,
+                        project_id=scene.project_id,
+                        chapter_id=prev_chapter.id,
+                    )
+                )
+                if prev_scenes:
+                    prev_scene = max(prev_scenes, key=lambda s: s.scene_index)
+
+    if not prev_scene:
+        return ""
     drafts = list(
         await draft_repo.list(
             organization_id=scene.organization_id,
             project_id=scene.project_id,
-            scene_id=prev.id,
+            scene_id=prev_scene.id,
             status="draft",
         )
     )
     if not drafts:
         return ""
     # base list 默认按 created_at desc 排序，第 0 个就是最新
-    return drafts[0].content[-800:]
+    return drafts[0].content[-excerpt_chars:]
 
 
 async def _latest_draft_id(session: AsyncSession, scene: Scene) -> str | None:
@@ -2194,6 +2516,40 @@ async def write_chapter_scenes_for_full_novel(
                 chapter_id=chapter.id,
                 source="write_chapter_scenes_for_full_novel",
             )
+            # Sprint 17-A 防漂移：每 10 章触发一次 L3 弧线摘要
+            if chapter.chapter_index and chapter.chapter_index % 10 == 0:
+                _spawn_arc_summarize(
+                    organization_id=job_row.organization_id,
+                    project_id=job_row.project_id,
+                    start_chapter_index=chapter.chapter_index - 9,
+                    end_chapter_index=chapter.chapter_index,
+                    source="write_chapter_scenes_for_full_novel",
+                )
+            # Sprint 17-A 防漂移：每 50 章触发角色 milestone snapshot
+            if chapter.chapter_index and chapter.chapter_index % 50 == 0:
+                _spawn_character_milestones(
+                    organization_id=job_row.organization_id,
+                    project_id=job_row.project_id,
+                    chapter_index=chapter.chapter_index,
+                    source="write_chapter_scenes_for_full_novel",
+                )
+            # Sprint 17-A 防漂移：每 20 章触发长程审计
+            if chapter.chapter_index and chapter.chapter_index % 20 == 0:
+                _spawn_long_range_audit(
+                    organization_id=job_row.organization_id,
+                    project_id=job_row.project_id,
+                    chapter_id=chapter.id,
+                    source="write_chapter_scenes_for_full_novel",
+                )
+            # Sprint 17-A 防漂移：每 100 章触发风格漂移检测
+            if chapter.chapter_index and chapter.chapter_index % 100 == 0:
+                _spawn_style_drift_check(
+                    organization_id=job_row.organization_id,
+                    project_id=job_row.project_id,
+                    chapter_id=chapter.id,
+                    chapter_index=chapter.chapter_index,
+                    source="write_chapter_scenes_for_full_novel",
+                )
         # 父 job 的 consumed_quota 临时累加，给后续 chapter 预算判断用；
         # 真正落 usage_event 由 finalize_full_novel 处理。
         job_row.consumed_quota = (job_row.consumed_quota or 0) + words_written

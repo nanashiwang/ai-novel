@@ -300,6 +300,16 @@ class AuditIssueItem(APIModel):
             "world_rule": "world_rule",
             "风格": "style",
             "style": "style",
+            "跨章": "cross_chapter",
+            "跨章连贯": "cross_chapter",
+            "cross_chapter": "cross_chapter",
+            "cross-chapter": "cross_chapter",
+            "长程": "long_range_continuity",
+            "长程连贯": "long_range_continuity",
+            "long_range_continuity": "long_range_continuity",
+            "long-range": "long_range_continuity",
+            "风格漂移": "style_drift",
+            "style_drift": "style_drift",
         }
         return mapping.get(v, v or "continuity")
 

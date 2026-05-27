@@ -28,6 +28,7 @@ PLOT_THREAD_TRACKABLE_FIELDS: frozenset[str] = frozenset(
         "thread_type",
         "description",
         "status",
+        "expected_resolve_chapter",
     }
 )
 

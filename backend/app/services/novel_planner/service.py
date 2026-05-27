@@ -191,10 +191,11 @@ class NovelPlannerService:
         scenes_per_chapter: int | None,
         expected_words: int,
         character_roster: str = "",
+        previous_chapter_context: str = "",
     ) -> ScenePlanContract:
         prompt = prompt_manager.load(_PROMPT_PLAN_SCENES, version=_PROMPT_VERSION)
         scenes_per_chapter = (
-            max(1, min(scenes_per_chapter, 8)) if scenes_per_chapter is not None else None
+            max(2, min(scenes_per_chapter, 8)) if scenes_per_chapter is not None else None
         )
         scene_count_instruction = (
             f"建议场景数：{scenes_per_chapter}\n"
@@ -223,11 +224,18 @@ class NovelPlannerService:
             if character_roster
             else ""
         )
+        previous_block = (
+            f"\n## 前一章承接信息（必须延续，不可在新章重启背景）\n"
+            f"{previous_chapter_context}\n"
+            if previous_chapter_context
+            else ""
+        )
         user_prompt = (
             "请把指定章节拆成 scene cards。\n"
             f"项目：{project.title}\n"
             f"故事圣经：\n{self._dump_contract(bible)}\n"
             f"{roster_block}"
+            f"{previous_block}"
             f"章节：第 {chapter.chapter_index} 章《{chapter.title}》\n"
             f"章节摘要：{chapter.summary}\n"
             f"章节目标：{chapter.goal}\n"
@@ -239,7 +247,10 @@ class NovelPlannerService:
             f"单场景目标字数：{expected_words}\n"
             "要求：每个 scene 必须有 scene_purpose、entry_state、exit_state、"
             "must_include、must_avoid、微冲突、情绪变化、揭示与钩子；"
-            "相邻场景必须顺序承接，避免重复上一场已完成的信息；只返回 JSON。"
+            "相邻场景必须顺序承接，避免重复上一场已完成的信息；"
+            "若提供了「前一章承接信息」，首场 entry_state 必须显式承接其中的"
+            "人物位置/情绪/未结悬念/关键道具/未完成动作，不要从空白状态开始；"
+            "只返回 JSON。"
         )
         raw = await model_gateway.generate_json(
             session,

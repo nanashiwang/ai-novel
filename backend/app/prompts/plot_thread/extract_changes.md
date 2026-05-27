@@ -6,11 +6,12 @@
 
 ## 严格约束
 
-1. **只允许追踪 4 个字段**：
+1. **只允许追踪 5 个字段**：
    - `title`：剧情线名称
    - `thread_type`：main / sub / foreshadow / background
    - `description`：剧情线描述（可在已有描述上精细化，但需有正文支撑）
    - `status`：open / closed / paused
+   - `expected_resolve_chapter`：预期收线章节（int）。当本场显式新开一条线（首次提到关键悬念/伏笔）或对预期收线时间有明确暗示时填写；与当前 chapter_index 距离 5-30 章之间。若不确定就不要写。
 
 2. **强 evidence**：
    - status 从 open → closed：剧情线在本场景被显式解决；不能只是"看似解决"。

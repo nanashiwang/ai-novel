@@ -36,9 +36,13 @@ class WriteSceneWorkflow:
                 start_to_close_timeout=timedelta(minutes=20),
                 retry_policy=MODEL_ACTIVITY_RETRY,
             )
-            # Sprint 10 Phase B：fire-and-forget 推演角色状态变化。
+            # Sprint 16-E6：同步等待 character/world/plot 三链 extract 完成
+            # 再标记 succeeded。下游通过 succeeded 状态触发下一场写作时，
+            # ContextBuilder 才能立刻读到本场推演产物，避免跨场/跨章
+            # 时角色状态、世界变化、剧情线 fall back 到旧 memory，
+            # 是章节衔接跳跃的核心修复点。
             # activity 内部已捕获所有异常并返回 dict，绝不抛出，
-            # 不会影响 succeeded 标记。
+            # 单链失败不会影响 succeeded 标记。
             await workflow.execute_activity(
                 extract_character_state_from_scene,
                 args=[
@@ -53,14 +57,6 @@ class WriteSceneWorkflow:
                 start_to_close_timeout=timedelta(minutes=2),
                 retry_policy=STATUS_ACTIVITY_RETRY,
             )
-            await workflow.execute_activity(
-                mark_job_status,
-                args=[job["id"], "succeeded"],
-                start_to_close_timeout=timedelta(minutes=1),
-                retry_policy=STATUS_ACTIVITY_RETRY,
-            )
-            # Sprint 12-C: fire-and-forget — 主流程已成功；下列 activity 失败也
-            # 不应让 workflow 报错。activity 自身把异常吞掉，这里仅控制 timeout。
             scene_id = (result or {}).get("scene_id")
             if scene_id:
                 fan_out_payload = {"scene_id": scene_id, "job_id": job["id"]}
@@ -82,6 +78,12 @@ class WriteSceneWorkflow:
                     )
                 except Exception:  # noqa: BLE001
                     pass
+            await workflow.execute_activity(
+                mark_job_status,
+                args=[job["id"], "succeeded"],
+                start_to_close_timeout=timedelta(minutes=1),
+                retry_policy=STATUS_ACTIVITY_RETRY,
+            )
             return {"job_id": job["id"], "status": "succeeded", "result": result}
         except Exception as exc:  # noqa: BLE001
             await workflow.execute_activity(

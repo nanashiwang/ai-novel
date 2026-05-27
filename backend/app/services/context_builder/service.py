@@ -188,8 +188,14 @@ class ContextBuilder:
 
         chapter_query = self._chapter_style_query(chapter)
 
+        hard_constraints_text = await self._fmt_hard_constraints(
+            spec,
+            session=session,
+            organization_id=organization_id,
+            project_id=project_id,
+        )
         segments_data: list[tuple[SegmentLabel, str, bool]] = [
-            ("hard_constraints", self._fmt_hard_constraints(spec), True),
+            ("hard_constraints", hard_constraints_text, True),
             ("task", self._fmt_chapter_task(project, chapter), True),
             ("chapter_arc", self._fmt_chapter_arc(chapter, None), True),
             (
@@ -216,7 +222,12 @@ class ContextBuilder:
             ),
             (
                 "plot_threads",
-                await self._fmt_plot_threads(session, organization_id, project_id),
+                await self._fmt_plot_threads(
+                    session,
+                    organization_id,
+                    project_id,
+                    current_chapter_index=chapter.chapter_index,
+                ),
                 True,
             ),
             (
@@ -238,6 +249,7 @@ class ContextBuilder:
                     organization_id,
                     project_id,
                     query_text=self._fmt_chapter_task(project, chapter),
+                    current_chapter_index=chapter.chapter_index,
                 ),
                 True,
             ),
@@ -299,8 +311,14 @@ class ContextBuilder:
             scene=scene,
         )
 
+        hard_constraints_text = await self._fmt_hard_constraints(
+            spec,
+            session=session,
+            organization_id=organization_id,
+            project_id=project_id,
+        )
         segments_data: list[tuple[SegmentLabel, str, bool]] = [
-            ("hard_constraints", self._fmt_hard_constraints(spec), True),
+            ("hard_constraints", hard_constraints_text, True),
             ("task", task_text, True),
             (
                 "chapter_arc",
@@ -348,7 +366,12 @@ class ContextBuilder:
             ),
             (
                 "plot_threads",
-                await self._fmt_plot_threads(session, organization_id, project_id),
+                await self._fmt_plot_threads(
+                    session,
+                    organization_id,
+                    project_id,
+                    current_chapter_index=chapter.chapter_index,
+                ),
                 True,
             ),
             (
@@ -374,6 +397,7 @@ class ContextBuilder:
                     organization_id,
                     project_id,
                     query_text=task_text,
+                    current_chapter_index=chapter.chapter_index,
                 ),
                 True,
             ),
@@ -431,7 +455,33 @@ class ContextBuilder:
     # 内部：各段格式化
     # ------------------------------------------------------------------
 
-    def _fmt_hard_constraints(self, spec: NovelSpec) -> str:
+    async def _fmt_hard_constraints(
+        self,
+        spec: NovelSpec,
+        *,
+        session: AsyncSession | None = None,
+        organization_id: str | None = None,
+        project_id: str | None = None,
+    ) -> str:
+        """组装 hard_constraints 段。
+
+        Sprint 17-A：顶部新增"永不改写的核心锚点"5 条（防长程漂移）：
+        1. 主角核心（从 characters 表 role 含"主角"的第一条）
+        2. 核心金手指/能力规则（spec.constraints 中含"能力/系统/金手指/规则"关键词项）
+        3. 世界第一硬规则（spec.continuity_rules 第一条 或 constraints 中含"世界/规则"项）
+        4. 终极目标（spec.theme + 主角 arc）
+        5. 禁忌（spec.constraints 中"不能/不要/禁止/不可"开头的项）
+        所有原有字段保留，但置于锚点之后。
+        """
+        anchors_block = ""
+        if session is not None and organization_id and project_id:
+            anchors_block = await self._extract_hard_anchors(
+                session,
+                spec,
+                organization_id=organization_id,
+                project_id=project_id,
+            )
+
         parts: list[str] = []
         if spec.premise:
             parts.append(f"前提：{spec.premise}")
@@ -449,7 +499,81 @@ class ContextBuilder:
             parts.append("约束：\n- " + "\n- ".join(spec.constraints))
         if getattr(spec, "continuity_rules", None):
             parts.append("连续性规则：\n- " + "\n- ".join(spec.continuity_rules))
-        return "\n".join(parts)
+        body = "\n".join(parts)
+        if anchors_block:
+            return anchors_block + "\n\n" + body
+        return body
+
+    async def _extract_hard_anchors(
+        self,
+        session: AsyncSession,
+        spec: NovelSpec,
+        *,
+        organization_id: str,
+        project_id: str,
+    ) -> str:
+        """提取 5 条永不改写的核心锚点。失败时返回空串，不阻断主流程。"""
+        try:
+            char_repo = CharacterRepository(session)
+            chars = list(
+                await char_repo.list(
+                    organization_id=organization_id,
+                    project_id=project_id,
+                )
+            )
+        except Exception:  # noqa: BLE001
+            chars = []
+
+        protagonist = None
+        for c in chars:
+            role = (c.role or "").lower()
+            if "主角" in (c.role or "") or "男主" in (c.role or "") or "女主" in (
+                c.role or ""
+            ) or "protagonist" in role:
+                protagonist = c
+                break
+        if not protagonist and chars:
+            protagonist = chars[0]
+
+        constraints: list[str] = list(spec.constraints or [])
+        ability_kw = ("能力", "金手指", "系统", "规则", "天赋", "异能")
+        ability_rule = next(
+            (c for c in constraints if any(k in c for k in ability_kw)),
+            "",
+        )
+
+        continuity_rules: list[str] = list(getattr(spec, "continuity_rules", None) or [])
+        hard_world_rule = continuity_rules[0] if continuity_rules else next(
+            (c for c in constraints if any(k in c for k in ("世界", "硬规则"))),
+            "",
+        )
+
+        ultimate_goal_parts: list[str] = []
+        if spec.theme:
+            ultimate_goal_parts.append(spec.theme)
+        if protagonist and protagonist.arc:
+            ultimate_goal_parts.append(f"主角弧光：{protagonist.arc[:80]}")
+        ultimate_goal = " / ".join(ultimate_goal_parts)
+
+        taboo_kw = ("不能", "不要", "禁止", "不可", "切忌", "避免")
+        taboos = [c for c in constraints if any(c.startswith(k) for k in taboo_kw)]
+        taboo_line = "；".join(taboos[:3]) if taboos else ""
+
+        anchors: list[str] = ["# 永不改写的核心锚点（最高优先级，与下文冲突时以此为准）"]
+        if protagonist:
+            desc_bits = [protagonist.name]
+            if protagonist.role:
+                desc_bits.append(protagonist.role[:40])
+            if protagonist.description:
+                desc_bits.append(protagonist.description[:80])
+            anchors.append("1. 主角：" + " · ".join(desc_bits))
+        else:
+            anchors.append("1. 主角：（未登记）")
+        anchors.append(f"2. 核心能力/系统规则：{ability_rule or '（未指定，依正文已有设定为准）'}")
+        anchors.append(f"3. 世界第一硬规则：{hard_world_rule or '（未指定，依正文已有设定为准）'}")
+        anchors.append(f"4. 终极目标：{ultimate_goal or '（依故事圣经主题为准）'}")
+        anchors.append(f"5. 禁忌：{taboo_line or '（无显式禁忌）'}")
+        return "\n".join(anchors)
 
     def _fmt_chapter_task(self, project: Project, chapter: Chapter) -> str:
         return (
@@ -748,13 +872,67 @@ class ContextBuilder:
 
         # 渲染
         pov = (pov_character_name or "").strip() or None
+
+        # Sprint 17-A 防漂移：每角色优先输出最近 milestone（character_revisions
+        # 中 field='_milestone' + milestone_chapter_index 非 NULL 的最新一条），
+        # 作为基线，让模型先看到"截至第 X 章的浓缩态势"，再叠加流水动作。
+        milestone_by_name: dict[str, str] = {}
+        try:
+            from app.models.character import Character as _Char  # noqa: PLC0415
+            from app.models.character_revision import (  # noqa: PLC0415
+                CharacterRevision as _Rev,
+            )
+
+            mstmt = (
+                select(_Rev, _Char.name)
+                .join(_Char, _Rev.character_id == _Char.id)
+                .where(
+                    _Rev.organization_id == organization_id,
+                    _Rev.project_id == project_id,
+                    _Rev.field == "_milestone",
+                    _Rev.milestone_chapter_index.isnot(None),
+                    _Rev.status == "applied",
+                    _Char.name.in_(focus_set),
+                )
+                .order_by(_Rev.milestone_chapter_index.desc())
+            )
+            for rev, char_name in (await session.execute(mstmt)).all():
+                if char_name in milestone_by_name:
+                    continue  # 已取最新一条
+                snap = rev.new_value if isinstance(rev.new_value, dict) else {}
+                if not snap:
+                    continue
+                bits: list[str] = []
+                for key in (
+                    "core_traits",
+                    "current_position",
+                    "key_relationships",
+                    "unresolved_commitments",
+                    "arc_phase",
+                ):
+                    v = snap.get(key)
+                    if v:
+                        bits.append(f"{key}={v}")
+                milestone_by_name[char_name] = (
+                    f"· 里程碑（截至第 {rev.milestone_chapter_index} 章）："
+                    + " | ".join(bits)
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
         lines: list[str] = []
         for name in focus_set:
             entries = per_character.get(name) or []
-            if not entries:
+            milestone_line = milestone_by_name.get(name)
+            if not entries and not milestone_line:
                 continue
             tag = "[POV] " if pov is not None and name == pov else ""
-            lines.append(f"{tag}【{name}】最近 {len(entries)} 场动作：")
+            count_label = (
+                f"基线 + 最近 {len(entries)} 场动作" if milestone_line else f"最近 {len(entries)} 场动作"
+            )
+            lines.append(f"{tag}【{name}】{count_label}：")
+            if milestone_line:
+                lines.append(milestone_line)
             lines.extend(entries)
         return "\n".join(lines)
 
@@ -903,8 +1081,20 @@ class ContextBuilder:
         return text[:120]
 
     async def _fmt_plot_threads(
-        self, session: AsyncSession, organization_id: str, project_id: str
+        self,
+        session: AsyncSession,
+        organization_id: str,
+        project_id: str,
+        *,
+        current_chapter_index: int | None = None,
     ) -> str:
+        """格式化 open plot_threads。
+
+        Sprint 17-A：读时计算 stalled——如果 expected_resolve_chapter 存在
+        且 < current_chapter_index，标 [stalled]；段落底部追加硬性提示。
+        current_chapter_index 为 None 时不做 stalled 计算（兼容 chapter
+        planning 等还没确定章号的入口）。
+        """
         repo = PlotThreadRepository(session)
         rows = list(
             await repo.list(
@@ -916,10 +1106,28 @@ class ContextBuilder:
         open_threads = [r for r in rows if r.status == "open"]
         if not open_threads:
             return ""
-        parts = [
-            f"[{t.thread_type}] {t.title}：{t.description or '—'}"
-            for t in open_threads
-        ]
+        parts: list[str] = []
+        any_stalled = False
+        for t in open_threads:
+            eta = getattr(t, "expected_resolve_chapter", None)
+            is_stalled = bool(
+                current_chapter_index is not None
+                and eta is not None
+                and eta < current_chapter_index
+            )
+            prefix = "[stalled] " if is_stalled else ""
+            eta_hint = f"（预期收线于第 {eta} 章）" if eta else ""
+            parts.append(
+                f"{prefix}[{t.thread_type}] {t.title}{eta_hint}：{t.description or '—'}"
+            )
+            if is_stalled:
+                any_stalled = True
+        if any_stalled:
+            parts.append(
+                "⚠️ 上述 [stalled] 线索已超过预期收线章节仍未推进，本章必须"
+                "选择以下之一：(a) 显式推进至少一步，(b) 显式宣告冻结/废弃"
+                "并给出原因，(c) 重置预期收线章节。不要继续无视。"
+            )
         return "\n".join(parts)
 
     async def _fmt_recent_scene_summaries(
@@ -1022,12 +1230,22 @@ class ContextBuilder:
         *,
         query_text: str = "",
         limit: int = 3,
+        current_chapter_index: int | None = None,
     ) -> str:
         """召回 L2/L3/L4 弧线摘要。
 
         Sprint 14-C2：优先走 embedding 向量召回（PG + pgvector）；SQLite 测试
-        或向量服务异常时回落到 created_at desc 兜底，保证测试路径稳定。
+        或向量服务异常时回落到 created_at desc 兜底。
+
+        Sprint 17-A 防漂移（距离衰减）：当 current_chapter_index 给定时，
+        按"章距分桶"召回（避免 1000 章后 prompt 爆炸）：
+        - L2（章摘要）：仅取距离当前章 4-10 章的（近距）
+        - L3（弧摘要）：仅取距离当前章 11-50 章的（中距）
+        - L4（书摘要）：任意距离（长程兜底）
+        L1（场摘要）由 recent_scenes 段单独处理，本段不取。
         """
+        # 主路径：向量召回（取大 limit 以便后续按距离过滤）
+        recall_limit = max(limit * 3, 9) if current_chapter_index is not None else limit
         try:  # pragma: no cover - 依赖外部 embedding 服务
             from app.services.embedding import embedding_service  # noqa: PLC0415
             from app.services.embedding.recall import (  # noqa: PLC0415
@@ -1043,16 +1261,18 @@ class ContextBuilder:
                         project_id=project_id,
                         query_vector=vector,
                         memory_types=["L2", "L3", "L4"],
-                        k=limit,
+                        k=recall_limit,
                     )
                     if rows:
-                        return self._format_arc_rows(rows)
+                        rows = self._filter_by_distance(rows, current_chapter_index, limit)
+                        if rows:
+                            return self._format_arc_rows(rows)
         except (ImportError, NotImplementedError):
             pass
         except Exception:  # noqa: BLE001
             pass
 
-        # 回落：按 created_at desc 取最近 N 条 L2/L3/L4
+        # 回落：按 created_at desc 取最近 N 条 L2/L3/L4，再按距离过滤
         stmt = (
             select(MemoryEntry)
             .where(
@@ -1061,12 +1281,73 @@ class ContextBuilder:
                 MemoryEntry.level.in_(["L2", "L3", "L4"]),
             )
             .order_by(MemoryEntry.created_at.desc())
-            .limit(limit)
+            .limit(recall_limit)
         )
         rows = list((await session.execute(stmt)).scalars().all())
         if not rows:
             return ""
+        rows = self._filter_by_distance(rows, current_chapter_index, limit)
+        if not rows:
+            return ""
         return self._format_arc_rows(rows)
+
+    @staticmethod
+    def _arc_window_to_chapter_range(arc_window: str | None) -> tuple[int, int] | None:
+        """解析 'ch12' / 'ch1-ch10' / 'vol1:ch1-ch10' / 'book' → (start, end)。"""
+        if not arc_window:
+            return None
+        aw = arc_window.split(":")[-1]
+        if aw == "book":
+            return None
+        import re  # noqa: PLC0415
+
+        nums = re.findall(r"ch(\d+)", aw)
+        if not nums:
+            return None
+        if len(nums) == 1:
+            n = int(nums[0])
+            return (n, n)
+        return (int(nums[0]), int(nums[-1]))
+
+    @classmethod
+    def _filter_by_distance(
+        cls,
+        rows: list[MemoryEntry],
+        current_chapter_index: int | None,
+        limit: int,
+    ) -> list[MemoryEntry]:
+        """章距分桶：L2 取 4-10、L3 取 11-50、L4 永远参与。
+
+        current_chapter_index 为 None 时退化为不过滤，返回 rows[:limit]。
+        """
+        if current_chapter_index is None:
+            return rows[:limit]
+        bucketed: dict[str, list[MemoryEntry]] = {"L4": [], "L3": [], "L2": []}
+        for row in rows:
+            level = row.level or "L2"
+            if level == "L4":
+                bucketed["L4"].append(row)
+                continue
+            rng = cls._arc_window_to_chapter_range(row.arc_window)
+            if rng is None:
+                # 解析失败的回落到 L2 桶（保守）
+                bucketed["L2"].append(row)
+                continue
+            _, end = rng
+            distance = current_chapter_index - end
+            if distance < 0:
+                continue  # 未来章节摘要不参与
+            if level == "L3" and 11 <= distance <= 50:
+                bucketed["L3"].append(row)
+            elif level == "L2" and 4 <= distance <= 10:
+                bucketed["L2"].append(row)
+        # 分配：L4 最多 1 条，L3 最多 limit//2 + 1，L2 取剩余
+        l4_take = bucketed["L4"][:1]
+        l3_quota = max(1, limit // 2)
+        l3_take = bucketed["L3"][:l3_quota]
+        remaining = max(0, limit - len(l4_take) - len(l3_take))
+        l2_take = bucketed["L2"][:remaining]
+        return l4_take + l3_take + l2_take
 
     @staticmethod
     def _format_arc_rows(rows: list[MemoryEntry]) -> str:
@@ -1158,6 +1439,122 @@ class ContextBuilder:
         )
         result = await session.execute(stmt)
         return set(result.scalars().all())
+
+    async def build_previous_chapter_context(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        chapter: Chapter,
+        excerpt_chars: int = 1500,
+    ) -> str:
+        """为 plan_scenes 装配上一章的承接信息（修复跨章跳跃）。
+
+        chapter 是当前要规划场景的章节；本方法返回上一章
+        （chapter_index - 1）的承接信息，包括：
+        - 上一章规划的 ending_hook
+        - 上一章最后一场 exit_state
+        - 上一章末尾原文 N 字（默认 1500）
+        - 当前 open plot_threads（复用 _fmt_plot_threads）
+        - 上一章主要出场角色的最新状态（复用 _fmt_character_actions）
+
+        用于让 scene planner 显式承接前章实际产出，避免新章 entry_state
+        凭空启动。若当前是第 1 章或上一章无 draft，返回空字符串（调用方
+        判空跳过）。
+        """
+        if chapter.chapter_index <= 1:
+            return ""
+
+        from app.repositories import (  # noqa: PLC0415
+            ChapterRepository,
+            SceneRepository,
+        )
+
+        chap_repo = ChapterRepository(session)
+        prev_chapters = list(
+            await chap_repo.list(
+                organization_id=organization_id,
+                project_id=project_id,
+            )
+        )
+        prev_chapter = next(
+            (c for c in prev_chapters if c.chapter_index == chapter.chapter_index - 1),
+            None,
+        )
+        if not prev_chapter:
+            return ""
+
+        scene_repo = SceneRepository(session)
+        scenes = list(
+            await scene_repo.list(
+                organization_id=organization_id,
+                project_id=project_id,
+                chapter_id=prev_chapter.id,
+            )
+        )
+        if not scenes:
+            return ""
+        last_scene = max(scenes, key=lambda s: s.scene_index)
+
+        draft_repo = DraftVersionRepository(session)
+        drafts = list(
+            await draft_repo.list(
+                organization_id=organization_id,
+                project_id=project_id,
+                scene_id=last_scene.id,
+                status="draft",
+            )
+        )
+        tail_excerpt = drafts[0].content[-excerpt_chars:] if drafts else ""
+
+        char_names: list[str] = []
+        seen: set[str] = set()
+        for s in scenes:
+            for nm in s.characters or []:
+                if nm not in seen:
+                    seen.add(nm)
+                    char_names.append(nm)
+        char_actions_text = ""
+        if char_names:
+            char_actions_text = await self._fmt_character_actions(
+                session,
+                organization_id,
+                project_id,
+                focus_names=char_names,
+            )
+
+        open_threads_text = await self._fmt_plot_threads(
+            session,
+            organization_id,
+            project_id,
+            current_chapter_index=chapter.chapter_index,
+        )
+
+        parts: list[str] = [
+            f"前一章：第 {prev_chapter.chapter_index} 章《{prev_chapter.title}》"
+        ]
+        if prev_chapter.ending_hook:
+            parts.append(f"前一章规划的结尾钩子：{prev_chapter.ending_hook}")
+        if last_scene.exit_state:
+            parts.append(
+                f"前一章最后一场 exit_state（实际收束状态）：{last_scene.exit_state}"
+            )
+        if tail_excerpt:
+            parts.append(
+                "前一章末尾实际产出片段（首场 entry_state 必须延续此处的"
+                "人物位置/情绪/未完成动作/在场道具）：\n" + tail_excerpt
+            )
+        if open_threads_text:
+            parts.append(
+                "当前未解决线索（open plot_threads，本章应推进或显式悬置）：\n"
+                + open_threads_text
+            )
+        if char_actions_text:
+            parts.append(
+                "前一章主要角色最新状态：\n" + char_actions_text
+            )
+        return "\n\n".join(parts)
 
     # ------------------------------------------------------------------
     # 风格样本召回（Sprint 14-C4）

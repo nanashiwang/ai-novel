@@ -166,6 +166,81 @@ class HierarchicalSummarizer:
             content=content,
         )
 
+    async def summarize_arc(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        start_chapter_index: int,
+        end_chapter_index: int,
+        job_id: str | None = None,
+    ) -> MemoryEntry | None:
+        """聚合连续若干章（无需绑定 Volume）的 L2 → 1 条 L3 弧线摘要。
+
+        Sprint 17-A 防漂移：每 10 章触发一次，让 ContextBuilder 在长程章节
+        生成时能按"章距分桶"读到 L3（中距离）而非全文 L2，控制 token 增长。
+
+        - source_type='arc'、source_id='arc_chN-chM'，避免与 volume 冲突
+        - 同区间重复调用会追加，召回时按 created_at desc 取最新
+        - 没有任何 L2 命中时返回 None
+        """
+        if start_chapter_index < 1 or end_chapter_index < start_chapter_index:
+            return None
+        chapter_repo = ChapterRepository(session)
+        chapters = list(
+            await chapter_repo.list(
+                organization_id=organization_id,
+                project_id=project_id,
+            )
+        )
+        in_range = [
+            c
+            for c in chapters
+            if start_chapter_index <= c.chapter_index <= end_chapter_index
+        ]
+        if not in_range:
+            return None
+        chapter_ids = [c.id for c in in_range]
+        sources = await self._collect_level_sources(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            level="L2",
+            source_type="chapter",
+            source_ids=chapter_ids,
+        )
+        if not sources:
+            return None
+
+        arc_window = f"ch{start_chapter_index}-ch{end_chapter_index}"
+        title = f"第 {start_chapter_index}-{end_chapter_index} 章弧线摘要"
+        content = await self._summarize(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            job_id=job_id,
+            level="L3",
+            arc_window=arc_window,
+            sources=sources,
+            context_hint=(
+                f"本弧覆盖第 {start_chapter_index} 至 {end_chapter_index} 章；"
+                f"请抽取本弧的主线推进、关键转折、人物关系变化与未结线索。"
+            ),
+        )
+        return await self._persist(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            level="L3",
+            arc_window=arc_window,
+            source_type="arc",
+            source_id=f"arc_{arc_window}",
+            memory_type="arc_summary",
+            title=title,
+            content=content,
+        )
+
     async def summarize_book(
         self,
         session: AsyncSession,

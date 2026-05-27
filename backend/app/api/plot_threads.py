@@ -24,6 +24,7 @@ class PlotThreadPayload(APIModel):
     description: str = Field(default="", max_length=4000)
     status: str = Field(default="open", max_length=32)
     related_characters: list[str] = Field(default_factory=list)
+    expected_resolve_chapter: int | None = Field(default=None, ge=1)
 
 
 class PlotThreadPatchPayload(APIModel):
@@ -32,6 +33,7 @@ class PlotThreadPatchPayload(APIModel):
     description: str | None = Field(default=None, max_length=4000)
     status: str | None = Field(default=None, max_length=32)
     related_characters: list[str] | None = None
+    expected_resolve_chapter: int | None = Field(default=None, ge=1)
 
 
 class PlotThreadResponse(APIModel):
@@ -43,6 +45,7 @@ class PlotThreadResponse(APIModel):
     description: str
     status: str
     related_characters: list[str] = []
+    expected_resolve_chapter: int | None = None
 
 
 @router.get("", response_model=list[PlotThreadResponse])

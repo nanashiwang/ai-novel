@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -51,3 +51,11 @@ class CharacterRevision(Base, TenantMixin, TimestampMixin):
     created_by: Mapped[str] = mapped_column(String(64), ForeignKey("users.id"))
     applied_by: Mapped[Optional[str]] = mapped_column(String(64), ForeignKey("users.id"))
     applied_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # Sprint 17-A 防漂移：里程碑快照。每 50 章把流水 revisions 浓缩成 1 条
+    # snapshot 写回，ContextBuilder._fmt_character_actions 优先读最近的
+    # milestone 作为基线，再叠加 milestone 之后的少量流水。
+    # 普通 revision 此字段为 NULL；snapshot 行 field='_milestone'、
+    # new_value 是结构化人物状态字典。
+    milestone_chapter_index: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, index=True
+    )
