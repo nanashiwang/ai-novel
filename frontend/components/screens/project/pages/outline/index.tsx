@@ -1,7 +1,16 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, RefreshCw, Search, Sparkles, Wand2 } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  RefreshCw,
+  Search,
+  Sparkles,
+  Wand2,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -33,6 +42,12 @@ type RevisionDrawerConfig = {
   description?: string;
   starterPrompts: string[];
 };
+
+type OutlineFilter = "all" | "no-scenes" | "has-scenes" | "written" | "safe-optimize";
+type OutlineQuickView = "all" | "current-group" | "safe-optimize" | "written";
+
+const CHAPTER_GROUP_SIZE = 50;
+const WRITTEN_SCENE_STATUSES = new Set(["drafted", "audited", "rewritten", "approved"]);
 
 export function OutlinePage({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
@@ -121,20 +136,155 @@ export function OutlinePage({ projectId }: { projectId: string }) {
 
   const [activeId, setActiveId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
+  const [statusFilter, setStatusFilter] = useState<OutlineFilter>("all");
+  const [quickView, setQuickView] = useState<OutlineQuickView>("all");
   const [jumpChapter, setJumpChapter] = useState("");
   const [sceneCountMode, setSceneCountMode] = useState<"auto" | "manual">("auto");
   const [manualSceneCount, setManualSceneCount] = useState(3);
   const [revisionConfig, setRevisionConfig] = useState<RevisionDrawerConfig | null>(null);
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [highlightChapterId, setHighlightChapterId] = useState<string | null>(null);
   const chapterItemRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const previousActiveIdRef = useRef<string | null>(null);
+  const allScenesKey = useScopedKey("project", projectId, "scenes", "all");
+  const { data: allScenes = [] } = useQuery({
+    queryKey: allScenesKey,
+    queryFn: () => scenesApi.list(projectId),
+    enabled: chapters.length > 0,
+  });
+  const chapterSceneMeta = useMemo(() => {
+    const sceneCountByChapter = new Map<string, number>();
+    const writtenChapterIds = new Set<string>();
+
+    allScenes.forEach((scene) => {
+      sceneCountByChapter.set(
+        scene.chapter_id,
+        (sceneCountByChapter.get(scene.chapter_id) ?? 0) + 1,
+      );
+      if (WRITTEN_SCENE_STATUSES.has(scene.status)) {
+        writtenChapterIds.add(scene.chapter_id);
+      }
+    });
+
+    return { sceneCountByChapter, writtenChapterIds };
+  }, [allScenes]);
+  const filterMatchesChapter = useCallback(
+    (chapter: Chapter, filter: OutlineFilter) => {
+      const sceneCount = chapterSceneMeta.sceneCountByChapter.get(chapter.id) ?? 0;
+      const hasScenes = sceneCount > 0;
+      const isWritten = chapterSceneMeta.writtenChapterIds.has(chapter.id);
+
+      switch (filter) {
+        case "no-scenes":
+          return !hasScenes;
+        case "has-scenes":
+          return hasScenes;
+        case "written":
+          return isWritten;
+        case "safe-optimize":
+          return !hasScenes;
+        case "all":
+        default:
+          return true;
+      }
+    },
+    [chapterSceneMeta],
+  );
   const filteredChapters = useMemo(() => {
     const keyword = searchTerm.trim().toLowerCase();
-    if (!keyword) return chapters;
     return chapters.filter((chapter) => {
-      const title = chapter.title?.toLowerCase() ?? "";
-      const summary = chapter.summary?.toLowerCase() ?? "";
-      return title.includes(keyword) || summary.includes(keyword);
+      const matchesKeyword =
+        !keyword ||
+        (chapter.title?.toLowerCase() ?? "").includes(keyword) ||
+        (chapter.summary?.toLowerCase() ?? "").includes(keyword);
+      return matchesKeyword && filterMatchesChapter(chapter, statusFilter);
     });
-  }, [chapters, searchTerm]);
+  }, [chapters, filterMatchesChapter, searchTerm, statusFilter]);
+  const activeGroupKey = useMemo(() => {
+    if (!activeId) return null;
+    const activeChapter = chapters.find((chapter) => chapter.id === activeId);
+    if (!activeChapter) return null;
+    const chapterIndex = activeChapter.chapter_index || 1;
+    const start =
+      Math.floor(Math.max(chapterIndex - 1, 0) / CHAPTER_GROUP_SIZE) * CHAPTER_GROUP_SIZE + 1;
+    return `${start}-${start + CHAPTER_GROUP_SIZE - 1}`;
+  }, [activeId, chapters]);
+  const scopedChapters = useMemo(() => {
+    if (quickView !== "current-group" || !activeGroupKey) {
+      return filteredChapters;
+    }
+    return filteredChapters.filter((chapter) => {
+      const chapterIndex = chapter.chapter_index || 1;
+      const start =
+        Math.floor(Math.max(chapterIndex - 1, 0) / CHAPTER_GROUP_SIZE) * CHAPTER_GROUP_SIZE + 1;
+      return `${start}-${start + CHAPTER_GROUP_SIZE - 1}` === activeGroupKey;
+    });
+  }, [activeGroupKey, filteredChapters, quickView]);
+  const chapterGroups = useMemo(() => {
+    const groups = new Map<
+      string,
+      { key: string; label: string; start: number; end: number; chapters: Chapter[] }
+    >();
+
+    scopedChapters.forEach((chapter) => {
+      const chapterIndex = chapter.chapter_index || 1;
+      const start =
+        Math.floor(Math.max(chapterIndex - 1, 0) / CHAPTER_GROUP_SIZE) * CHAPTER_GROUP_SIZE + 1;
+      const end = start + CHAPTER_GROUP_SIZE - 1;
+      const key = `${start}-${end}`;
+      const existing = groups.get(key);
+
+      if (existing) {
+        existing.chapters.push(chapter);
+        return;
+      }
+
+      groups.set(key, {
+        key,
+        label: `${start}-${end} 章`,
+        start,
+        end,
+        chapters: [chapter],
+      });
+    });
+
+    return Array.from(groups.values()).sort((a, b) => a.start - b.start);
+  }, [scopedChapters]);
+  const filterOptions = useMemo(
+    () => [
+      { key: "all" as const, label: "全部", count: chapters.length },
+      {
+        key: "no-scenes" as const,
+        label: "未生成场景",
+        count: chapters.filter((chapter) => filterMatchesChapter(chapter, "no-scenes")).length,
+      },
+      {
+        key: "has-scenes" as const,
+        label: "已有场景",
+        count: chapters.filter((chapter) => filterMatchesChapter(chapter, "has-scenes")).length,
+      },
+      {
+        key: "written" as const,
+        label: "已写正文",
+        count: chapters.filter((chapter) => filterMatchesChapter(chapter, "written")).length,
+      },
+      {
+        key: "safe-optimize" as const,
+        label: "可安全优化",
+        count: chapters.filter((chapter) => filterMatchesChapter(chapter, "safe-optimize")).length,
+      },
+    ],
+    [chapters, filterMatchesChapter],
+  );
+  const quickViewOptions = useMemo(
+    () => [
+      { key: "all" as const, label: "全部目录" },
+      { key: "current-group" as const, label: "当前分组" },
+      { key: "safe-optimize" as const, label: "可优化优先" },
+      { key: "written" as const, label: "已写正文" },
+    ],
+    [],
+  );
   const active = useMemo(() => {
     if (activeId) {
       const matched = chapters.find((chapter) => chapter.id === activeId);
@@ -170,11 +320,64 @@ export function OutlinePage({ projectId }: { projectId: string }) {
 
   useEffect(() => {
     if (!active?.id) return;
-    chapterItemRefs.current[active.id]?.scrollIntoView({
-      block: "nearest",
-      behavior: "smooth",
+
+    const frame = window.requestAnimationFrame(() => {
+      chapterItemRefs.current[active.id]?.scrollIntoView({
+        block: highlightChapterId === active.id ? "center" : "nearest",
+        behavior: "smooth",
+      });
     });
-  }, [active?.id]);
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [active?.id, chapterGroups, collapsedGroups, highlightChapterId]);
+
+  useEffect(() => {
+    const previousActiveId = previousActiveIdRef.current;
+    previousActiveIdRef.current = active?.id ?? null;
+
+    if (!active || previousActiveId === active.id) return;
+
+    const group = chapterGroups.find((item) =>
+      item.chapters.some((chapter) => chapter.id === active.id),
+    );
+    if (!group || !collapsedGroups[group.key]) return;
+    setCollapsedGroups((current) => ({ ...current, [group.key]: false }));
+  }, [active, chapterGroups, collapsedGroups]);
+
+  useEffect(() => {
+    if (chapterGroups.length === 0) {
+      setCollapsedGroups({});
+      return;
+    }
+
+    setCollapsedGroups((current) => {
+      const next: Record<string, boolean> = {};
+      const currentGroupKey =
+        chapterGroups.find((group) =>
+          group.chapters.some((chapter) => chapter.id === active?.id),
+        )?.key ?? null;
+
+      chapterGroups.forEach((group) => {
+        if (group.key in current) {
+          next[group.key] = current[group.key];
+          return;
+        }
+        next[group.key] = group.key !== currentGroupKey;
+      });
+
+      return next;
+    });
+  }, [active?.id, chapterGroups]);
+
+  useEffect(() => {
+    if (!highlightChapterId) return;
+    const timer = window.setTimeout(() => {
+      setHighlightChapterId((current) =>
+        current === highlightChapterId ? null : current,
+      );
+    }, 2200);
+    return () => window.clearTimeout(timer);
+  }, [highlightChapterId]);
 
   // 当前激活章节的 scene_plan 任务（按 input_payload.chapter_id 精确匹配）
   const latestSceneJob = jobs.find(
@@ -193,13 +396,25 @@ export function OutlinePage({ projectId }: { projectId: string }) {
     queryFn: () => scenesApi.list(projectId, active?.id),
     enabled: !!active,
   });
+  const activeSceneStats = useMemo(() => {
+    if (!active) {
+      return { count: 0, isSafeToOptimize: false, hasWrittenScene: false };
+    }
+    const count = chapterSceneMeta.sceneCountByChapter.get(active.id) ?? scenes.length;
+    return {
+      count,
+      isSafeToOptimize: count === 0,
+      hasWrittenScene: chapterSceneMeta.writtenChapterIds.has(active.id),
+    };
+  }, [active, chapterSceneMeta, scenes.length]);
 
   const invalidateRevisionTargets = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: chaptersKey });
     queryClient.invalidateQueries({ queryKey: scenesKey });
+    queryClient.invalidateQueries({ queryKey: allScenesKey });
     queryClient.invalidateQueries({ queryKey: jobsKey });
     queryClient.invalidateQueries({ queryKey: projectKey });
-  }, [queryClient, chaptersKey, scenesKey, jobsKey, projectKey]);
+  }, [queryClient, chaptersKey, scenesKey, allScenesKey, jobsKey, projectKey]);
 
   const openOutlineRevision = () => {
     setRevisionConfig({
@@ -239,10 +454,11 @@ export function OutlinePage({ projectId }: { projectId: string }) {
           queryClient.invalidateQueries({ queryKey: projectKey });
         } else if (jobType === "generate_scene_plan") {
           queryClient.invalidateQueries({ queryKey: scenesKey });
+          queryClient.invalidateQueries({ queryKey: allScenesKey });
         }
       }
     },
-    [queryClient, jobsKey, chaptersKey, projectKey, scenesKey],
+    [queryClient, jobsKey, chaptersKey, projectKey, scenesKey, allScenesKey],
   );
   useProjectEvents(projectId, { onMessage: handleProjectEvent });
 
@@ -261,6 +477,7 @@ export function OutlinePage({ projectId }: { projectId: string }) {
     onSuccess: () => {
       toast.success("已提交场景计划生成任务");
       queryClient.invalidateQueries({ queryKey: scenesKey });
+      queryClient.invalidateQueries({ queryKey: allScenesKey });
       queryClient.invalidateQueries({ queryKey: jobsKey });
     },
     onError: (e: unknown) => {
@@ -280,6 +497,8 @@ export function OutlinePage({ projectId }: { projectId: string }) {
       return;
     }
     setActiveId(matched.id);
+    setHighlightChapterId(matched.id);
+    setQuickView("all");
   }, [chapters, jumpChapter]);
 
   return (
@@ -356,18 +575,18 @@ export function OutlinePage({ projectId }: { projectId: string }) {
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
+            <div className="space-y-1.5 rounded-2xl border border-slate-200 bg-slate-50/45 p-1.5">
               <label className="relative block">
-                <Search className="absolute left-3 top-3.5 size-4 text-slate-400" />
+                <Search className="absolute left-2.5 top-2.5 size-3 text-slate-400" />
                 <input
                   value={searchTerm}
                   onChange={(event) => setSearchTerm(event.target.value)}
                   placeholder="搜索章节标题或摘要"
-                  className="h-11 w-full rounded-2xl border border-slate-200 bg-white py-2.5 pl-10 pr-3 text-sm outline-none focus:border-indigo-500"
+                  className="h-7.5 w-full rounded-lg border border-slate-200 bg-white py-1 pl-8 pr-2.5 text-xs outline-none focus:border-indigo-500"
                 />
               </label>
-              <div className="flex items-center gap-2">
-                <span className="shrink-0 text-xs font-semibold text-slate-500">跳到章节</span>
+              <div className="flex items-center gap-1">
+                <span className="shrink-0 text-[11px] font-semibold text-slate-500">跳到章节</span>
                 <input
                   value={jumpChapter}
                   onChange={(event) => setJumpChapter(event.target.value)}
@@ -376,17 +595,83 @@ export function OutlinePage({ projectId }: { projectId: string }) {
                   }}
                   inputMode="numeric"
                   placeholder="输入章节号"
-                  className="h-10 min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-indigo-500"
+                  className="h-7.5 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2.5 text-xs outline-none focus:border-indigo-500"
                 />
-                <Button variant="secondary" onClick={jumpToChapter}>
+                <Button
+                  variant="secondary"
+                  className="h-7 rounded-lg px-2 text-[10px] font-medium text-slate-600"
+                  onClick={jumpToChapter}
+                >
                   跳转
                 </Button>
+              </div>
+              <div className="space-y-1 rounded-lg border border-slate-200 bg-white/85 p-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-400">
+                    按进度筛选
+                  </span>
+                  <span className="text-[9px] text-slate-400">快速定位</span>
+                </div>
+                <div className="grid grid-cols-2 gap-1">
+                  {filterOptions.map((option) => (
+                    <button
+                      key={option.key}
+                      type="button"
+                      onClick={() => setStatusFilter(option.key)}
+                      className={`inline-flex min-h-7 items-center justify-between rounded-full border px-2 py-0.5 text-[10px] font-semibold transition ${
+                        statusFilter === option.key
+                          ? "border-indigo-200 bg-indigo-50 text-indigo-700"
+                          : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900"
+                      }`}
+                    >
+                      <span className="truncate">{option.label}</span>
+                      <span className="ml-1 shrink-0 text-[9px] text-slate-400">{option.count}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-1 rounded-lg border border-slate-200 bg-white/85 p-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-400">
+                    快捷视图
+                  </span>
+                  <span className="text-[9px] text-slate-400">当前范围</span>
+                </div>
+                <div className="grid grid-cols-2 gap-1">
+                  {quickViewOptions.map((option) => (
+                    <button
+                      key={option.key}
+                      type="button"
+                      onClick={() => {
+                        setQuickView(option.key);
+                        if (option.key === "safe-optimize") {
+                          setStatusFilter("safe-optimize");
+                        } else if (option.key === "written") {
+                          setStatusFilter("written");
+                        } else if (
+                          statusFilter === "safe-optimize" ||
+                          statusFilter === "written"
+                        ) {
+                          setStatusFilter("all");
+                        }
+                      }}
+                      className={`inline-flex min-h-7 items-center justify-center rounded-full border px-2 py-0.5 text-[10px] font-semibold transition ${
+                        quickView === option.key
+                          ? "border-slate-900 bg-slate-900 text-white"
+                          : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900"
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2">
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
-              <span>显示 {filteredChapters.length} / {chapters.length} 章</span>
-              {active ? <span>当前：第 {active.chapter_index} 章</span> : null}
+                <span>显示 {scopedChapters.length} / {chapters.length} 章</span>
+                <span>{chapterGroups.length > 0 ? `${chapterGroups.length} 个分组` : "0 个分组"}</span>
+                {active ? <span>当前：第 {active.chapter_index} 章</span> : null}
               </div>
             </div>
             {chapters.length === 0 ? (
@@ -398,42 +683,106 @@ export function OutlinePage({ projectId }: { projectId: string }) {
               </div>
             ) : (
               <div className="max-h-[70vh] space-y-2 overflow-y-auto rounded-2xl border border-slate-100 bg-slate-50/40 p-2 pr-1">
-                {filteredChapters.map((chapter) => (
-                  <button
-                    key={chapter.id}
-                    ref={(node) => {
-                      chapterItemRefs.current[chapter.id] = node;
-                    }}
-                    type="button"
-                    onClick={() => setActiveId(chapter.id)}
-                    className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
-                      active?.id === chapter.id
-                        ? "border-indigo-300 bg-indigo-50 shadow-sm shadow-indigo-100 ring-1 ring-indigo-100"
-                        : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
-                              active?.id === chapter.id
-                                ? "bg-indigo-600 text-white"
-                                : "bg-slate-100 text-slate-600"
-                            }`}
-                          >
-                            #{chapter.chapter_index}
-                          </span>
-                          <p className="truncate text-sm font-bold text-slate-950">{chapter.title}</p>
+                {chapterGroups.map((group) => {
+                  const isCollapsed = collapsedGroups[group.key] ?? false;
+                  return (
+                    <div key={group.key} className="rounded-2xl border border-slate-200 bg-white/90 p-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCollapsedGroups((current) => ({
+                            ...current,
+                            [group.key]: !isCollapsed,
+                          }))
+                        }
+                        className="sticky top-0 z-10 flex w-full items-center justify-between gap-3 rounded-xl border border-transparent bg-white/95 px-2 py-2 text-left backdrop-blur hover:bg-slate-50"
+                      >
+                        <div>
+                          <p className="text-sm font-bold text-slate-900">{group.label}</p>
+                          <p className="text-xs text-slate-500">
+                            {group.chapters.length} 章 · 第 {group.start} 章到第{" "}
+                            {Math.min(group.end, chapters[chapters.length - 1]?.chapter_index ?? group.end)} 章
+                          </p>
                         </div>
-                        <p className="mt-1 line-clamp-1 text-xs text-slate-500">
-                          {chapter.summary || "—"}
-                        </p>
-                      </div>
-                      <StatusBadge status={chapter.status as never} />
+                        <div className="flex items-center gap-2 text-slate-500">
+                          <Badge tone="slate">{group.chapters.length}</Badge>
+                          {isCollapsed ? (
+                            <ChevronDown className="size-4" />
+                          ) : (
+                            <ChevronUp className="size-4" />
+                          )}
+                        </div>
+                      </button>
+                      {!isCollapsed ? (
+                        <div className="mt-2 space-y-2">
+                          {group.chapters.map((chapter) => {
+                            const sceneCount =
+                              chapterSceneMeta.sceneCountByChapter.get(chapter.id) ?? 0;
+                            const isWritten = chapterSceneMeta.writtenChapterIds.has(chapter.id);
+
+                            return (
+                              <button
+                                key={chapter.id}
+                                ref={(node) => {
+                                  chapterItemRefs.current[chapter.id] = node;
+                                }}
+                                type="button"
+                                onClick={() => setActiveId(chapter.id)}
+                                className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
+                                  active?.id === chapter.id && highlightChapterId === chapter.id
+                                    ? "border-indigo-300 bg-gradient-to-r from-amber-50 to-indigo-50 shadow-sm shadow-amber-100 ring-2 ring-amber-200"
+                                    : highlightChapterId === chapter.id
+                                      ? "border-amber-300 bg-amber-50 shadow-sm shadow-amber-100 ring-2 ring-amber-200"
+                                      : active?.id === chapter.id
+                                        ? "border-indigo-300 bg-indigo-50 shadow-sm shadow-indigo-100 ring-1 ring-indigo-100"
+                                        : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
+                                }`}
+                              >
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <div className="flex items-center gap-2">
+                                      <span
+                                        className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                                          active?.id === chapter.id
+                                            ? "bg-indigo-600 text-white"
+                                            : "bg-slate-100 text-slate-600"
+                                        }`}
+                                      >
+                                        #{chapter.chapter_index}
+                                      </span>
+                                      <p className="truncate text-sm font-bold text-slate-950">
+                                        {chapter.title}
+                                      </p>
+                                    </div>
+                                    <p className="mt-1 line-clamp-1 text-xs text-slate-500">
+                                      {chapter.summary || "—"}
+                                    </p>
+                                    <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                                      <span className="rounded-full bg-slate-100 px-2 py-0.5">
+                                        {sceneCount > 0 ? `${sceneCount} 个场景` : "未生成场景"}
+                                      </span>
+                                      {isWritten ? (
+                                        <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-700">
+                                          已写正文
+                                        </span>
+                                      ) : null}
+                                      {sceneCount === 0 ? (
+                                        <span className="rounded-full bg-violet-50 px-2 py-0.5 text-violet-700">
+                                          可安全优化
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                  <StatusBadge status={chapter.status as never} />
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : null}
                     </div>
-                  </button>
-                ))}
+                  );
+                })}
               </div>
             )}
           </CardContent>
@@ -464,9 +813,12 @@ export function OutlinePage({ projectId }: { projectId: string }) {
                 >
                   下一章 <ChevronRight className="size-3.5" />
                 </Button>
-                <Badge tone={scenes.length > 0 ? "amber" : "violet"}>
-                  {scenes.length > 0 ? "已有场景，自动应用会受限" : "可安全优化"}
+                <Badge tone={activeSceneStats.isSafeToOptimize ? "violet" : "amber"}>
+                  {activeSceneStats.isSafeToOptimize
+                    ? "可安全优化"
+                    : `已有 ${activeSceneStats.count} 个场景，自动应用会受限`}
                 </Badge>
+                {activeSceneStats.hasWrittenScene ? <Badge tone="green">已写正文</Badge> : null}
                 <Button size="sm" variant="secondary" onClick={() => openChapterRevision(active)}>
                   <Sparkles className="size-3.5" /> AI 优化
                 </Button>
