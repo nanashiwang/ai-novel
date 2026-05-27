@@ -1,8 +1,8 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { RefreshCw, Sparkles, Wand2 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { ChevronLeft, ChevronRight, RefreshCw, Search, Sparkles, Wand2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Badge, StatusBadge } from "@/components/ui/badge";
@@ -44,8 +44,12 @@ export function OutlinePage({ projectId }: { projectId: string }) {
     queryKey: chaptersKey,
     queryFn: () => chaptersApi.list(projectId),
   });
-  const chapters = [...chapterRows].sort(
-    (a, b) => (a.chapter_index ?? 0) - (b.chapter_index ?? 0),
+  const chapters = useMemo(
+    () =>
+      [...chapterRows].sort(
+        (a, b) => (a.chapter_index ?? 0) - (b.chapter_index ?? 0),
+      ),
+    [chapterRows],
   );
   const { data: project } = useQuery({
     queryKey: projectKey,
@@ -116,10 +120,61 @@ export function OutlinePage({ projectId }: { projectId: string }) {
   });
 
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [jumpChapter, setJumpChapter] = useState("");
   const [sceneCountMode, setSceneCountMode] = useState<"auto" | "manual">("auto");
   const [manualSceneCount, setManualSceneCount] = useState(3);
   const [revisionConfig, setRevisionConfig] = useState<RevisionDrawerConfig | null>(null);
-  const active = chapters.find((c) => c.id === activeId) ?? chapters[0];
+  const chapterItemRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const filteredChapters = useMemo(() => {
+    const keyword = searchTerm.trim().toLowerCase();
+    if (!keyword) return chapters;
+    return chapters.filter((chapter) => {
+      const title = chapter.title?.toLowerCase() ?? "";
+      const summary = chapter.summary?.toLowerCase() ?? "";
+      return title.includes(keyword) || summary.includes(keyword);
+    });
+  }, [chapters, searchTerm]);
+  const active = useMemo(() => {
+    if (activeId) {
+      const matched = chapters.find((chapter) => chapter.id === activeId);
+      if (matched && filteredChapters.some((chapter) => chapter.id === matched.id)) {
+        return matched;
+      }
+    }
+    return filteredChapters[0] ?? chapters[0];
+  }, [activeId, chapters, filteredChapters]);
+  const activeIndex = active
+    ? chapters.findIndex((chapter) => chapter.id === active.id)
+    : -1;
+  const previousChapter = activeIndex > 0 ? chapters[activeIndex - 1] : null;
+  const nextChapter =
+    activeIndex >= 0 && activeIndex < chapters.length - 1 ? chapters[activeIndex + 1] : null;
+
+  useEffect(() => {
+    if (!activeId && filteredChapters[0]) {
+      setActiveId(filteredChapters[0].id);
+    }
+  }, [activeId, filteredChapters]);
+
+  useEffect(() => {
+    if (!active && filteredChapters[0]) {
+      setActiveId(filteredChapters[0].id);
+      return;
+    }
+    if (!activeId || !active) return;
+    if (!filteredChapters.some((chapter) => chapter.id === activeId) && filteredChapters[0]) {
+      setActiveId(filteredChapters[0].id);
+    }
+  }, [active, activeId, filteredChapters]);
+
+  useEffect(() => {
+    if (!active?.id) return;
+    chapterItemRefs.current[active.id]?.scrollIntoView({
+      block: "nearest",
+      behavior: "smooth",
+    });
+  }, [active?.id]);
 
   // 当前激活章节的 scene_plan 任务（按 input_payload.chapter_id 精确匹配）
   const latestSceneJob = jobs.find(
@@ -213,6 +268,20 @@ export function OutlinePage({ projectId }: { projectId: string }) {
     },
   });
 
+  const jumpToChapter = useCallback(() => {
+    const target = Number(jumpChapter);
+    if (!Number.isInteger(target) || target <= 0) {
+      toast.error("请输入有效章节号");
+      return;
+    }
+    const matched = chapters.find((chapter) => chapter.chapter_index === target);
+    if (!matched) {
+      toast.error(`未找到第 ${target} 章`);
+      return;
+    }
+    setActiveId(matched.id);
+  }, [chapters, jumpChapter]);
+
   return (
     <div className="space-y-6">
       <ProjectHeader projectId={projectId} />
@@ -277,39 +346,124 @@ export function OutlinePage({ projectId }: { projectId: string }) {
 
       <div className="grid gap-4 xl:grid-cols-[0.75fr_1.25fr]">
         <Card>
-          <CardHeader>
-            <CardTitle>章节大纲树</CardTitle>
+          <CardHeader className="border-b border-slate-100 pb-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <CardTitle>章节大纲树</CardTitle>
+                <p className="mt-1 text-sm text-slate-500">像目录一样快速定位章节与切换处理对象。</p>
+              </div>
+              <Badge tone="blue">{chapters.length} 章</Badge>
+            </div>
           </CardHeader>
-          <CardContent className="space-y-3">
+          <CardContent className="space-y-4">
+            <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
+              <label className="relative block">
+                <Search className="absolute left-3 top-3.5 size-4 text-slate-400" />
+                <input
+                  value={searchTerm}
+                  onChange={(event) => setSearchTerm(event.target.value)}
+                  placeholder="搜索章节标题或摘要"
+                  className="h-11 w-full rounded-2xl border border-slate-200 bg-white py-2.5 pl-10 pr-3 text-sm outline-none focus:border-indigo-500"
+                />
+              </label>
+              <div className="flex items-center gap-2">
+                <span className="shrink-0 text-xs font-semibold text-slate-500">跳到章节</span>
+                <input
+                  value={jumpChapter}
+                  onChange={(event) => setJumpChapter(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") jumpToChapter();
+                  }}
+                  inputMode="numeric"
+                  placeholder="输入章节号"
+                  className="h-10 min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-indigo-500"
+                />
+                <Button variant="secondary" onClick={jumpToChapter}>
+                  跳转
+                </Button>
+              </div>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+              <span>显示 {filteredChapters.length} / {chapters.length} 章</span>
+              {active ? <span>当前：第 {active.chapter_index} 章</span> : null}
+              </div>
+            </div>
             {chapters.length === 0 ? (
               <p className="py-8 text-center text-sm text-slate-500">尚未生成章节大纲。</p>
+            ) : filteredChapters.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center">
+                <p className="text-sm font-semibold text-slate-700">没有匹配的章节</p>
+                <p className="mt-1 text-xs text-slate-500">换一个标题关键词，或直接输入章节号跳转。</p>
+              </div>
             ) : (
-              chapters.map((chapter) => (
-                <button
-                  key={chapter.id}
-                  type="button"
-                  onClick={() => setActiveId(chapter.id)}
-                  className={`w-full rounded-2xl border p-4 text-left ${
-                    active?.id === chapter.id ? "border-indigo-300 bg-indigo-50" : "border-slate-200"
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <p className="font-bold text-slate-950">
-                      第 {chapter.chapter_index} 章 · {chapter.title}
-                    </p>
-                    <StatusBadge status={chapter.status as never} />
-                  </div>
-                  <p className="mt-1 text-sm text-slate-500">{chapter.summary}</p>
-                </button>
-              ))
+              <div className="max-h-[70vh] space-y-2 overflow-y-auto rounded-2xl border border-slate-100 bg-slate-50/40 p-2 pr-1">
+                {filteredChapters.map((chapter) => (
+                  <button
+                    key={chapter.id}
+                    ref={(node) => {
+                      chapterItemRefs.current[chapter.id] = node;
+                    }}
+                    type="button"
+                    onClick={() => setActiveId(chapter.id)}
+                    className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
+                      active?.id === chapter.id
+                        ? "border-indigo-300 bg-indigo-50 shadow-sm shadow-indigo-100 ring-1 ring-indigo-100"
+                        : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                              active?.id === chapter.id
+                                ? "bg-indigo-600 text-white"
+                                : "bg-slate-100 text-slate-600"
+                            }`}
+                          >
+                            #{chapter.chapter_index}
+                          </span>
+                          <p className="truncate text-sm font-bold text-slate-950">{chapter.title}</p>
+                        </div>
+                        <p className="mt-1 line-clamp-1 text-xs text-slate-500">
+                          {chapter.summary || "—"}
+                        </p>
+                      </div>
+                      <StatusBadge status={chapter.status as never} />
+                    </div>
+                  </button>
+                ))}
+              </div>
             )}
           </CardContent>
         </Card>
         {active ? (
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle>当前章节大纲</CardTitle>
-              <div className="flex items-center gap-2">
+              <div>
+                <CardTitle>当前章节大纲</CardTitle>
+                <p className="mt-1 text-xs text-slate-500">
+                  第 {active.chapter_index} 章 / 共 {chapters.length} 章
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => previousChapter && setActiveId(previousChapter.id)}
+                  disabled={!previousChapter}
+                >
+                  <ChevronLeft className="size-3.5" /> 上一章
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => nextChapter && setActiveId(nextChapter.id)}
+                  disabled={!nextChapter}
+                >
+                  下一章 <ChevronRight className="size-3.5" />
+                </Button>
                 <Badge tone={scenes.length > 0 ? "amber" : "violet"}>
                   {scenes.length > 0 ? "已有场景，自动应用会受限" : "可安全优化"}
                 </Badge>
