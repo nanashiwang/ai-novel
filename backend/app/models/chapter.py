@@ -44,3 +44,9 @@ class Chapter(Base, TenantMixin, TimestampMixin):
     # 生成 chapters 时一并产出；scene_count 由 len(scene_beats) 决定，无 beat
     # 时回落到调用方指定的 scenes_per_chapter。
     scene_beats: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # Sprint 17-B 节奏调度：
+    # pacing_type ∈ {setup, rising, climax, cool_down, transition, ''}
+    # 控制本章应是"建立 / 上升 / 高潮 / 缓冲 / 过渡"哪一类
+    # emotion_intensity 1-5，配合 pacing_type 给场景密度/对白节奏定调
+    pacing_type: Mapped[str] = mapped_column(String(16), default="")
+    emotion_intensity: Mapped[int] = mapped_column(Integer, default=3)

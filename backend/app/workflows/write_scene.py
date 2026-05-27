@@ -9,6 +9,7 @@ with workflow.unsafe.imports_passed_through():
     from app.workflows.activities import (
         extract_character_state_from_scene,
         extract_plot_thread_changes_from_scene,
+        extract_temporal_state_from_scene,
         extract_world_changes_from_scene,
         mark_job_status,
         run_scene_writing,
@@ -74,6 +75,16 @@ class WriteSceneWorkflow:
                         extract_plot_thread_changes_from_scene,
                         args=[fan_out_payload],
                         start_to_close_timeout=timedelta(minutes=5),
+                        retry_policy=STATUS_ACTIVITY_RETRY,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                # Sprint 17-B 全局时间线：与 world/plot 同步等待
+                try:
+                    await workflow.execute_activity(
+                        extract_temporal_state_from_scene,
+                        args=[fan_out_payload],
+                        start_to_close_timeout=timedelta(minutes=3),
                         retry_policy=STATUS_ACTIVITY_RETRY,
                     )
                 except Exception:  # noqa: BLE001

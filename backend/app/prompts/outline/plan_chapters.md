@@ -11,5 +11,25 @@
      "调查推进，发现关键线索",
      "转折与冲突爆发，留下钩子"]
   3 场是常态；只有信息量极小的过场章才用 2 场，复杂群像章用 4 场。
+- `pacing_type`：本章节奏类型，必须为以下之一：
+    - `setup`：建立角色 / 世界 / 核心冲突；多铺垫，少冲突
+    - `rising`：推进主线，张力上升，加入新冲突
+    - `climax`：关键转折 / 高潮对抗 / 重要揭示
+    - `cool_down`：高潮后缓冲，多内心戏 / 关系修复 / 余韵
+    - `transition`：场景或弧线之间的过渡，多信息传递，少情感张力
+- `emotion_intensity`：1-5 整数，与 pacing_type 匹配：
+    - setup / cool_down / transition：2-3
+    - rising：3-4
+    - climax：5
+
+## 节奏分配硬约束（必须遵守）
+
+1. 前 3 章必须有 `setup`；末 3 章必须出现 `climax` 或 `cool_down` 或 `resolution`-style 章
+2. 每连续 5 章中至多 1 个 `climax`，至少 1 个 `cool_down` 或 `transition`
+3. 不可连续 3 章使用同一 `pacing_type`
+4. 不可连续 2 章 `emotion_intensity = 5`
+5. 全书 `climax` 总数应约等于 `target_chapter_count // 8`（每 8 章左右 1 个大爆点）
+
+违反以上任一规则的大纲不可输出。
 
 输出必须是严格 JSON，不要附加解释。

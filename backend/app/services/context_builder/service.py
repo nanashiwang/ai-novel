@@ -293,6 +293,12 @@ class ContextBuilder:
         chapter_position, chapter_words_written = await self._chapter_progress(
             session, organization_id=organization_id, chapter=chapter, scene=scene
         )
+        temporal_anchor = await self._query_temporal_anchor(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            current_scene_id=scene.id,
+        )
         task_text = self._fmt_scene_task(
             project,
             chapter,
@@ -300,6 +306,7 @@ class ContextBuilder:
             previous_excerpt,
             chapter_position=chapter_position,
             chapter_words_written=chapter_words_written,
+            temporal_anchor=temporal_anchor,
         )
         pov_name = (scene.pov_character_name or "").strip() or None
         scene_query = self._scene_style_query(scene)
@@ -648,23 +655,48 @@ class ContextBuilder:
         """Sprint 16-E3：注入本章 scene_beats（拍点顺序）+ 当前位置标号。
 
         让 writer 在写第 N 场时清楚前后场的功能边界——主动埋伏笔、避免
-        把本应留给后场的信息提前抖出来。无 scene_beats 时返回空串。
+        把本应留给后场的信息提前抖出来。无 scene_beats 时仅输出节奏块。
+
+        Sprint 17-B：附加输出本章 pacing_type + emotion_intensity，让 writer
+        按节奏控制场面密度、对白节奏、信息揭示频率。
         """
         beats = list(chapter.scene_beats or [])
-        if not beats:
-            return ""
-        lines: list[str] = ["本章 scene 拍点（按时间顺序，不要重排或合并）："]
-        marker_idx = position[0] - 1 if position else -1
-        for i, beat in enumerate(beats):
-            prefix = "→ " if i == marker_idx else "  "
-            lines.append(f"{prefix}{i + 1}. {beat}")
-        if position:
-            cur, total = position
-            lines.append(
-                f"你现在在写第 {cur}/{total} 场（标记为 →）。"
-                "之前的场已经写过；之后的场是你写完后续将要写的——"
-                "请只完成本场，不要把后续 beats 的信息提前展开。"
+        pacing_type = (getattr(chapter, "pacing_type", "") or "").strip()
+        emo = int(getattr(chapter, "emotion_intensity", 3) or 3)
+        pacing_line = ""
+        if pacing_type:
+            pacing_hints = {
+                "setup": "建立角色 / 世界 / 核心冲突；多铺垫，少冲突",
+                "rising": "推进主线，张力上升，加入新冲突",
+                "climax": "关键转折 / 高潮对抗 / 重要揭示，必须有强冲突",
+                "cool_down": "高潮后缓冲，多内心戏 / 关系修复 / 余韵，避免再起高潮",
+                "transition": "场景或弧线之间的过渡，多信息传递，少情��张力",
+            }
+            hint = pacing_hints.get(pacing_type, "")
+            pacing_line = (
+                f"\n本章节奏：{pacing_type}（情感强度 {emo}/5）"
+                + (f" — {hint}" if hint else "")
+                + "\n请按此基调控制场面密度、对白节奏与信息揭示频率；"
+                "不要让本章整体情感强度明显偏离节奏标签。"
             )
+        if not beats and not pacing_line:
+            return ""
+        lines: list[str] = []
+        if beats:
+            lines.append("本章 scene 拍点（按时间顺序，不要重排或合并）：")
+            marker_idx = position[0] - 1 if position else -1
+            for i, beat in enumerate(beats):
+                prefix = "→ " if i == marker_idx else "  "
+                lines.append(f"{prefix}{i + 1}. {beat}")
+            if position:
+                cur, total = position
+                lines.append(
+                    f"你现在在写第 {cur}/{total} 场（标记为 →）。"
+                    "之前的场已经写过；之后的场是你写完后续将要写的——"
+                    "请只完成本场，不要把后续 beats 的信息提前展开。"
+                )
+        if pacing_line:
+            lines.append(pacing_line.lstrip("\n"))
         return "\n".join(lines)
 
     def _fmt_scene_task(
@@ -676,6 +708,7 @@ class ContextBuilder:
         *,
         chapter_position: tuple[int, int] | None = None,
         chapter_words_written: int | None = None,
+        temporal_anchor: dict | None = None,
     ) -> str:
         pov_name = (getattr(scene, "pov_character_name", None) or "").strip()
         pov_line = f"POV 视角主角：{pov_name}\n" if pov_name else ""
@@ -720,11 +753,79 @@ class ContextBuilder:
             f"揭示：{scene.reveal}\n"
             f"结尾钩子：{scene.hook}\n"
             + (
+                self._fmt_temporal_anchor(temporal_anchor)
+                if temporal_anchor
+                else ""
+            )
+            + (
                 f"---\n上一场景结尾片段：{previous_excerpt}\n"
                 if previous_excerpt
                 else ""
             )
         )
+
+    @staticmethod
+    def _fmt_temporal_anchor(anchor: dict) -> str:
+        """Sprint 17-B 全局时间线注入。
+
+        anchor 形如 {"day_offset": 12, "time_of_day": "evening",
+        "scene_title": "xxx", "available": True}；
+        available=False 时表示项目还没有任何时间记录（开篇），不注入硬约束。
+        """
+        if not anchor or not anchor.get("available"):
+            return (
+                "---\n故事时间：（项目尚无已记录时间，本场视作开篇基准；"
+                "若不是开篇，请在正文里隐含明确时间锚点）\n"
+            )
+        day = anchor.get("day_offset")
+        tod = anchor.get("time_of_day") or "未指定时段"
+        prev_title = anchor.get("scene_title") or "上一场"
+        return (
+            "---\n"
+            f"故事时间：截至《{prev_title}》（项目内已记录的最新一场），"
+            f"距开篇第 {day} 天，时段 {tod}。\n"
+            "本场必须延续或合理推进（不可凭空跳过/倒退超过 1 天）；"
+            "跨度大时必须在正文显式交代（如'三天后'/'第二天清晨'）；"
+            "若本场属于回忆/闪回，请在叙述中明确标记。\n"
+        )
+
+    async def _query_temporal_anchor(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        current_scene_id: str | None,
+    ) -> dict:
+        """查项目内已记录的最大 in_story_day_offset scene 作为时间锚点。
+
+        排除当前正在写的 scene 本身（其字段可能尚未 extract）。
+        返回 dict: available / day_offset / time_of_day / scene_title。
+        """
+        stmt = (
+            select(Scene)
+            .where(
+                Scene.organization_id == organization_id,
+                Scene.project_id == project_id,
+                Scene.in_story_day_offset.isnot(None),
+            )
+            .order_by(Scene.in_story_day_offset.desc())
+            .limit(1)
+        )
+        if current_scene_id:
+            stmt = stmt.where(Scene.id != current_scene_id)
+        try:
+            row = (await session.execute(stmt)).scalars().first()
+        except Exception:  # noqa: BLE001 - 锚点查失败不阻断主流程
+            return {"available": False}
+        if not row:
+            return {"available": False}
+        return {
+            "available": True,
+            "day_offset": row.in_story_day_offset,
+            "time_of_day": row.time_of_day,
+            "scene_title": row.title,
+        }
 
     async def _fmt_characters(
         self,

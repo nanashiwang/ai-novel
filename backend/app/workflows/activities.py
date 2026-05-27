@@ -309,6 +309,24 @@ async def _run_chapter_in_extracts(
     except Exception:  # noqa: BLE001
         _logger.warning("inchapter_plot_extract_failed", exc_info=True)
 
+    # Sprint 17-B 全局时间线：同步推演结构化时间戳并写回 scenes 表。
+    try:
+        from app.services.temporal_tracker.extract import (  # noqa: PLC0415
+            extract_temporal_state_from_scene as _extract_temporal,
+        )
+
+        await _extract_temporal(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            job_id=job_id,
+            chapter=chapter,
+            scene=scene,
+            draft=draft,
+        )
+    except Exception:  # noqa: BLE001
+        _logger.warning("inchapter_temporal_extract_failed", exc_info=True)
+
 
 _summarize_tasks: set[Any] = set()
 
@@ -1482,6 +1500,8 @@ async def generate_chapter_outline(job: dict[str, Any]) -> dict[str, Any]:
             if item.chapter_index in existing_indices:
                 continue
             chapter_target = item.target_words if item.target_words > 0 else default_target
+            # Sprint 17-B 节奏：归一 emotion_intensity 到 1-5，pacing_type 留空表示未指定
+            emo = max(1, min(int(item.emotion_intensity or 3), 5))
             await chapter_repo.create(
                 organization_id=job_row.organization_id,
                 project_id=job_row.project_id,
@@ -1495,6 +1515,8 @@ async def generate_chapter_outline(job: dict[str, Any]) -> dict[str, Any]:
                 status="planned",
                 target_words=chapter_target,
                 scene_beats=list(item.scene_beats or []),
+                pacing_type=(item.pacing_type or "").strip().lower(),
+                emotion_intensity=emo,
             )
             created += 1
         total_chapters = len(existing) + created
@@ -3013,9 +3035,63 @@ async def extract_plot_thread_changes_from_scene(payload: dict[str, Any]) -> dic
         return {"pending_count": 0, "error": "swallowed"}
 
 
+@activity.defn(name="extract_temporal_state_from_scene")
+async def extract_temporal_state_from_scene(payload: dict[str, Any]) -> dict[str, Any]:
+    """Sprint 17-B 全局时间线：反推当前场的 in_story_day_offset /
+    time_of_day / duration_minutes 并直接写回 scenes 表。
+
+    payload 字段：
+      - scene_id (必填)
+      - job_id   (可选)
+    失败 swallow + warn，不阻断主流程。
+    """
+    from app.services.temporal_tracker.extract import (  # noqa: PLC0415
+        extract_temporal_state_from_scene as _do,
+    )
+
+    scene_id = payload.get("scene_id")
+    job_id = payload.get("job_id")
+    if not scene_id:
+        return {"updated": False, "skipped": "scene_id_missing"}
+
+    try:
+        async with _activity_session() as session:
+            scene = await SceneRepository(session).get(scene_id)
+            if not scene:
+                return {"updated": False, "skipped": "scene_not_found"}
+            chapter = await ChapterRepository(session).get(
+                scene.chapter_id, organization_id=scene.organization_id
+            )
+            if not chapter:
+                return {"updated": False, "skipped": "chapter_not_found"}
+            drafts = list(
+                await DraftVersionRepository(session).list(
+                    organization_id=scene.organization_id,
+                    project_id=scene.project_id,
+                    scene_id=scene.id,
+                    limit=1,
+                )
+            )
+            if not drafts:
+                return {"updated": False, "skipped": "draft_missing"}
+            return await _do(
+                session,
+                organization_id=scene.organization_id,
+                project_id=scene.project_id,
+                job_id=job_id,
+                chapter=chapter,
+                scene=scene,
+                draft=drafts[0],
+            )
+    except Exception:  # noqa: BLE001
+        _logger.warning("extract_temporal_state_activity_failed", exc_info=True)
+        return {"updated": False, "error": "swallowed"}
+
+
 ALL_ACTIVITIES.extend(
     [
         extract_world_changes_from_scene,
         extract_plot_thread_changes_from_scene,
+        extract_temporal_state_from_scene,
     ]
 )

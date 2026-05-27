@@ -116,6 +116,9 @@ class ChapterPlanItem(APIModel):
     # 显式指定的 scenes_per_chapter。
     target_words: int = 0
     scene_beats: list[str] = Field(default_factory=list)
+    # Sprint 17-B 节奏调度：每章节奏标签 + 情感强度（1-5）
+    pacing_type: str = ""
+    emotion_intensity: int = 3
 
     @model_validator(mode="before")
     @classmethod
@@ -310,6 +313,12 @@ class AuditIssueItem(APIModel):
             "long-range": "long_range_continuity",
             "风格漂移": "style_drift",
             "style_drift": "style_drift",
+            "时间线": "temporal_continuity",
+            "时序": "temporal_continuity",
+            "temporal_continuity": "temporal_continuity",
+            "temporal": "temporal_continuity",
+            "节奏": "pacing",
+            "pacing": "pacing",
         }
         return mapping.get(v, v or "continuity")
 

@@ -86,6 +86,11 @@ class AuditorService:
             "- cross_chapter：是否承接上一章遗留（open plot_threads 中的悬念"
             "是否被本章合理推进或显式悬置；前一章结尾出现的关键道具/人物/未完成动作"
             "是否被本章首段承接；若道具数量/位置/状态与上一章末尾矛盾即报）",
+            "- temporal_continuity：是否与上下文「故事时间」段提供的当前日偏移/时段一致；"
+            "未交代过夜的隔日切换、无闪回标注的时间倒退、明显季节矛盾均应报告",
+            "- pacing：本章正文情感强度与场面密度是否符合上下文「本章节奏」段提供的"
+            "pacing_type / emotion_intensity（climax 章���应通篇内心独白；"
+            "cool_down 章不应再起激烈对抗；emotion_intensity=2 章不应出现高强度场面）",
         ]
         if mode == "long_range":
             task_lines.append(
