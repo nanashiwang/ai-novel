@@ -11,9 +11,9 @@ jobs:
     name: backend pytest + lint + eval gate
     runs-on: ubuntu-latest
     env:
-      DATABASE_URL: sqlite+aiosqlite:///:memory:
-      REDIS_URL: memory://
-      JWT_SECRET: ci-secret-min-32-chars-aaaaaaaaaa
+      DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+      REDIS_URL: "memory://"
+      JWT_SECRET: "ci-secret-min-32-chars-aaaaaaaaaa"
       RATE_LIMIT_ENABLED: "false"
     steps:
       - uses: actions/checkout@v4
