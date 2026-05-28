@@ -1666,12 +1666,22 @@ async def _plan_and_persist_scenes_for_chapter(
         effective_expected_words = max(
             400, chapter.target_words // max(1, effective_scene_count)
         )
-    previous_chapter_context = await context_builder.build_previous_chapter_context(
-        session,
-        organization_id=job.organization_id,
-        project_id=job.project_id,
-        chapter=chapter,
-    )
+    # Sprint 17-A：前一章承接上下文是"软增强"，失败不应阻断 scene plan 生成。
+    # 并发 full_novel 场景下 chapter 1 可能尚未写完 scenes，此时降级返回空串。
+    try:
+        previous_chapter_context = await context_builder.build_previous_chapter_context(
+            session,
+            organization_id=job.organization_id,
+            project_id=job.project_id,
+            chapter=chapter,
+        )
+    except Exception:  # noqa: BLE001
+        _logger.warning(
+            "build_previous_chapter_context_failed",
+            exc_info=True,
+            extra={"chapter_id": chapter.id},
+        )
+        previous_chapter_context = ""
     contract = await novel_planner_service.plan_scenes(
         session,
         organization_id=job.organization_id,
@@ -2229,56 +2239,37 @@ async def run_scene_writing(job: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _previous_scene_excerpt(session: AsyncSession, scene: Scene) -> str:
-    """取前一场景的最新 draft 末尾片段，跨章自动回溯到上一章末场。
+    """取同章前一场的最新 draft 末尾 1500 字。
 
     - 同章内：直接取 scene_index - 1 的最新 draft 末尾 1500 字。
-    - 新章首场（scene_index == 1）：回溯到上一章 chapter_index - 1 的最后
-      一个 scene，取其最新 draft 末尾 1500 字，让 writer 能承接前章结尾。
-    - 找不到上一章 / 上一场或没有 draft 时返回空字符串。失败不阻断主流程。
+    - 章首（scene_index <= 1）：返回 ""（跨章衔接由 plan_scenes 阶段的
+      build_previous_chapter_context 在场景规划层注入，不走 writer 路径
+      的 previous_excerpt 段，避免并发场景下 SQLite 锁竞态影响主 transaction）。
+    - 任何 SQL 异常一律降级为空串，不阻断主流程。
     """
+    try:
+        return await _previous_scene_excerpt_impl(session, scene)
+    except Exception:  # noqa: BLE001
+        _logger.warning("previous_scene_excerpt_failed", exc_info=True)
+        return ""
+
+
+async def _previous_scene_excerpt_impl(session: AsyncSession, scene: Scene) -> str:
+    if scene.scene_index <= 1:
+        return ""
     excerpt_chars = 1500
     scene_repo = SceneRepository(session)
     draft_repo = DraftVersionRepository(session)
-
-    prev_scene: Scene | None = None
-    if scene.scene_index > 1:
-        siblings = list(
-            await scene_repo.list(
-                organization_id=scene.organization_id,
-                project_id=scene.project_id,
-                chapter_id=scene.chapter_id,
-            )
+    siblings = list(
+        await scene_repo.list(
+            organization_id=scene.organization_id,
+            project_id=scene.project_id,
+            chapter_id=scene.chapter_id,
         )
-        prev_scene = next(
-            (s for s in siblings if s.scene_index == scene.scene_index - 1), None
-        )
-    else:
-        chap_repo = ChapterRepository(session)
-        cur_chapter = await chap_repo.get(
-            scene.chapter_id, organization_id=scene.organization_id
-        )
-        if cur_chapter and cur_chapter.chapter_index > 1:
-            chapters = list(
-                await chap_repo.list(
-                    organization_id=scene.organization_id,
-                    project_id=scene.project_id,
-                )
-            )
-            prev_chapter = next(
-                (c for c in chapters if c.chapter_index == cur_chapter.chapter_index - 1),
-                None,
-            )
-            if prev_chapter:
-                prev_scenes = list(
-                    await scene_repo.list(
-                        organization_id=scene.organization_id,
-                        project_id=scene.project_id,
-                        chapter_id=prev_chapter.id,
-                    )
-                )
-                if prev_scenes:
-                    prev_scene = max(prev_scenes, key=lambda s: s.scene_index)
-
+    )
+    prev_scene = next(
+        (s for s in siblings if s.scene_index == scene.scene_index - 1), None
+    )
     if not prev_scene:
         return ""
     drafts = list(
@@ -2291,7 +2282,6 @@ async def _previous_scene_excerpt(session: AsyncSession, scene: Scene) -> str:
     )
     if not drafts:
         return ""
-    # base list 默认按 created_at desc 排序，第 0 个就是最新
     return drafts[0].content[-excerpt_chars:]
 
 
