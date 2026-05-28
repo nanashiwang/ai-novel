@@ -11,7 +11,6 @@ from app.core.exceptions import NotFoundError
 from app.core.permissions import require_permission
 from app.repositories import (
     CharacterRepository,
-    DraftVersionRepository,
     GenerationJobRepository,
     NovelSpecRepository,
     PlotThreadRepository,

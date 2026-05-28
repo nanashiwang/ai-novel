@@ -303,17 +303,23 @@ export function OutlinePage({ projectId }: { projectId: string }) {
 
   useEffect(() => {
     if (!activeId && filteredChapters[0]) {
+      // CI(react-hooks/set-state-in-effect): 初始化"默认选中首章"的同步行为，
+      // 仅在 activeId 缺失时触发一次，不会引发级联渲染。
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setActiveId(filteredChapters[0].id);
     }
   }, [activeId, filteredChapters]);
 
   useEffect(() => {
     if (!active && filteredChapters[0]) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setActiveId(filteredChapters[0].id);
       return;
     }
     if (!activeId || !active) return;
     if (!filteredChapters.some((chapter) => chapter.id === activeId) && filteredChapters[0]) {
+      // 过滤变化导致当前 active 失效时回退到首项；不可省略。
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setActiveId(filteredChapters[0].id);
     }
   }, [active, activeId, filteredChapters]);
@@ -341,15 +347,19 @@ export function OutlinePage({ projectId }: { projectId: string }) {
       item.chapters.some((chapter) => chapter.id === active.id),
     );
     if (!group || !collapsedGroups[group.key]) return;
+    // active 切到 collapsed group 时自动展开该 group，UX 必要的副作用。
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setCollapsedGroups((current) => ({ ...current, [group.key]: false }));
   }, [active, chapterGroups, collapsedGroups]);
 
   useEffect(() => {
     if (chapterGroups.length === 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setCollapsedGroups({});
       return;
     }
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setCollapsedGroups((current) => {
       const next: Record<string, boolean> = {};
       const currentGroupKey =

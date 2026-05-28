@@ -916,10 +916,8 @@ class ContextBuilder:
             block_lines.append(f"  末尾原文片段：…{tail}")
             blocks.append("\n".join(block_lines))
 
-        # 提取本章已用过的高频名词（粗粒度，避免本场重复描写）
-        used_nouns = self._collect_used_nouns(prior, draft_repo, content_cache=None)
-        # （上面 _collect_used_nouns 实现可能依赖 async 重复查询；为避免再发
-        # SQL，下面把信号简化为基于已加载 blocks 的字符串频次。）
+        # 高频"标志性短语"信号：基于已加载 blocks 的字符串频次（粗粒度），
+        # 让 writer 注意避免本场再重复描写。不发额外 SQL。
         joined_text = "\n".join(blocks)
         repeat_warnings = self._frequent_terms_warning(joined_text)
 
@@ -936,11 +934,6 @@ class ContextBuilder:
                 + repeat_warnings
             )
         return "\n\n".join(parts)
-
-    @staticmethod
-    def _collect_used_nouns(prior, draft_repo, content_cache):
-        """占位：当前不真实查询，仅保持函数签名以便未来扩展。"""
-        return []
 
     @staticmethod
     def _frequent_terms_warning(text: str, *, top_k: int = 5, min_count: int = 3) -> str:
@@ -1179,7 +1172,9 @@ class ContextBuilder:
                 continue
             tag = "[POV] " if pov is not None and name == pov else ""
             count_label = (
-                f"基线 + 最近 {len(entries)} 场动作" if milestone_line else f"最近 {len(entries)} 场动作"
+                f"基线 + 最近 {len(entries)} 场动作"
+                if milestone_line
+                else f"最近 {len(entries)} 场动作"
             )
             lines.append(f"{tag}【{name}】{count_label}：")
             if milestone_line:

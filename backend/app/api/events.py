@@ -154,7 +154,10 @@ async def project_events_stream(
     project_id: str,
     request: Request,
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    token: Annotated[str | None, Query(description="access token，EventSource 不支持自定义 header")] = None,
+    token: Annotated[
+        str | None,
+        Query(description="access token，EventSource 不支持自定义 header"),
+    ] = None,
 ):
     """打开项目维度的 SSE 流。
 

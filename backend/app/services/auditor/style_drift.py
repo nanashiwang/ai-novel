@@ -15,7 +15,6 @@ from __future__ import annotations
 import logging
 import math
 import re
-from typing import Iterable
 
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
