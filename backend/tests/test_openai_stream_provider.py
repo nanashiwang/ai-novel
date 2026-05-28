@@ -17,8 +17,9 @@ def _sse_body(chunks: list[str], with_done: bool = True) -> bytes:
 
     lines = []
     for ch in chunks:
+        content_json = json.dumps(ch, ensure_ascii=False)
         payload = (
-            f'{{"choices":[{{"delta":{{"content":{json.dumps(ch, ensure_ascii=False)}}},"index":0}}]}}'
+            f'{{"choices":[{{"delta":{{"content":{content_json}}},"index":0}}]}}'
         )
         lines.append(f"data: {payload}\n")
     if with_done:

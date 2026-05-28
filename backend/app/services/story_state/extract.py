@@ -184,7 +184,11 @@ async def extract_story_state_from_scene(
                 name=name,
                 summary=str(entry.get("summary") or "").strip(),
                 status=str(entry.get("status") or "active").strip() or "active",
-                value_json=entry.get("value_json") if isinstance(entry.get("value_json"), dict) else {},
+                value_json=(
+                    entry.get("value_json")
+                    if isinstance(entry.get("value_json"), dict)
+                    else {}
+                ),
                 priority=max(0, int(entry.get("priority") or 0)),
                 is_hard_constraint=bool(entry.get("is_hard_constraint")),
                 source_excerpt=str(entry.get("source_excerpt") or "").strip(),

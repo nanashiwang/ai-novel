@@ -253,7 +253,7 @@ async def test_mark_job_status_publishes_event(monkeypatch):
         await asyncio.wait_for(consumer, timeout=2.0)
     except asyncio.TimeoutError:
         consumer.cancel()
-        raise AssertionError(f"未收到 SSE 事件，实际接收={received}")
+        raise AssertionError(f"未收到 SSE 事件，实际接收={received}") from None
 
     assert received[0]["type"] == "job.running"
     assert received[0]["payload"]["job_id"] == "job_evt_1"

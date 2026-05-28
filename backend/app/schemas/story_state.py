@@ -91,7 +91,7 @@ class StoryStatePatchRequest(APIModel):
     reason: str | None = None
 
     @model_validator(mode="after")
-    def validate_non_empty(self) -> "StoryStatePatchRequest":
+    def validate_non_empty(self) -> StoryStatePatchRequest:
         if all(
             value is None
             for value in (

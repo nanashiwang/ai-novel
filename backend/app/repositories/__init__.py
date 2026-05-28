@@ -5,11 +5,11 @@
 """
 from __future__ import annotations
 
-from sqlalchemy import select
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from app.models.audit_log import AdminAuditLog
 from app.models.chapter import Chapter, Volume
+from app.models.chapter_state_requirement import ChapterStateRequirement
 from app.models.character import Character
 from app.models.character_revision import CharacterRevision
 from app.models.continuity_issue import ContinuityIssue
@@ -34,10 +34,9 @@ from app.models.revision import (
     RevisionSession,
 )
 from app.models.scene import Scene
-from app.models.style_sample import StyleSample
 from app.models.story_state_history import StoryStateHistory
 from app.models.story_state_item import StoryStateItem
-from app.models.chapter_state_requirement import ChapterStateRequirement
+from app.models.style_sample import StyleSample
 from app.models.system_setting import SystemSetting
 from app.models.usage import UsageEvent
 from app.models.user import User

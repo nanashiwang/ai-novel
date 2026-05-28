@@ -315,8 +315,8 @@ async def test_generate_outline_appended_batch_preserves_model_chapter_indices_o
         )
     await db_session.commit()
 
-    from app.services.novel_planner.service import novel_planner_service
     from app.schemas.story_generation import ChapterPlanContract, ChapterPlanItem
+    from app.services.novel_planner.service import novel_planner_service
 
     async def _reversed_batch(*args, **kwargs):
         return ChapterPlanContract(
