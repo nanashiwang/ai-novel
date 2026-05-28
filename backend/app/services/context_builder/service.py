@@ -1695,7 +1695,7 @@ class ContextBuilder:
 
         Sprint 17-A 防漂移（距离衰减）：当 current_chapter_index 给定时，
         按"章距分桶"召回（避免 1000 章后 prompt 爆炸）：
-        - L2（章摘要）：仅取距离当前章 4-10 章的（近距）
+        - L2（章摘要）：仅取距离当前章 1-10 章的（近距，含上一章）
         - L3（弧摘要）：仅取距离当前章 11-50 章的（中距）
         - L4（书摘要）：任意距离（长程兜底）
         L1（场摘要）由 recent_scenes 段单独处理，本段不取。
@@ -1772,8 +1772,9 @@ class ContextBuilder:
         current_chapter_index: int | None,
         limit: int,
     ) -> list[MemoryEntry]:
-        """章距分桶：L2 取 4-10、L3 取 11-50、L4 永远参与。
+        """章距分桶：L2 取 1-10、L3 取 11-50、L4 永远参与。
 
+        L2 下限 = 1（含上一章，覆盖近距离全部），上限 = 10；超出由 L3 接力。
         current_chapter_index 为 None 时退化为不过滤，返回 rows[:limit]。
         """
         if current_chapter_index is None:
@@ -1795,7 +1796,7 @@ class ContextBuilder:
                 continue  # 未来章节摘要不参与
             if level == "L3" and 11 <= distance <= 50:
                 bucketed["L3"].append(row)
-            elif level == "L2" and 4 <= distance <= 10:
+            elif level == "L2" and 1 <= distance <= 10:
                 bucketed["L2"].append(row)
         # 分配：L4 最多 1 条，L3 最多 limit//2 + 1，L2 取剩余
         l4_take = bucketed["L4"][:1]

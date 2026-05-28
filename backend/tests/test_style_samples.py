@@ -222,5 +222,6 @@ async def test_segment_budget_sums_to_one():
     assert abs(total - 1.0) < 1e-6, total
     # 新段必须存在且预算为 0.06
     assert _SEGMENT_BUDGET_PCT["style_samples"] == pytest.approx(0.06)
-    # memory_recall 合并 C2+C4+C5+E3 后落到 0.06（chapter_arc 又挤了 0.02 出来）
-    assert _SEGMENT_BUDGET_PCT["memory_recall"] == pytest.approx(0.06)
+    # Sprint 17-B/C 多次重平衡后 memory_recall 落到 0.02（intra_chapter_progress、
+    # story_states 等新段挤占 untrusted 段空间，符合 trusted 92% / untrusted 8% 原则）
+    assert _SEGMENT_BUDGET_PCT["memory_recall"] == pytest.approx(0.02)

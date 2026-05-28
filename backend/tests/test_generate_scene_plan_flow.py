@@ -525,6 +525,7 @@ async def test_context_builder_assemble_basic_segments(db_session):
         "world_actions",
         "plot_threads",
         "plot_actions",
+        "story_states",
         "recent_scenes",
         "arc_summaries",
         "information_visibility",
