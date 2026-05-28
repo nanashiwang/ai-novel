@@ -44,6 +44,7 @@ SegmentLabel = Literal[
     "hard_constraints",
     "task",
     "chapter_arc",
+    "intra_chapter_progress",
     "characters",
     "character_actions",
     "style_samples",
@@ -72,23 +73,25 @@ _SEGMENT_BUDGET_PCT: dict[SegmentLabel, float] = {
     "hard_constraints": 0.12,
     "task": 0.12,
     "chapter_arc": 0.04,
-    "characters": 0.09,
-    "character_actions": 0.09,
+    "intra_chapter_progress": 0.06,
+    "characters": 0.08,
+    "character_actions": 0.07,
     "style_samples": 0.06,
-    "world_rules": 0.08,
+    "world_rules": 0.07,
     "world_actions": 0.06,
     "plot_threads": 0.06,
     "plot_actions": 0.06,
     "recent_scenes": 0.05,
     "arc_summaries": 0.06,
     "information_visibility": 0.05,
-    "memory_recall": 0.06,
+    "memory_recall": 0.04,
 }
 
 _TRUSTED_LABELS: set[SegmentLabel] = {
     "hard_constraints",
     "task",
     "chapter_arc",
+    "intra_chapter_progress",
     "characters",
     "character_actions",
     "style_samples",
@@ -330,6 +333,17 @@ class ContextBuilder:
             (
                 "chapter_arc",
                 self._fmt_chapter_arc(chapter, chapter_position),
+                True,
+            ),
+            (
+                "intra_chapter_progress",
+                await self._fmt_intra_chapter_progress(
+                    session,
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    chapter=chapter,
+                    current_scene=scene,
+                ),
                 True,
             ),
             (
@@ -826,6 +840,142 @@ class ContextBuilder:
             "time_of_day": row.time_of_day,
             "scene_title": row.title,
         }
+
+    async def _fmt_intra_chapter_progress(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        chapter: Chapter,
+        current_scene: Scene,
+        tail_chars: int = 400,
+        max_scenes: int = 6,
+    ) -> str:
+        """Sprint 17-C 章内连贯：注入本章已 drafted 的前序场的结构化进展。
+
+        每场输出：title / exit_state / hook / 末尾原文 N 字 / 已使用的核心
+        名词（粗粒度，便于让 writer 避免重复描写）。让本场写作时能完整
+        感知"同一章内前面发生了什么"，而不是只看上一场末尾 1500 字。
+
+        排除当前 scene。空（开篇首场或前序场无 draft）时返回空串，
+        ContextBuilder.to_prompt() 会自动跳过整段。
+        """
+        from app.repositories import SceneRepository  # noqa: PLC0415
+
+        scene_repo = SceneRepository(session)
+        prior = list(
+            await scene_repo.list(
+                organization_id=organization_id,
+                project_id=project_id,
+                chapter_id=chapter.id,
+            )
+        )
+        prior = [
+            s
+            for s in prior
+            if s.scene_index < current_scene.scene_index and s.id != current_scene.id
+        ]
+        if not prior:
+            return ""
+        prior.sort(key=lambda s: s.scene_index)
+        prior = prior[-max_scenes:]
+
+        draft_repo = DraftVersionRepository(session)
+        blocks: list[str] = []
+        for s in prior:
+            drafts = list(
+                await draft_repo.list(
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    scene_id=s.id,
+                    status="draft",
+                    limit=1,
+                )
+            )
+            content = drafts[0].content.strip() if drafts and drafts[0].content else ""
+            if not content:
+                # 没有 draft：仅放出计划字段（hook / exit_state），不放原文
+                planned_bits: list[str] = [
+                    f"场 {s.scene_index}《{s.title}》（未写完）"
+                ]
+                if s.exit_state:
+                    planned_bits.append(f"  退场状态：{s.exit_state}")
+                if s.hook:
+                    planned_bits.append(f"  钩子：{s.hook}")
+                blocks.append("\n".join(planned_bits))
+                continue
+            tail = content[-tail_chars:].replace("\n", " ").strip()
+            block_lines = [
+                f"场 {s.scene_index}《{s.title}》"
+            ]
+            if s.exit_state:
+                block_lines.append(f"  退场状态：{s.exit_state[:160]}")
+            if s.hook:
+                block_lines.append(f"  钩子：{s.hook[:120]}")
+            block_lines.append(f"  末尾原文片段：…{tail}")
+            blocks.append("\n".join(block_lines))
+
+        # 提取本章已用过的高频名词（粗粒度，避免本场重复描写）
+        used_nouns = self._collect_used_nouns(prior, draft_repo, content_cache=None)
+        # （上面 _collect_used_nouns 实现可能依赖 async 重复查询；为避免再发
+        # SQL，下面把信号简化为基于已加载 blocks 的字符串频次。）
+        joined_text = "\n".join(blocks)
+        repeat_warnings = self._frequent_terms_warning(joined_text)
+
+        header = (
+            "## 本章前序场已发生（共 "
+            + str(len(prior))
+            + " 场，按时间顺序）：你必须延续以下展开，"
+            "不要重复已写过的动作 / 道具 / 揭示，不要遗忘已留下的钩子。"
+        )
+        parts = [header, joined_text]
+        if repeat_warnings:
+            parts.append(
+                "提示：以下词在本章前序场已多次出现，请避免在本场再重复描写：\n"
+                + repeat_warnings
+            )
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _collect_used_nouns(prior, draft_repo, content_cache):
+        """占位：当前不真实查询，仅保持函数签名以便未来扩展。"""
+        return []
+
+    @staticmethod
+    def _frequent_terms_warning(text: str, *, top_k: int = 5, min_count: int = 3) -> str:
+        """从前序场已生成内容中提取高频"标志性短语"以警告 writer 避免再用。
+
+        粗粒度实现：2-4 字汉字片段（连续汉字）按频次排序，过滤掉常见
+        虚词；只挑出现 ≥ min_count 次的前 top_k 个。这是启发式信号，
+        让模型注意而非硬约束。
+        """
+        if not text:
+            return ""
+        import re  # noqa: PLC0415
+        from collections import Counter  # noqa: PLC0415
+
+        # 抽取所有 2-4 字汉字片段
+        candidates = re.findall(r"[\u4e00-\u9fff]{2,4}", text)
+        stop = {
+            "什么", "这种", "那种", "已经", "可能", "知道", "看着", "说着",
+            "想着", "因为", "所以", "但是", "如果", "就是", "这是", "那是",
+            "不是", "没有", "时候", "一个", "一下", "一边", "一种", "我们",
+            "他们", "她们", "你们", "自己", "起来", "下去", "出来", "过去",
+            "回来", "上去", "下来", "进去", "进来", "刚才", "现在", "然后",
+        }
+        filtered = [w for w in candidates if w not in stop]
+        if not filtered:
+            return ""
+        counter = Counter(filtered)
+        hot = [
+            (term, cnt)
+            for term, cnt in counter.most_common(top_k * 4)
+            if cnt >= min_count
+        ][:top_k]
+        if not hot:
+            return ""
+        return "、".join(f"「{t}」({c}次)" for t, c in hot)
 
     async def _fmt_characters(
         self,

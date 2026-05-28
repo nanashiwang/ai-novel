@@ -91,6 +91,11 @@ class AuditorService:
             "- pacing：本章正文情感强度与场面密度是否符合上下文「本章节奏」段提供的"
             "pacing_type / emotion_intensity（climax 章���应通篇内心独白；"
             "cool_down 章不应再起激烈对抗；emotion_intensity=2 章不应出现高强度场面）",
+            "- intra_chapter_continuity：本场是否承接同章前序场（参考上下文"
+            "「本章前序场已发生」段）；是否漏接前序场留下的钩子、重复了前序场"
+            "已用的标志性动作/道具/揭示、人物语气/状态与同章前场是否矛盾、"
+            "过渡到本场的方式（时间/地点/视角切换）是否自然；若上下文未提供"
+            "该段（即本场是章首），不要报告 intra_chapter_continuity",
         ]
         if mode == "long_range":
             task_lines.append(

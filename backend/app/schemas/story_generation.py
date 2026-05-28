@@ -319,6 +319,10 @@ class AuditIssueItem(APIModel):
             "temporal": "temporal_continuity",
             "节奏": "pacing",
             "pacing": "pacing",
+            "章内": "intra_chapter_continuity",
+            "章内连贯": "intra_chapter_continuity",
+            "intra_chapter": "intra_chapter_continuity",
+            "intra_chapter_continuity": "intra_chapter_continuity",
         }
         return mapping.get(v, v or "continuity")
 
