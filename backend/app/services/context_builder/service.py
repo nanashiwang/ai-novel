@@ -29,11 +29,13 @@ from app.models.memory import MemoryEntry
 from app.models.project import NovelSpec, Project
 from app.models.scene import Scene
 from app.repositories import (
+    ChapterStateRequirementRepository,
     CharacterRepository,
     DraftVersionRepository,
     MemoryRepository,
     PlotThreadRepository,
     PlotThreadRevisionRepository,
+    StoryStateRepository,
     WorldItemRepository,
     WorldItemRevisionRepository,
 )
@@ -52,6 +54,7 @@ SegmentLabel = Literal[
     "world_actions",
     "plot_threads",
     "plot_actions",
+    "story_states",
     "recent_scenes",
     "arc_summaries",
     "information_visibility",
@@ -80,11 +83,12 @@ _SEGMENT_BUDGET_PCT: dict[SegmentLabel, float] = {
     "world_rules": 0.07,
     "world_actions": 0.06,
     "plot_threads": 0.06,
-    "plot_actions": 0.06,
-    "recent_scenes": 0.05,
-    "arc_summaries": 0.06,
+    "plot_actions": 0.05,
+    "story_states": 0.05,
+    "recent_scenes": 0.04,
+    "arc_summaries": 0.05,
     "information_visibility": 0.05,
-    "memory_recall": 0.04,
+    "memory_recall": 0.02,
 }
 
 _TRUSTED_LABELS: set[SegmentLabel] = {
@@ -99,6 +103,7 @@ _TRUSTED_LABELS: set[SegmentLabel] = {
     "world_actions",
     "plot_threads",
     "plot_actions",
+    "story_states",
     "recent_scenes",
     "arc_summaries",
     "information_visibility",
@@ -236,6 +241,17 @@ class ContextBuilder:
             (
                 "plot_actions",
                 await self._fmt_plot_actions(session, organization_id, project_id),
+                True,
+            ),
+            (
+                "story_states",
+                await self._fmt_story_states(
+                    session,
+                    organization_id,
+                    project_id,
+                    chapter_id=chapter.id,
+                    current_chapter_index=chapter.chapter_index,
+                ),
                 True,
             ),
             (
@@ -398,6 +414,18 @@ class ContextBuilder:
             (
                 "plot_actions",
                 await self._fmt_plot_actions(session, organization_id, project_id),
+                True,
+            ),
+            (
+                "story_states",
+                await self._fmt_story_states(
+                    session,
+                    organization_id,
+                    project_id,
+                    chapter_id=chapter.id,
+                    current_chapter_index=chapter.chapter_index,
+                    focus_names=list(scene.characters or []),
+                ),
                 True,
             ),
             (
@@ -1375,6 +1403,188 @@ class ContextBuilder:
                 "并给出原因，(c) 重置预期收线章节。不要继续无视。"
             )
         return "\n".join(parts)
+
+    async def _fmt_story_states(
+        self,
+        session: AsyncSession,
+        organization_id: str,
+        project_id: str,
+        *,
+        chapter_id: str | None = None,
+        current_chapter_index: int | None = None,
+        focus_names: list[str] | None = None,
+        limit: int = 14,
+    ) -> str:
+        """格式化关键状态与章节承接要求。
+
+        目标：把“后续生成不能忘”的显式状态项重新喂回 prompt。
+        - 优先保留硬约束、高优先级、最近更新项
+        - 对当前 scene 登场人物同名的 character 状态项加权
+        - 同时附带当前章节已有 requirement，提醒模型显式承接
+        """
+        focus_set = {name.strip() for name in (focus_names or []) if name and name.strip()}
+        state_repo = StoryStateRepository(session)
+        req_repo = ChapterStateRequirementRepository(session)
+        rows = list(
+            await state_repo.list_filtered(
+                organization_id=organization_id,
+                project_id=project_id,
+                limit=max(limit * 3, 30),
+            )
+        )
+        if not rows and not chapter_id:
+            return ""
+
+        chapter_ids = {
+            chapter_ref
+            for item in rows
+            for chapter_ref in (item.source_chapter_id, item.updated_in_chapter_id)
+            if chapter_ref
+        }
+        chapter_index_by_id: dict[str, int] = {}
+        if chapter_ids:
+            chapter_rows = (
+                await session.execute(
+                    select(Chapter.id, Chapter.chapter_index).where(Chapter.id.in_(chapter_ids))
+                )
+            ).all()
+            chapter_index_by_id = {row[0]: int(row[1] or 0) for row in chapter_rows}
+
+        ranked = self._select_story_state_items(
+            rows,
+            current_chapter_index=current_chapter_index,
+            chapter_index_by_id=chapter_index_by_id,
+            focus_names=focus_set,
+            limit=limit,
+        )
+        requirement_rows = []
+        if chapter_id:
+            requirement_rows = list(
+                await req_repo.list_for_chapter(
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    chapter_id=chapter_id,
+                )
+            )[:8]
+
+        sections: list[str] = []
+        if requirement_rows:
+            sections.append("本章承接要求：")
+            for req in requirement_rows:
+                sections.append(
+                    f"· [{req.requirement_type}] {req.summary}"
+                    f"（优先级 {int(req.priority or 0)}）"
+                )
+
+        if ranked:
+            if sections:
+                sections.append("")
+            sections.append("关键状态项：")
+            for item in ranked:
+                prefix = "[硬约束] " if item.is_hard_constraint else ""
+                entity = item.entity_type
+                name = item.name
+                summary = item.summary or "—"
+                status = item.status or "active"
+                payload = self._stringify_value(item.value_json or {})
+                detail = ""
+                if payload and payload != "{}":
+                    detail = f"；细节={payload}"
+                sections.append(
+                    f"· {prefix}[{entity}/{item.state_type}] {name}"
+                    f"（{status}，P{int(item.priority or 0)}）：{summary}{detail}"
+                )
+
+        return "\n".join(sections)
+
+    @classmethod
+    def _select_story_state_items(
+        cls,
+        rows: list[object],
+        *,
+        current_chapter_index: int | None,
+        chapter_index_by_id: dict[str, int],
+        focus_names: set[str],
+        limit: int,
+    ) -> list[object]:
+        def _distance_bucket(item: object) -> int:
+            if current_chapter_index is None:
+                return 0
+            chapter_ref = (
+                getattr(item, "updated_in_chapter_id", None)
+                or getattr(item, "source_chapter_id", None)
+                or ""
+            )
+            state_chapter_index = chapter_index_by_id.get(chapter_ref, 0)
+            if not state_chapter_index:
+                return 5
+            distance = max(0, current_chapter_index - state_chapter_index)
+            if distance == 0:
+                return 0
+            if distance <= 3:
+                return 1
+            if distance <= 10:
+                return 2
+            if distance <= 30:
+                return 3
+            return 4
+
+        def _rank(item: object) -> tuple[int, int, int, str]:
+            focus_bonus = 0
+            if (
+                getattr(item, "entity_type", "") == "character"
+                and getattr(item, "name", "") in focus_names
+            ):
+                focus_bonus = 50
+            hard_bonus = 100 if bool(getattr(item, "is_hard_constraint", False)) else 0
+            priority = int(getattr(item, "priority", 0) or 0)
+            bucket = _distance_bucket(item)
+            recency_bonus_map = {
+                0: 60,
+                1: 40,
+                2: 20,
+                3: 5,
+                4: -10,
+                5: 0,
+            }
+            updated_at = getattr(item, "updated_at", None) or getattr(item, "created_at", None)
+            updated_key = updated_at.isoformat() if hasattr(updated_at, "isoformat") else ""
+            return (
+                hard_bonus + focus_bonus + priority + recency_bonus_map.get(bucket, 0),
+                -bucket,
+                priority,
+                updated_key,
+            )
+
+        ranked_all = sorted(rows, key=_rank, reverse=True)
+        type_quota: dict[str, int] = {
+            "foreshadow": 3,
+            "identity": 2,
+            "skill": 2,
+            "grudge": 2,
+            "oath": 2,
+            "artifact": 2,
+        }
+        ranked: list[object] = []
+        picked_ids: set[str] = set()
+        type_counts: dict[str, int] = {}
+        for item in ranked_all:
+            if len(ranked) >= limit:
+                break
+            item_id = getattr(item, "id", "")
+            if not item_id or item_id in picked_ids:
+                continue
+            state_type = str(getattr(item, "state_type", "") or "")
+            quota = type_quota.get(state_type, 2)
+            if (
+                type_counts.get(state_type, 0) >= quota
+                and not bool(getattr(item, "is_hard_constraint", False))
+            ):
+                continue
+            ranked.append(item)
+            picked_ids.add(item_id)
+            type_counts[state_type] = type_counts.get(state_type, 0) + 1
+        return ranked
 
     async def _fmt_recent_scene_summaries(
         self,

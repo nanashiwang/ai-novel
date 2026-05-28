@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from sqlalchemy import select
+from sqlalchemy import delete
 
 from app.models.audit_log import AdminAuditLog
 from app.models.chapter import Chapter, Volume
@@ -34,6 +35,9 @@ from app.models.revision import (
 )
 from app.models.scene import Scene
 from app.models.style_sample import StyleSample
+from app.models.story_state_history import StoryStateHistory
+from app.models.story_state_item import StoryStateItem
+from app.models.chapter_state_requirement import ChapterStateRequirement
 from app.models.system_setting import SystemSetting
 from app.models.usage import UsageEvent
 from app.models.user import User
@@ -142,6 +146,131 @@ class StyleSampleRepository(BaseRepository[StyleSample]):
     id_prefix = "style"
 
 
+class StoryStateRepository(BaseRepository[StoryStateItem]):
+    model = StoryStateItem
+    id_prefix = "state"
+
+    async def get_by_identity(
+        self,
+        *,
+        organization_id: str,
+        project_id: str,
+        entity_type: str,
+        entity_id: str | None,
+        state_type: str,
+        name: str,
+    ) -> StoryStateItem | None:
+        stmt = select(StoryStateItem).where(
+            StoryStateItem.organization_id == organization_id,
+            StoryStateItem.project_id == project_id,
+            StoryStateItem.entity_type == entity_type,
+            StoryStateItem.state_type == state_type,
+            StoryStateItem.name == name,
+        )
+        if entity_id:
+            stmt = stmt.where(StoryStateItem.entity_id == entity_id)
+        else:
+            stmt = stmt.where(StoryStateItem.entity_id.is_(None))
+        result = await self.session.execute(stmt.limit(1))
+        return result.scalar_one_or_none()
+
+    async def list_filtered(
+        self,
+        *,
+        organization_id: str,
+        project_id: str,
+        state_type: str | None = None,
+        status: str | None = None,
+        entity_type: str | None = None,
+        hard_only: bool = False,
+        limit: int = 100,
+    ):
+        stmt = select(StoryStateItem).where(
+            StoryStateItem.organization_id == organization_id,
+            StoryStateItem.project_id == project_id,
+        )
+        if state_type:
+            stmt = stmt.where(StoryStateItem.state_type == state_type)
+        if status:
+            stmt = stmt.where(StoryStateItem.status == status)
+        if entity_type:
+            stmt = stmt.where(StoryStateItem.entity_type == entity_type)
+        if hard_only:
+            stmt = stmt.where(StoryStateItem.is_hard_constraint.is_(True))
+        stmt = stmt.order_by(
+            StoryStateItem.is_hard_constraint.desc(),
+            StoryStateItem.priority.desc(),
+            StoryStateItem.updated_at.desc(),
+        ).limit(limit)
+        result = await self.session.execute(stmt)
+        return result.scalars().all()
+
+
+class StoryStateHistoryRepository(BaseRepository[StoryStateHistory]):
+    model = StoryStateHistory
+    id_prefix = "state_history"
+
+    async def list_for_state(
+        self,
+        *,
+        organization_id: str,
+        project_id: str,
+        state_item_id: str,
+    ):
+        stmt = (
+            select(StoryStateHistory)
+            .where(
+                StoryStateHistory.organization_id == organization_id,
+                StoryStateHistory.project_id == project_id,
+                StoryStateHistory.state_item_id == state_item_id,
+            )
+            .order_by(StoryStateHistory.created_at.desc())
+        )
+        result = await self.session.execute(stmt)
+        return result.scalars().all()
+
+
+class ChapterStateRequirementRepository(BaseRepository[ChapterStateRequirement]):
+    model = ChapterStateRequirement
+    id_prefix = "state_req"
+
+    async def list_for_chapter(
+        self,
+        *,
+        organization_id: str,
+        project_id: str,
+        chapter_id: str,
+        order_by=None,
+    ):
+        stmt = select(ChapterStateRequirement).where(
+            ChapterStateRequirement.organization_id == organization_id,
+            ChapterStateRequirement.project_id == project_id,
+            ChapterStateRequirement.chapter_id == chapter_id,
+        )
+        if order_by is not None:
+            stmt = stmt.order_by(order_by)
+        else:
+            stmt = stmt.order_by(ChapterStateRequirement.priority.desc())
+        result = await self.session.execute(stmt)
+        return result.scalars().all()
+
+    async def delete_for_chapter(
+        self,
+        *,
+        organization_id: str,
+        project_id: str,
+        chapter_id: str,
+    ) -> int:
+        stmt = delete(ChapterStateRequirement).where(
+            ChapterStateRequirement.organization_id == organization_id,
+            ChapterStateRequirement.project_id == project_id,
+            ChapterStateRequirement.chapter_id == chapter_id,
+        )
+        result = await self.session.execute(stmt)
+        await self.session.flush()
+        return int(result.rowcount or 0)
+
+
 class GenerationJobRepository(BaseRepository[GenerationJob]):
     model = GenerationJob
     id_prefix = "job"
@@ -242,6 +371,7 @@ __all__ = [
     "ChapterRepository",
     "CharacterRepository",
     "CharacterRevisionRepository",
+    "ChapterStateRequirementRepository",
     "ContinuityIssueRepository",
     "DraftVersionRepository",
     "ExportFileRepository",
@@ -267,6 +397,8 @@ __all__ = [
     "RevisionAppliedChangeRepository",
     "SceneRepository",
     "StyleSampleRepository",
+    "StoryStateHistoryRepository",
+    "StoryStateRepository",
     "SystemSettingRepository",
     "UsageEventRepository",
     "UserRepository",

@@ -309,6 +309,24 @@ async def _run_chapter_in_extracts(
     except Exception:  # noqa: BLE001
         _logger.warning("inchapter_plot_extract_failed", exc_info=True)
 
+    try:
+        from app.services.story_state.extract import (  # noqa: PLC0415
+            extract_story_state_from_scene as _extract_story_state,
+        )
+
+        await _extract_story_state(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            job_id=job_id,
+            chapter=chapter,
+            scene=scene,
+            draft=draft,
+            created_by=created_by,
+        )
+    except Exception:  # noqa: BLE001
+        _logger.warning("inchapter_story_state_extract_failed", exc_info=True)
+
     # Sprint 17-B 全局时间线：同步推演结构化时间戳并写回 scenes 表。
     try:
         from app.services.temporal_tracker.extract import (  # noqa: PLC0415
