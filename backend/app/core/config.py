@@ -91,6 +91,9 @@ class Settings(BaseSettings):
     # 设为 True 时会与 single scene workflow 行为对齐，每场后同步落 pending
     # revisions——延迟会涨 30-50%，但与 character_revisions 审核闭环更紧。
     inchapter_extract_enabled: bool = False
+    # Sprint 17-C 方案 3：默认关；True 时章末所有 scene drafted 后自动触发
+    # 整章润色 pass（24K tokens/章成本高）。手动 API 触发不受此开关限制。
+    chapter_polish_enabled: bool = False
 
     @property
     def cors_origin_list(self) -> list[str]:

@@ -11,6 +11,7 @@ from app.core.exceptions import NotFoundError
 from app.core.permissions import require_permission
 from app.repositories import (
     CharacterRepository,
+    DraftVersionRepository,
     GenerationJobRepository,
     NovelSpecRepository,
     PlotThreadRepository,
@@ -61,6 +62,13 @@ class GenerateScenePlanRequest(APIModel):
 
 class AuditSceneRequest(APIModel):
     estimate_words: int = Field(default=500, ge=1, le=5000)
+
+
+class PolishChapterRequest(APIModel):
+    """Sprint 17-C 方案 3：章后润色 pass 请求。force=True 时绕过 dedupe。"""
+
+    force: bool = False
+    estimate_words: int = Field(default=24000, ge=1000, le=80000)
 
 
 class RewriteSceneRequest(APIModel):
@@ -415,6 +423,147 @@ async def audit_scene(
     response = GenerationJobResponse.model_validate(job)
     await db.commit()
     return response
+
+
+@router.post(
+    "/{project_id}/chapters/{chapter_id}/polish",
+    response_model=GenerationJobResponse,
+    status_code=202,
+)
+async def polish_chapter(
+    project_id: str,
+    chapter_id: str,
+    payload: PolishChapterRequest,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    """Sprint 17-C 方案 3：触发整章 N 场 draft 的章后润色。"""
+    job = await generation_service.create_polish_chapter_job(
+        db,
+        user,
+        tenant,
+        project_id=project_id,
+        chapter_id=chapter_id,
+        force=payload.force,
+        estimate_words=payload.estimate_words,
+    )
+    await db.refresh(job)
+    response = GenerationJobResponse.model_validate(job)
+    await db.commit()
+    return response
+
+
+class PolishedDraftResponse(APIModel):
+    id: str
+    chapter_id: str
+    version_type: str
+    status: str
+    content: str
+    word_count: int
+    content_format: str
+    created_at: str
+
+
+@router.get(
+    "/{project_id}/chapters/{chapter_id}/polished",
+    response_model=PolishedDraftResponse | None,
+)
+async def get_polished_draft(
+    project_id: str,
+    chapter_id: str,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    """返回该章最新的 polish 版（含 status=draft 或 applied）；不存在时返回 null。"""
+    require_permission(user, "project:read", tenant)
+    from sqlalchemy import desc, select  # noqa: PLC0415
+
+    from app.models.draft_version import DraftVersion  # noqa: PLC0415
+
+    stmt = (
+        select(DraftVersion)
+        .where(
+            DraftVersion.organization_id == tenant.organization_id,
+            DraftVersion.project_id == project_id,
+            DraftVersion.chapter_id == chapter_id,
+            DraftVersion.version_type == "polish",
+            DraftVersion.status.in_(["draft", "applied"]),
+        )
+        .order_by(desc(DraftVersion.created_at))
+        .limit(1)
+    )
+    row = (await db.execute(stmt)).scalars().first()
+    if not row:
+        return None
+    return PolishedDraftResponse(
+        id=row.id,
+        chapter_id=row.chapter_id or chapter_id,
+        version_type=row.version_type,
+        status=row.status,
+        content=row.content,
+        word_count=row.word_count,
+        content_format=row.content_format,
+        created_at=row.created_at.isoformat() if row.created_at else "",
+    )
+
+
+@router.post(
+    "/{project_id}/chapters/{chapter_id}/polished/{draft_id}/accept",
+    response_model=PolishedDraftResponse,
+)
+async def accept_polished_draft(
+    project_id: str,
+    chapter_id: str,
+    draft_id: str,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    """接受指定润色版：标 status='applied'，同章其它 polish drafts 标 'superseded'。
+    scene-level drafts 不动（保留追溯）。"""
+    require_permission(user, "project:update", tenant)
+    from sqlalchemy import select, update  # noqa: PLC0415
+
+    from app.models.draft_version import DraftVersion  # noqa: PLC0415
+
+    stmt = select(DraftVersion).where(
+        DraftVersion.id == draft_id,
+        DraftVersion.organization_id == tenant.organization_id,
+        DraftVersion.project_id == project_id,
+        DraftVersion.chapter_id == chapter_id,
+        DraftVersion.version_type == "polish",
+    )
+    target = (await db.execute(stmt)).scalars().first()
+    if not target:
+        raise NotFoundError("polish_draft_not_found")
+    # 同章其它 polish drafts → superseded
+    await db.execute(
+        update(DraftVersion)
+        .where(
+            DraftVersion.organization_id == tenant.organization_id,
+            DraftVersion.project_id == project_id,
+            DraftVersion.chapter_id == chapter_id,
+            DraftVersion.version_type == "polish",
+            DraftVersion.id != draft_id,
+            DraftVersion.status == "draft",
+        )
+        .values(status="superseded")
+    )
+    target.status = "applied"
+    await db.flush()
+    await db.commit()
+    return PolishedDraftResponse(
+        id=target.id,
+        chapter_id=target.chapter_id or chapter_id,
+        version_type=target.version_type,
+        status=target.status,
+        content=target.content,
+        word_count=target.word_count,
+        content_format=target.content_format,
+        created_at=target.created_at.isoformat() if target.created_at else "",
+    )
 
 
 @router.post(

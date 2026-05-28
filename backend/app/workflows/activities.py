@@ -613,6 +613,72 @@ def _spawn_style_drift_check(
     task.add_done_callback(_summarize_tasks.discard)
 
 
+def _spawn_chapter_polish(
+    *,
+    organization_id: str,
+    project_id: str,
+    chapter_id: str,
+    user_id: str | None,
+    source: str,
+) -> None:
+    """Sprint 17-C 方案 3：fire-and-forget 触发整章润色 pass。
+
+    默认 settings.chapter_polish_enabled=False；调用方需先判断。失败
+    swallow + warn，不阻塞主流程。
+    """
+    if not chapter_id:
+        return
+    try:
+        import asyncio as _asyncio  # noqa: PLC0415
+
+        loop = _asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    async def _run() -> None:
+        try:
+            from app.services.polisher import polish_chapter as _do  # noqa: PLC0415
+
+            async with AsyncSessionLocal() as session:
+                chapter = await ChapterRepository(session).get(
+                    chapter_id, organization_id=organization_id
+                )
+                if not chapter:
+                    return
+                project = await ProjectRepository(session).get(
+                    chapter.project_id, organization_id=organization_id
+                )
+                if not project:
+                    return
+                spec = await NovelSpecRepository(session).get_by(
+                    organization_id=organization_id, project_id=project.id
+                )
+                if not spec:
+                    return
+                await _do(
+                    session,
+                    organization_id=organization_id,
+                    project_id=project.id,
+                    job_id=None,
+                    project=project,
+                    spec=spec,
+                    chapter=chapter,
+                    created_by=user_id or "system",
+                    force=False,
+                )
+                await session.commit()
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "chapter_polish_spawn_failed",
+                exc_info=True,
+                extra={"chapter_id": chapter_id, "source": source},
+            )
+
+    task = loop.create_task(_run())
+    _summarize_tasks.add(task)
+    task.add_done_callback(_summarize_tasks.discard)
+
+
 async def _delete_project_rows(
     session: AsyncSession,
     job: GenerationJob,
@@ -1992,6 +2058,16 @@ async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
                     chapter_index=chap.chapter_index,
                     source="write_scene_drafts",
                 )
+        # Sprint 17-C 方案 3：章末润色 pass（默认关闭）
+        if get_settings().chapter_polish_enabled:
+            for chapter_id in touched_chapter_ids:
+                _spawn_chapter_polish(
+                    organization_id=job_row.organization_id,
+                    project_id=job_row.project_id,
+                    chapter_id=chapter_id,
+                    user_id=job_row.user_id,
+                    source="write_scene_drafts",
+                )
         return {
             "draft_count": created + reused,
             "created_draft_count": created,
@@ -2572,6 +2648,15 @@ async def write_chapter_scenes_for_full_novel(
                     chapter_index=chapter.chapter_index,
                     source="write_chapter_scenes_for_full_novel",
                 )
+            # Sprint 17-C 方案 3：章末润色 pass（默认关闭）
+            if get_settings().chapter_polish_enabled:
+                _spawn_chapter_polish(
+                    organization_id=job_row.organization_id,
+                    project_id=job_row.project_id,
+                    chapter_id=chapter.id,
+                    user_id=job_row.user_id,
+                    source="write_chapter_scenes_for_full_novel",
+                )
         # 父 job 的 consumed_quota 临时累加，给后续 chapter 预算判断用；
         # 真正落 usage_event 由 finalize_full_novel 处理。
         job_row.consumed_quota = (job_row.consumed_quota or 0) + words_written
@@ -2724,6 +2809,60 @@ async def audit_scene(job: dict[str, Any]) -> dict[str, Any]:
             "draft_id": latest_draft.id,
             "issue_count": len(created_issues),
             "issues": created_issues,
+        }
+
+
+@activity.defn(name="polish_chapter")
+async def polish_chapter(job: dict[str, Any]) -> dict[str, Any]:
+    """Sprint 17-C 方案 3：整章 N 场 draft 一次性润色，落 version_type='polish' draft。
+
+    input_payload 字段：
+      - chapter_id (必填)
+      - force (可选 bool，默认 False)：True 时绕过 dedupe
+
+    返回：
+      - chapter_id / draft_id / word_count / status (skipped|created|dedup)
+    任何失败 swallow + warn，绝不破坏主 job。
+    """
+    from app.services.polisher import polish_chapter as _do  # noqa: PLC0415
+
+    async with _activity_session() as session:
+        job_row = await _load_job(session, job["id"])
+        payload = job_row.input_payload or {}
+        chapter_id = payload.get("chapter_id")
+        if not chapter_id:
+            raise NotFoundError("chapter_id_required")
+        project = await _load_project(session, job_row)
+        spec = await _load_spec(session, job_row)
+        chapter = await ChapterRepository(session).get(
+            chapter_id, organization_id=job_row.organization_id
+        )
+        if not chapter or chapter.project_id != project.id:
+            raise NotFoundError("chapter_not_found")
+        draft = await _do(
+            session,
+            organization_id=job_row.organization_id,
+            project_id=job_row.project_id,
+            job_id=job_row.id,
+            project=project,
+            spec=spec,
+            chapter=chapter,
+            created_by=job_row.user_id,
+            force=bool(payload.get("force")),
+        )
+        await _settle_job_usage(session, job_row, amount=job_row.reserved_quota)
+        if draft is None:
+            return {
+                "chapter_id": chapter.id,
+                "draft_id": None,
+                "status": "skipped",
+                "reason": "no_drafts_or_quality_or_dedup",
+            }
+        return {
+            "chapter_id": chapter.id,
+            "draft_id": draft.id,
+            "word_count": draft.word_count,
+            "status": "created",
         }
 
 

@@ -674,6 +674,74 @@ class GenerationService:
             )
         return job
 
+    async def create_polish_chapter_job(
+        self,
+        session: AsyncSession,
+        user: CurrentUser,
+        tenant: TenantContext,
+        *,
+        project_id: str,
+        chapter_id: str,
+        force: bool = False,
+        estimate_words: int = 24000,
+    ) -> GenerationJob:
+        """Sprint 17-C 方案 3：触发整章 N 场 draft 的章后润色 pass。"""
+        require_permission(user, "generation_job:create", tenant)
+        require_entitlement(tenant, "generation:scene")
+        project = await ProjectRepository(session).get(
+            project_id, organization_id=tenant.organization_id
+        )
+        if not project:
+            raise NotFoundError("project_not_found")
+        ensure_same_tenant(project.organization_id, tenant)
+
+        estimate_words = max(1, estimate_words)
+        dedupe = _compute_dedupe_key(
+            organization_id=tenant.organization_id,
+            project_id=project_id,
+            job_type="polish_chapter",
+            target_id=chapter_id,
+            canonical_input={"force": bool(force)},
+        )
+        existing = await _find_active_by_dedupe_key(
+            session,
+            organization_id=tenant.organization_id,
+            dedupe_key=dedupe,
+        )
+        if existing is not None:
+            return existing
+
+        job = await GenerationJobRepository(session).create(
+            organization_id=tenant.organization_id,
+            user_id=user.id,
+            project_id=project_id,
+            job_type="polish_chapter",
+            status="queued",
+            priority=PLAN_QUEUE.get(tenant.plan_code, "queue_standard"),
+            plan_code=tenant.plan_code,
+            reserved_quota=estimate_words,
+            consumed_quota=0,
+            input_payload={
+                "chapter_id": chapter_id,
+                "force": bool(force),
+            },
+            dedupe_key=dedupe,
+        )
+        await quota_service.reserve_quota(
+            session,
+            tenant,
+            job_id=job.id,
+            quota_key="monthly_generated_words",
+            amount=estimate_words,
+        )
+        job.workflow_id = workflow_starter.start_polish_chapter({"id": job.id})
+        await session.flush()
+        if workflow_starter.is_local_workflow(job.workflow_id):
+            session.sync_session.info.setdefault("after_commit_tasks", []).append(
+                ("polish_chapter", job.id)
+            )
+        return job
+
     async def retry_job(
         self,
         session: AsyncSession,

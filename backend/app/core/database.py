@@ -47,6 +47,8 @@ def _run_after_commit_tasks(session) -> None:
             workflow_starter.run_local_audit_scene(job_id)
         elif task_type == "rewrite_scene":
             workflow_starter.run_local_rewrite_scene(job_id)
+        elif task_type == "polish_chapter":
+            workflow_starter.run_local_polish_chapter(job_id)
         elif task_type == "full_novel":
             workflow_starter.run_local_generate_full_novel(job_id)
         elif task_type == "write_scene":
