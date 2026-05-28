@@ -14,7 +14,9 @@ import { toPlainText } from "@/components/ui/markdown";
 import { ProjectHeader } from "@/components/screens/project/project-frame";
 import { severityClass, severityTone } from "@/components/screens/project/shared/severity";
 import { labelForVersion } from "@/components/screens/project/shared/version-label";
+import { BatchJobProgressDialog } from "@/components/batch/BatchJobProgressDialog";
 import {
+  batchApi,
   chaptersApi,
   continuityIssuesApi,
   jobsApi,
@@ -228,6 +230,35 @@ export function VersionsPage({ projectId }: { projectId: string }) {
     },
   });
 
+  // 批量审稿 / 批量重写
+  const [batchJobId, setBatchJobId] = useState<string | null>(null);
+  const batchAudit = useMutation({
+    mutationFn: () => batchApi.auditAllScenes(projectId, {}),
+    onSuccess: (job) => {
+      toast.success("已启动批量审稿");
+      setBatchJobId(job.id);
+      queryClient.invalidateQueries({ queryKey: jobsKey });
+    },
+    onError: (e: unknown) => {
+      toast.error(e instanceof ApiError ? e.message : "提交失败");
+    },
+  });
+  const batchRewrite = useMutation({
+    mutationFn: () =>
+      batchApi.rewriteAllWithIssues(projectId, {
+        severity_threshold: "medium",
+        target_words: 1200,
+      }),
+    onSuccess: (job) => {
+      toast.success("已启动批量重写");
+      setBatchJobId(job.id);
+      queryClient.invalidateQueries({ queryKey: jobsKey });
+    },
+    onError: (e: unknown) => {
+      toast.error(e instanceof ApiError ? e.message : "提交失败");
+    },
+  });
+
   return (
     <div className="space-y-6">
       <ProjectHeader projectId={projectId} />
@@ -238,13 +269,39 @@ export function VersionsPage({ projectId }: { projectId: string }) {
             已接入项目版本链与连续性审稿问题，可按章节、场景查看和处理。
           </p>
         </div>
-        <Link
-          href={`/studio/projects/${projectId}/write`}
-          className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800"
-        >
-          <FileClock className="size-4" />
-          打开写作工作台
-        </Link>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="secondary"
+            onClick={() => batchAudit.mutate()}
+            disabled={batchAudit.isPending}
+          >
+            {batchAudit.isPending ? (
+              <RefreshCw className="size-4 animate-spin" />
+            ) : (
+              <CheckCircle2 className="size-4" />
+            )}
+            批量审稿
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={() => batchRewrite.mutate()}
+            disabled={batchRewrite.isPending}
+          >
+            {batchRewrite.isPending ? (
+              <RefreshCw className="size-4 animate-spin" />
+            ) : (
+              <Wand2 className="size-4" />
+            )}
+            批量重写有问题场
+          </Button>
+          <Link
+            href={`/studio/projects/${projectId}/write`}
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800"
+          >
+            <FileClock className="size-4" />
+            打开写作工作台
+          </Link>
+        </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-4">
@@ -396,6 +453,18 @@ export function VersionsPage({ projectId }: { projectId: string }) {
           />
         </div>
       </div>
+      {batchJobId ? (
+        <BatchJobProgressDialog
+          projectId={projectId}
+          batchJobId={batchJobId}
+          onComplete={() => {
+            queryClient.invalidateQueries({ queryKey: versionsKey });
+            queryClient.invalidateQueries({ queryKey: issuesKey });
+            queryClient.invalidateQueries({ queryKey: jobsKey });
+          }}
+          onClose={() => setBatchJobId(null)}
+        />
+      ) : null}
     </div>
   );
 }

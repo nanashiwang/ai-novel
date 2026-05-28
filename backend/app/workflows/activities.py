@@ -2878,6 +2878,455 @@ async def polish_chapter(job: dict[str, Any]) -> dict[str, Any]:
         }
 
 
+@activity.defn(name="run_batch")
+async def run_batch(job: dict[str, Any]) -> dict[str, Any]:
+    """Sprint 17-E：批量任务父 activity。
+
+    根据 input_payload.batch_type 路由到 5 个 handler 之一，由 BatchRunner
+    统一调度（同章串行 + 跨章并发 3 + SSE 实时推送）。
+    """
+    from app.services.generation.batch_service import (  # noqa: PLC0415
+        batch_runner,
+    )
+
+    async with _activity_session() as session:
+        job_row = await _load_job(session, job["id"])
+        payload = job_row.input_payload or {}
+        batch_type = payload.get("batch_type", "scene_plan")
+        project_id = job_row.project_id
+        organization_id = job_row.organization_id
+
+    # 在独立 session 内收集 targets，避免长时间持锁
+    targets, handler = await _build_batch_targets_and_handler(
+        organization_id=organization_id,
+        project_id=project_id,
+        user_id=job_row.user_id,
+        payload=payload,
+        batch_type=batch_type,
+    )
+
+    result = await batch_runner.run(
+        batch_job_id=job["id"],
+        organization_id=organization_id,
+        project_id=project_id,
+        batch_type=batch_type,
+        targets=targets,
+        handler=handler,
+    )
+
+    async with _activity_session() as session:
+        job_row = await _load_job(session, job["id"])
+        await _settle_job_usage(session, job_row, amount=0)
+    return result
+
+
+async def _build_batch_targets_and_handler(
+    *,
+    organization_id: str,
+    project_id: str,
+    user_id: str | None,
+    payload: dict[str, Any],
+    batch_type: str,
+):
+    """根据 batch_type 解析 scope 找出 targets + 返回 handler。"""
+    from app.services.generation.batch_service import BatchTarget  # noqa: PLC0415
+
+    chapter_indices = payload.get("chapter_indices") or None
+    scene_ids = payload.get("scene_ids") or None
+
+    async with AsyncSessionLocal() as session:
+        chap_repo = ChapterRepository(session)
+        scene_repo = SceneRepository(session)
+        draft_repo = DraftVersionRepository(session)
+
+        chapters = list(
+            await chap_repo.list(
+                organization_id=organization_id,
+                project_id=project_id,
+                order_by=Chapter.chapter_index.asc(),
+            )
+        )
+        if chapter_indices:
+            wanted = set(int(i) for i in chapter_indices)
+            chapters = [c for c in chapters if c.chapter_index in wanted]
+
+        targets: list = []
+        if batch_type == "scene_plan":
+            force = bool(payload.get("force_regenerate"))
+            for ch in chapters:
+                if not force:
+                    existing_scenes = list(
+                        await scene_repo.list(
+                            organization_id=organization_id,
+                            project_id=project_id,
+                            chapter_id=ch.id,
+                        )
+                    )
+                    if existing_scenes:
+                        continue
+                targets.append(
+                    BatchTarget(
+                        target_id=ch.id,
+                        chapter_id=ch.id,
+                        chapter_index=ch.chapter_index,
+                        extra={
+                            "scenes_per_chapter": payload.get("scenes_per_chapter"),
+                            "expected_words": payload.get("expected_words", 1500),
+                            "force_regenerate": force,
+                        },
+                    )
+                )
+            handler = _make_handler_scene_plan(
+                organization_id=organization_id,
+                project_id=project_id,
+                user_id=user_id,
+            )
+        elif batch_type == "scene_write":
+            # 找所有未写 draft 的 scenes（或显式 scene_ids 列表）
+            all_scenes = []
+            if scene_ids:
+                for sid in scene_ids:
+                    s = await scene_repo.get(sid)
+                    if s and s.project_id == project_id:
+                        all_scenes.append(s)
+            else:
+                chapter_ids = {ch.id for ch in chapters}
+                proj_scenes = list(
+                    await scene_repo.list(
+                        organization_id=organization_id,
+                        project_id=project_id,
+                    )
+                )
+                if chapter_ids:
+                    all_scenes = [s for s in proj_scenes if s.chapter_id in chapter_ids]
+                else:
+                    all_scenes = proj_scenes
+            chapter_index_by_id = {ch.id: ch.chapter_index for ch in chapters}
+            for s in all_scenes:
+                drafts = list(
+                    await draft_repo.list(
+                        organization_id=organization_id,
+                        project_id=project_id,
+                        scene_id=s.id,
+                        status="draft",
+                        limit=1,
+                    )
+                )
+                if drafts:
+                    continue  # 已有 draft 跳过
+                targets.append(
+                    BatchTarget(
+                        target_id=s.id,
+                        chapter_id=s.chapter_id,
+                        chapter_index=chapter_index_by_id.get(s.chapter_id),
+                        scene_index=s.scene_index,
+                        extra={"target_words": payload.get("target_words", 1500)},
+                    )
+                )
+            handler = _make_handler_scene_write(
+                organization_id=organization_id,
+                project_id=project_id,
+                user_id=user_id,
+            )
+        elif batch_type == "audit":
+            chapter_ids = {ch.id for ch in chapters}
+            proj_scenes = list(
+                await scene_repo.list(
+                    organization_id=organization_id,
+                    project_id=project_id,
+                )
+            )
+            if scene_ids:
+                proj_scenes = [s for s in proj_scenes if s.id in set(scene_ids)]
+            elif chapter_ids:
+                proj_scenes = [s for s in proj_scenes if s.chapter_id in chapter_ids]
+            chapter_index_by_id = {ch.id: ch.chapter_index for ch in chapters}
+            for s in proj_scenes:
+                # 仅审已 drafted 的
+                drafts = list(
+                    await draft_repo.list(
+                        organization_id=organization_id,
+                        project_id=project_id,
+                        scene_id=s.id,
+                        status="draft",
+                        limit=1,
+                    )
+                )
+                if not drafts:
+                    continue
+                targets.append(
+                    BatchTarget(
+                        target_id=s.id,
+                        chapter_id=s.chapter_id,
+                        chapter_index=chapter_index_by_id.get(s.chapter_id),
+                        scene_index=s.scene_index,
+                    )
+                )
+            handler = _make_handler_audit(
+                organization_id=organization_id,
+                project_id=project_id,
+                user_id=user_id,
+            )
+        elif batch_type == "rewrite":
+            from app.repositories import (  # noqa: PLC0415
+                ContinuityIssueRepository,
+            )
+
+            severity_threshold = (payload.get("severity_threshold") or "medium").lower()
+            severity_rank = {"low": 1, "medium": 2, "high": 3}
+            min_rank = severity_rank.get(severity_threshold, 2)
+            chapter_ids = {ch.id for ch in chapters}
+            chapter_index_by_id = {ch.id: ch.chapter_index for ch in chapters}
+            issue_repo = ContinuityIssueRepository(session)
+            issues = list(
+                await issue_repo.list(
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    status="open",
+                )
+            )
+            scene_severity: dict[str, int] = {}
+            for it in issues:
+                if not it.scene_id:
+                    continue
+                rank = severity_rank.get((it.severity or "medium").lower(), 2)
+                if rank < min_rank:
+                    continue
+                if it.chapter_id and chapter_ids and it.chapter_id not in chapter_ids:
+                    continue
+                cur = scene_severity.get(it.scene_id, 0)
+                scene_severity[it.scene_id] = max(cur, rank)
+            for sid in scene_severity:
+                s = await scene_repo.get(sid)
+                if not s or s.project_id != project_id:
+                    continue
+                targets.append(
+                    BatchTarget(
+                        target_id=s.id,
+                        chapter_id=s.chapter_id,
+                        chapter_index=chapter_index_by_id.get(s.chapter_id),
+                        scene_index=s.scene_index,
+                        extra={"target_words": payload.get("target_words", 1200)},
+                    )
+                )
+            handler = _make_handler_rewrite(
+                organization_id=organization_id,
+                project_id=project_id,
+                user_id=user_id,
+            )
+        elif batch_type == "polish":
+            # 找所有 scenes 都 drafted 的 chapters
+            for ch in chapters:
+                ch_scenes = list(
+                    await scene_repo.list(
+                        organization_id=organization_id,
+                        project_id=project_id,
+                        chapter_id=ch.id,
+                    )
+                )
+                if not ch_scenes:
+                    continue
+                all_drafted = True
+                for s in ch_scenes:
+                    drafts = list(
+                        await draft_repo.list(
+                            organization_id=organization_id,
+                            project_id=project_id,
+                            scene_id=s.id,
+                            status="draft",
+                            limit=1,
+                        )
+                    )
+                    if not drafts:
+                        all_drafted = False
+                        break
+                if not all_drafted:
+                    continue
+                targets.append(
+                    BatchTarget(
+                        target_id=ch.id,
+                        chapter_id=ch.id,
+                        chapter_index=ch.chapter_index,
+                        extra={"force": bool(payload.get("force"))},
+                    )
+                )
+            handler = _make_handler_polish(
+                organization_id=organization_id,
+                project_id=project_id,
+                user_id=user_id,
+            )
+        else:
+            handler = _make_handler_noop()
+    return targets, handler
+
+
+def _make_handler_scene_plan(*, organization_id, project_id, user_id):
+    async def _handler(target, _parent_job):
+        async with AsyncSessionLocal() as session:
+            chap = await ChapterRepository(session).get(
+                target.chapter_id, organization_id=organization_id
+            )
+            if not chap:
+                raise NotFoundError("chapter_not_found")
+            project = await ProjectRepository(session).get(
+                project_id, organization_id=organization_id
+            )
+            spec = await NovelSpecRepository(session).get_by(
+                organization_id=organization_id, project_id=project_id
+            )
+            if not project or not spec:
+                raise NotFoundError("project_or_spec_not_found")
+            extra = target.extra or {}
+            # 创建一个虚拟 job 行用于 _plan_and_persist_scenes_for_chapter 的兼容
+            fake_job_row = GenerationJob(
+                id=f"batch_plan_child_{target.target_id}",
+                organization_id=organization_id,
+                user_id=user_id or "system",
+                project_id=project_id,
+                job_type="generate_scene_plan",
+                status="running",
+                priority="queue_standard",
+                plan_code="Pro",
+                reserved_quota=0,
+                consumed_quota=0,
+                input_payload={},
+            )
+            scenes = await _plan_and_persist_scenes_for_chapter(
+                session,
+                job=fake_job_row,
+                project=project,
+                spec=spec,
+                chapter=chap,
+                scenes_per_chapter=extra.get("scenes_per_chapter"),
+                expected_words=int(extra.get("expected_words", 1500)),
+            )
+            await session.commit()
+            return {"scene_count": len(scenes), "chapter_id": chap.id}
+
+    return _handler
+
+
+def _make_handler_scene_write(*, organization_id, project_id, user_id):
+    async def _handler(target, _parent_job):
+        # 创建临时 GenerationJob 行让 run_scene_writing 能 load_job
+        async with AsyncSessionLocal() as session:
+            extra = target.extra or {}
+            job_row = await GenerationJobRepository(session).create(
+                organization_id=organization_id,
+                user_id=user_id or "system",
+                project_id=project_id,
+                job_type="write_scene",
+                status="running",
+                priority="queue_standard",
+                plan_code="Pro",
+                reserved_quota=0,
+                consumed_quota=0,
+                input_payload={
+                    "scene_id": target.target_id,
+                    "target_words": int(extra.get("target_words", 1500)),
+                },
+            )
+            await session.commit()
+            child_id = job_row.id
+        result = await run_scene_writing({"id": child_id})
+        return {"draft_id": result.get("draft_id"), "scene_id": result.get("scene_id")}
+
+    return _handler
+
+
+def _make_handler_audit(*, organization_id, project_id, user_id):
+    async def _handler(target, _parent_job):
+        async with AsyncSessionLocal() as session:
+            job_row = await GenerationJobRepository(session).create(
+                organization_id=organization_id,
+                user_id=user_id or "system",
+                project_id=project_id,
+                job_type="audit_scene",
+                status="running",
+                priority="queue_standard",
+                plan_code="Pro",
+                reserved_quota=0,
+                consumed_quota=0,
+                input_payload={"scene_id": target.target_id},
+            )
+            await session.commit()
+            child_id = job_row.id
+        result = await audit_scene({"id": child_id})
+        return {
+            "scene_id": result.get("scene_id"),
+            "issue_count": result.get("issue_count", 0),
+        }
+
+    return _handler
+
+
+def _make_handler_rewrite(*, organization_id, project_id, user_id):
+    async def _handler(target, _parent_job):
+        async with AsyncSessionLocal() as session:
+            extra = target.extra or {}
+            job_row = await GenerationJobRepository(session).create(
+                organization_id=organization_id,
+                user_id=user_id or "system",
+                project_id=project_id,
+                job_type="rewrite_scene",
+                status="running",
+                priority="queue_standard",
+                plan_code="Pro",
+                reserved_quota=0,
+                consumed_quota=0,
+                input_payload={
+                    "scene_id": target.target_id,
+                    "target_words": int(extra.get("target_words", 1200)),
+                },
+            )
+            await session.commit()
+            child_id = job_row.id
+        result = await rewrite_scene({"id": child_id})
+        return {
+            "scene_id": result.get("scene_id"),
+            "draft_id": result.get("draft_id"),
+        }
+
+    return _handler
+
+
+def _make_handler_polish(*, organization_id, project_id, user_id):
+    async def _handler(target, _parent_job):
+        async with AsyncSessionLocal() as session:
+            extra = target.extra or {}
+            job_row = await GenerationJobRepository(session).create(
+                organization_id=organization_id,
+                user_id=user_id or "system",
+                project_id=project_id,
+                job_type="polish_chapter",
+                status="running",
+                priority="queue_standard",
+                plan_code="Pro",
+                reserved_quota=0,
+                consumed_quota=0,
+                input_payload={
+                    "chapter_id": target.target_id,
+                    "force": bool(extra.get("force")),
+                },
+            )
+            await session.commit()
+            child_id = job_row.id
+        result = await polish_chapter({"id": child_id})
+        return {
+            "chapter_id": result.get("chapter_id"),
+            "draft_id": result.get("draft_id"),
+        }
+
+    return _handler
+
+
+def _make_handler_noop():
+    async def _handler(target, _parent_job):
+        return {"skipped": True, "target_id": target.target_id}
+
+    return _handler
+
+
 @activity.defn(name="rewrite_scene")
 async def rewrite_scene(job: dict[str, Any]) -> dict[str, Any]:
     """基于当前 scene 的 open issues 重写 draft，并把那些 issues 标 fixed。

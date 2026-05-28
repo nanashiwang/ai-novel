@@ -742,6 +742,173 @@ class GenerationService:
             )
         return job
 
+    async def _create_batch_job(
+        self,
+        session: AsyncSession,
+        user: CurrentUser,
+        tenant: TenantContext,
+        *,
+        project_id: str,
+        job_type: str,
+        input_payload: dict[str, Any],
+        estimate_words: int = 0,
+    ) -> GenerationJob:
+        """Sprint 17-E：通用批量父 job 创建。
+
+        job_type 必须是 batch_* 形式，BatchRunner 在 activity 内部 fan-out
+        到各个子任务（子任务自己扣 quota，父 job 不预扣以避免重复）。
+        """
+        require_permission(user, "generation_job:create", tenant)
+        project = await ProjectRepository(session).get(
+            project_id, organization_id=tenant.organization_id
+        )
+        if not project:
+            raise NotFoundError("project_not_found")
+        ensure_same_tenant(project.organization_id, tenant)
+
+        job = await GenerationJobRepository(session).create(
+            organization_id=tenant.organization_id,
+            user_id=user.id,
+            project_id=project_id,
+            job_type=job_type,
+            status="queued",
+            priority=PLAN_QUEUE.get(tenant.plan_code, "queue_standard"),
+            plan_code=tenant.plan_code,
+            reserved_quota=max(0, estimate_words),
+            consumed_quota=0,
+            input_payload=input_payload,
+        )
+        job.workflow_id = workflow_starter.start_batch_job({"id": job.id})
+        await session.flush()
+        if workflow_starter.is_local_workflow(job.workflow_id):
+            session.sync_session.info.setdefault("after_commit_tasks", []).append(
+                ("batch_job", job.id)
+            )
+        return job
+
+    async def create_batch_scene_plan_job(
+        self,
+        session: AsyncSession,
+        user: CurrentUser,
+        tenant: TenantContext,
+        *,
+        project_id: str,
+        chapter_indices: list[int] | None = None,
+        force_regenerate: bool = False,
+        scenes_per_chapter: int | None = None,
+        expected_words: int = 1500,
+    ) -> GenerationJob:
+        return await self._create_batch_job(
+            session,
+            user,
+            tenant,
+            project_id=project_id,
+            job_type="batch_scene_plan",
+            input_payload={
+                "batch_type": "scene_plan",
+                "chapter_indices": chapter_indices,
+                "force_regenerate": force_regenerate,
+                "scenes_per_chapter": scenes_per_chapter,
+                "expected_words": expected_words,
+            },
+        )
+
+    async def create_batch_scene_write_job(
+        self,
+        session: AsyncSession,
+        user: CurrentUser,
+        tenant: TenantContext,
+        *,
+        project_id: str,
+        chapter_indices: list[int] | None = None,
+        scene_ids: list[str] | None = None,
+        target_words: int = 1500,
+    ) -> GenerationJob:
+        return await self._create_batch_job(
+            session,
+            user,
+            tenant,
+            project_id=project_id,
+            job_type="batch_scene_write",
+            input_payload={
+                "batch_type": "scene_write",
+                "chapter_indices": chapter_indices,
+                "scene_ids": scene_ids,
+                "target_words": target_words,
+            },
+        )
+
+    async def create_batch_audit_job(
+        self,
+        session: AsyncSession,
+        user: CurrentUser,
+        tenant: TenantContext,
+        *,
+        project_id: str,
+        chapter_indices: list[int] | None = None,
+        scene_ids: list[str] | None = None,
+    ) -> GenerationJob:
+        return await self._create_batch_job(
+            session,
+            user,
+            tenant,
+            project_id=project_id,
+            job_type="batch_audit",
+            input_payload={
+                "batch_type": "audit",
+                "chapter_indices": chapter_indices,
+                "scene_ids": scene_ids,
+            },
+        )
+
+    async def create_batch_rewrite_job(
+        self,
+        session: AsyncSession,
+        user: CurrentUser,
+        tenant: TenantContext,
+        *,
+        project_id: str,
+        chapter_indices: list[int] | None = None,
+        severity_threshold: str = "medium",
+        target_words: int = 1200,
+    ) -> GenerationJob:
+        return await self._create_batch_job(
+            session,
+            user,
+            tenant,
+            project_id=project_id,
+            job_type="batch_rewrite",
+            input_payload={
+                "batch_type": "rewrite",
+                "chapter_indices": chapter_indices,
+                "severity_threshold": severity_threshold,
+                "target_words": target_words,
+            },
+        )
+
+    async def create_batch_polish_job(
+        self,
+        session: AsyncSession,
+        user: CurrentUser,
+        tenant: TenantContext,
+        *,
+        project_id: str,
+        chapter_indices: list[int] | None = None,
+        force: bool = False,
+    ) -> GenerationJob:
+        return await self._create_batch_job(
+            session,
+            user,
+            tenant,
+            project_id=project_id,
+            job_type="batch_polish",
+            input_payload={
+                "batch_type": "polish",
+                "chapter_indices": chapter_indices,
+                "force": force,
+            },
+        )
+
     async def retry_job(
         self,
         session: AsyncSession,

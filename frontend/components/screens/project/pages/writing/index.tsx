@@ -22,7 +22,8 @@ import { BibleBlock } from "@/components/screens/project/shared/bible-block";
 import { PreflightCard } from "@/components/screens/project/shared/preflight-card";
 import { severityClass, severityTone } from "@/components/screens/project/shared/severity";
 import { labelForVersion } from "@/components/screens/project/shared/version-label";
-import { chaptersApi, projectsApi, scenesApi } from "@/lib/api";
+import { BatchJobProgressDialog } from "@/components/batch/BatchJobProgressDialog";
+import { batchApi, chaptersApi, projectsApi, scenesApi } from "@/lib/api";
 import { ApiError } from "@/lib/http";
 import { useScopedKey } from "@/lib/use-scoped-key";
 
@@ -135,6 +136,38 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
     },
   });
 
+  // 批量写作：弹窗以 batchJobId 触发
+  const [batchWriteJobId, setBatchWriteJobId] = useState<string | null>(null);
+  const batchWriteCurrentChapter = useMutation({
+    mutationFn: () => {
+      if (!activeChapter) return Promise.reject(new Error("no_active_chapter"));
+      return batchApi.writeAllScenes(projectId, {
+        chapter_indices: [activeChapter.chapter_index],
+        target_words: 1200,
+      });
+    },
+    onSuccess: (job) => {
+      toast.success("已启动本章批量写作");
+      setBatchWriteJobId(job.id);
+      queryClient.invalidateQueries({ queryKey: jobsKey });
+    },
+    onError: (e: unknown) => {
+      toast.error(e instanceof ApiError ? e.message : "提交失败");
+    },
+  });
+  const batchWriteWholeBook = useMutation({
+    mutationFn: () =>
+      batchApi.writeAllScenes(projectId, { target_words: 1200 }),
+    onSuccess: (job) => {
+      toast.success("已启动整本批量写作");
+      setBatchWriteJobId(job.id);
+      queryClient.invalidateQueries({ queryKey: jobsKey });
+    },
+    onError: (e: unknown) => {
+      toast.error(e instanceof ApiError ? e.message : "提交失败");
+    },
+  });
+
   useEffect(() => {
     if (!latestSceneJob) return;
     if (latestSceneJob.status === "queued" || latestSceneJob.status === "running") {
@@ -179,22 +212,48 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
             Sprint 4：ContextBuilder + draft 版本链 + Tiptap 编辑器。
           </p>
         </div>
-        <Button
-          onClick={() => write.mutate()}
-          disabled={
-            write.isPending ||
-            isWriting ||
-            !activeScene ||
-            (preflight?.can_generate === false)
-          }
-        >
-          {isWriting ? (
-            <RefreshCw className="size-4 animate-spin" />
-          ) : (
-            <Sparkles className="size-4" />
-          )}
-          {latestDraft ? "重新生成场景" : "生成当前场景"}
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="secondary"
+            onClick={() => batchWriteCurrentChapter.mutate()}
+            disabled={batchWriteCurrentChapter.isPending || !activeChapter}
+          >
+            {batchWriteCurrentChapter.isPending ? (
+              <RefreshCw className="size-4 animate-spin" />
+            ) : (
+              <Wand2 className="size-4" />
+            )}
+            批量写本章
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={() => batchWriteWholeBook.mutate()}
+            disabled={batchWriteWholeBook.isPending}
+          >
+            {batchWriteWholeBook.isPending ? (
+              <RefreshCw className="size-4 animate-spin" />
+            ) : (
+              <Wand2 className="size-4" />
+            )}
+            批量写整本
+          </Button>
+          <Button
+            onClick={() => write.mutate()}
+            disabled={
+              write.isPending ||
+              isWriting ||
+              !activeScene ||
+              (preflight?.can_generate === false)
+            }
+          >
+            {isWriting ? (
+              <RefreshCw className="size-4 animate-spin" />
+            ) : (
+              <Sparkles className="size-4" />
+            )}
+            {latestDraft ? "重新生成场景" : "生成当前场景"}
+          </Button>
+        </div>
       </div>
       {preflight && preflight.can_generate === false ? (
         <PreflightCard report={preflight} />
@@ -577,6 +636,19 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
           </CardContent>
         </Card>
       </div>
+      {batchWriteJobId ? (
+        <BatchJobProgressDialog
+          projectId={projectId}
+          batchJobId={batchWriteJobId}
+          onComplete={() => {
+            queryClient.invalidateQueries({ queryKey: scenesKey });
+            queryClient.invalidateQueries({ queryKey: versionsKey });
+            queryClient.invalidateQueries({ queryKey: jobsKey });
+            queryClient.invalidateQueries({ queryKey: preflightKey });
+          }}
+          onClose={() => setBatchWriteJobId(null)}
+        />
+      ) : null}
     </div>
   );
 }

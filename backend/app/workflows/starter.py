@@ -134,6 +134,9 @@ class WorkflowStarter:
     def start_polish_chapter(self, job: dict) -> str:
         return self._fire_and_forget("PolishChapterWorkflow", job, "polish-chapter")
 
+    def start_batch_job(self, job: dict) -> str:
+        return self._fire_and_forget("BatchJobWorkflow", job, "batch-job")
+
     def is_local_workflow(self, workflow_id: str | None) -> bool:
         return bool(workflow_id and workflow_id.startswith("local-"))
 
@@ -164,6 +167,9 @@ class WorkflowStarter:
     def run_local_polish_chapter(self, job_id: str) -> None:
         self._run_local("polish_chapter", job_id)
 
+    def run_local_batch_job(self, job_id: str) -> None:
+        self._run_local("batch_job", job_id)
+
     def _run_local(self, job_type: str, job_id: str) -> None:
         try:
             loop = asyncio.get_running_loop()
@@ -183,6 +189,7 @@ class WorkflowStarter:
             polish_chapter,
             revision_rewrite_proposal,
             rewrite_scene,
+            run_batch,
             run_full_novel_pipeline,
             run_scene_writing,
         )
@@ -201,6 +208,8 @@ class WorkflowStarter:
                 result = await rewrite_scene({"id": job_id})
             elif job_type == "polish_chapter":
                 result = await polish_chapter({"id": job_id})
+            elif job_type == "batch_job":
+                result = await run_batch({"id": job_id})
             elif job_type == "full_novel":
                 result = await run_full_novel_pipeline({"id": job_id})
             elif job_type == "revision_rewrite_proposal":

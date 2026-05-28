@@ -70,6 +70,36 @@ class PolishChapterRequest(APIModel):
     estimate_words: int = Field(default=24000, ge=1000, le=80000)
 
 
+# Sprint 17-E：批量请求 schemas
+class BatchScenePlanRequest(APIModel):
+    chapter_indices: list[int] | None = None
+    force_regenerate: bool = False
+    scenes_per_chapter: int | None = Field(default=None, ge=2, le=8)
+    expected_words: int = Field(default=1500, ge=300, le=10000)
+
+
+class BatchSceneWriteRequest(APIModel):
+    chapter_indices: list[int] | None = None
+    scene_ids: list[str] | None = None
+    target_words: int = Field(default=1500, ge=300, le=10000)
+
+
+class BatchAuditRequest(APIModel):
+    chapter_indices: list[int] | None = None
+    scene_ids: list[str] | None = None
+
+
+class BatchRewriteRequest(APIModel):
+    chapter_indices: list[int] | None = None
+    severity_threshold: str = Field(default="medium")
+    target_words: int = Field(default=1200, ge=300, le=10000)
+
+
+class BatchPolishRequest(APIModel):
+    chapter_indices: list[int] | None = None
+    force: bool = False
+
+
 class RewriteSceneRequest(APIModel):
     target_words: int = Field(default=1200, ge=300, le=10000)
     estimate_words: int = Field(default=2000, ge=1, le=20000)
@@ -562,6 +592,185 @@ async def accept_polished_draft(
         word_count=target.word_count,
         content_format=target.content_format,
         created_at=target.created_at.isoformat() if target.created_at else "",
+    )
+
+
+# Sprint 17-E：批量生成 endpoints
+@router.post(
+    "/{project_id}/scenes/generate-all",
+    response_model=GenerationJobResponse,
+    status_code=202,
+)
+async def batch_generate_scenes(
+    project_id: str,
+    payload: BatchScenePlanRequest,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    """Sprint 17-E：批量为所有/指定 chapters 生成 scene plans。"""
+    job = await generation_service.create_batch_scene_plan_job(
+        db,
+        user,
+        tenant,
+        project_id=project_id,
+        chapter_indices=payload.chapter_indices,
+        force_regenerate=payload.force_regenerate,
+        scenes_per_chapter=payload.scenes_per_chapter,
+        expected_words=payload.expected_words,
+    )
+    await db.refresh(job)
+    response = GenerationJobResponse.model_validate(job)
+    await db.commit()
+    return response
+
+
+@router.post(
+    "/{project_id}/scenes/write-all",
+    response_model=GenerationJobResponse,
+    status_code=202,
+)
+async def batch_write_scenes(
+    project_id: str,
+    payload: BatchSceneWriteRequest,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    """Sprint 17-E：批量为所有/指定 scenes 写正文。同章串行 + 跨章并发 3。"""
+    job = await generation_service.create_batch_scene_write_job(
+        db,
+        user,
+        tenant,
+        project_id=project_id,
+        chapter_indices=payload.chapter_indices,
+        scene_ids=payload.scene_ids,
+        target_words=payload.target_words,
+    )
+    await db.refresh(job)
+    response = GenerationJobResponse.model_validate(job)
+    await db.commit()
+    return response
+
+
+@router.post(
+    "/{project_id}/scenes/audit-all",
+    response_model=GenerationJobResponse,
+    status_code=202,
+)
+async def batch_audit_scenes(
+    project_id: str,
+    payload: BatchAuditRequest,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    """Sprint 17-E：批量审稿。"""
+    job = await generation_service.create_batch_audit_job(
+        db,
+        user,
+        tenant,
+        project_id=project_id,
+        chapter_indices=payload.chapter_indices,
+        scene_ids=payload.scene_ids,
+    )
+    await db.refresh(job)
+    response = GenerationJobResponse.model_validate(job)
+    await db.commit()
+    return response
+
+
+@router.post(
+    "/{project_id}/scenes/rewrite-all-with-issues",
+    response_model=GenerationJobResponse,
+    status_code=202,
+)
+async def batch_rewrite_scenes(
+    project_id: str,
+    payload: BatchRewriteRequest,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    """Sprint 17-E：批量为有 open issues 的 scenes 触发 rewrite。"""
+    job = await generation_service.create_batch_rewrite_job(
+        db,
+        user,
+        tenant,
+        project_id=project_id,
+        chapter_indices=payload.chapter_indices,
+        severity_threshold=payload.severity_threshold,
+        target_words=payload.target_words,
+    )
+    await db.refresh(job)
+    response = GenerationJobResponse.model_validate(job)
+    await db.commit()
+    return response
+
+
+@router.post(
+    "/{project_id}/chapters/polish-all",
+    response_model=GenerationJobResponse,
+    status_code=202,
+)
+async def batch_polish_chapters(
+    project_id: str,
+    payload: BatchPolishRequest,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    """Sprint 17-E：批量为所有 drafted 章节跑 polish_chapter。"""
+    job = await generation_service.create_batch_polish_job(
+        db,
+        user,
+        tenant,
+        project_id=project_id,
+        chapter_indices=payload.chapter_indices,
+        force=payload.force,
+    )
+    await db.refresh(job)
+    response = GenerationJobResponse.model_validate(job)
+    await db.commit()
+    return response
+
+
+class BatchJobProgressResponse(APIModel):
+    id: str
+    job_type: str
+    status: str
+    input_payload: dict | None = None
+    output_payload: dict | None = None
+    created_at: str
+    updated_at: str
+
+
+@router.get(
+    "/{project_id}/batch-jobs/{job_id}",
+    response_model=BatchJobProgressResponse,
+)
+async def get_batch_job_progress(
+    project_id: str,
+    job_id: str,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    """Sprint 17-E：拉单个 batch_job 当前进度（无 SSE 时兜底）。"""
+    require_permission(user, "project:read", tenant)
+    job = await GenerationJobRepository(db).get(
+        job_id, organization_id=tenant.organization_id
+    )
+    if not job or job.project_id != project_id:
+        raise NotFoundError("job_not_found")
+    return BatchJobProgressResponse(
+        id=job.id,
+        job_type=job.job_type,
+        status=job.status,
+        input_payload=job.input_payload or {},
+        output_payload=job.output_payload or {},
+        created_at=job.created_at.isoformat() if job.created_at else "",
+        updated_at=job.updated_at.isoformat() if job.updated_at else "",
     )
 
 

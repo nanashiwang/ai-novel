@@ -38,6 +38,12 @@ export type ProjectEventType =
   | "job.cancelled"
   | "character_revision.created"
   | "scene.updated"
+  | "batch_job.started"
+  | "batch_job.item_started"
+  | "batch_job.item_succeeded"
+  | "batch_job.item_failed"
+  | "batch_job.completed"
+  | "batch_job.failed"
   | "ping";
 
 export type ProjectEvent = {

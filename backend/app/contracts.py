@@ -30,6 +30,11 @@ JOB_TYPES: frozenset[str] = frozenset(
         "audit_scene",
         "rewrite_scene",
         "polish_chapter",
+        "batch_scene_plan",
+        "batch_scene_write",
+        "batch_audit",
+        "batch_rewrite",
+        "batch_polish",
         "export_novel",
     }
 )
@@ -93,6 +98,7 @@ ERROR_CODES: frozenset[str] = frozenset(
         # 资源不存在
         "project_not_found",
         "novel_spec_not_found",
+        "project_or_spec_not_found",
         "job_not_found",
         "scene_not_found",
         "chapter_not_found",

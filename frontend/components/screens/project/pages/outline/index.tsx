@@ -20,7 +20,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/data-table";
 import { ProjectHeader } from "@/components/screens/project/project-frame";
 import { BibleBlock } from "@/components/screens/project/shared/bible-block";
+import { BatchJobProgressDialog } from "@/components/batch/BatchJobProgressDialog";
 import {
+  batchApi,
   type Chapter,
   chaptersApi,
   type GenerationJob,
@@ -144,6 +146,7 @@ export function OutlinePage({ projectId }: { projectId: string }) {
   const [revisionConfig, setRevisionConfig] = useState<RevisionDrawerConfig | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [highlightChapterId, setHighlightChapterId] = useState<string | null>(null);
+  const [batchScenePlanJobId, setBatchScenePlanJobId] = useState<string | null>(null);
   const chapterItemRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const previousActiveIdRef = useRef<string | null>(null);
   const allScenesKey = useScopedKey("project", projectId, "scenes", "all");
@@ -492,6 +495,35 @@ export function OutlinePage({ projectId }: { projectId: string }) {
     },
   });
 
+  const batchGenerateScenes = useMutation({
+    mutationFn: () =>
+      batchApi.generateAllScenes(projectId, {
+        scenes_per_chapter: sceneCountMode === "manual" ? manualSceneCount : null,
+        expected_words: 1500,
+        force_regenerate: false,
+      }),
+    onSuccess: (job) => {
+      toast.success("已启动批量场景规划");
+      setBatchScenePlanJobId(job.id);
+      queryClient.invalidateQueries({ queryKey: jobsKey });
+    },
+    onError: (e: unknown) => {
+      toast.error(e instanceof ApiError ? e.message : "提交失败");
+    },
+  });
+
+  const batchPolish = useMutation({
+    mutationFn: () => batchApi.polishAllChapters(projectId, { force: false }),
+    onSuccess: (job) => {
+      toast.success("已启动批量章后润色");
+      setBatchScenePlanJobId(job.id);
+      queryClient.invalidateQueries({ queryKey: jobsKey });
+    },
+    onError: (e: unknown) => {
+      toast.error(e instanceof ApiError ? e.message : "提交失败");
+    },
+  });
+
   const jumpToChapter = useCallback(() => {
     const target = Number(jumpChapter);
     if (!Number.isInteger(target) || target <= 0) {
@@ -543,6 +575,30 @@ export function OutlinePage({ projectId }: { projectId: string }) {
                 disabled={chapters.length === 0}
               >
                 <Sparkles className="size-4" /> AI 优化大纲
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => batchGenerateScenes.mutate()}
+                disabled={batchGenerateScenes.isPending || chapters.length === 0}
+              >
+                {batchGenerateScenes.isPending ? (
+                  <RefreshCw className="size-4 animate-spin" />
+                ) : (
+                  <Wand2 className="size-4" />
+                )}
+                批量生成所有场景
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => batchPolish.mutate()}
+                disabled={batchPolish.isPending || chapters.length === 0}
+              >
+                {batchPolish.isPending ? (
+                  <RefreshCw className="size-4 animate-spin" />
+                ) : (
+                  <Sparkles className="size-4" />
+                )}
+                批量章后润色
               </Button>
               <Button
                 onClick={() => generate.mutate()}
@@ -936,6 +992,18 @@ export function OutlinePage({ projectId }: { projectId: string }) {
           starterPrompts={revisionConfig.starterPrompts}
           onClose={() => setRevisionConfig(null)}
           onApplied={invalidateRevisionTargets}
+        />
+      ) : null}
+      {batchScenePlanJobId ? (
+        <BatchJobProgressDialog
+          projectId={projectId}
+          batchJobId={batchScenePlanJobId}
+          onComplete={() => {
+            queryClient.invalidateQueries({ queryKey: allScenesKey });
+            queryClient.invalidateQueries({ queryKey: scenesKey });
+            queryClient.invalidateQueries({ queryKey: jobsKey });
+          }}
+          onClose={() => setBatchScenePlanJobId(null)}
         />
       ) : null}
     </div>

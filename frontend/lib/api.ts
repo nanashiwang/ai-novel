@@ -378,6 +378,94 @@ export const projectsApi = {
     http.post<GenerationJob>(`/projects/${id}/generate-full-novel`, { estimate_words }),
 };
 
+// Sprint 17-E：批量生成 API
+export type BatchJobProgress = {
+  id: string;
+  job_type: string;
+  status: string;
+  input_payload?: Record<string, unknown> | null;
+  output_payload?: {
+    batch_type?: string;
+    total_items?: number;
+    completed_items?: number;
+    failed_items?: number;
+    running_items?: number;
+    queued_items?: number;
+    running_target_ids?: string[];
+    child_jobs?: Array<{
+      target_id: string;
+      chapter_id?: string | null;
+      chapter_index?: number | null;
+      scene_index?: number | null;
+      status: string;
+      error?: string | null;
+      result?: Record<string, unknown>;
+    }>;
+    finished_at?: string;
+  } | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type BatchScenePlanPayload = {
+  chapter_indices?: number[] | null;
+  force_regenerate?: boolean;
+  scenes_per_chapter?: number | null;
+  expected_words?: number;
+};
+
+export type BatchSceneWritePayload = {
+  chapter_indices?: number[] | null;
+  scene_ids?: string[] | null;
+  target_words?: number;
+};
+
+export type BatchAuditPayload = {
+  chapter_indices?: number[] | null;
+  scene_ids?: string[] | null;
+};
+
+export type BatchRewritePayload = {
+  chapter_indices?: number[] | null;
+  severity_threshold?: "low" | "medium" | "high";
+  target_words?: number;
+};
+
+export type BatchPolishPayload = {
+  chapter_indices?: number[] | null;
+  force?: boolean;
+};
+
+export const batchApi = {
+  generateAllScenes: (projectId: string, payload: BatchScenePlanPayload = {}) =>
+    http.post<GenerationJob>(
+      `/projects/${projectId}/scenes/generate-all`,
+      payload,
+    ),
+  writeAllScenes: (projectId: string, payload: BatchSceneWritePayload = {}) =>
+    http.post<GenerationJob>(
+      `/projects/${projectId}/scenes/write-all`,
+      payload,
+    ),
+  auditAllScenes: (projectId: string, payload: BatchAuditPayload = {}) =>
+    http.post<GenerationJob>(
+      `/projects/${projectId}/scenes/audit-all`,
+      payload,
+    ),
+  rewriteAllWithIssues: (projectId: string, payload: BatchRewritePayload = {}) =>
+    http.post<GenerationJob>(
+      `/projects/${projectId}/scenes/rewrite-all-with-issues`,
+      payload,
+    ),
+  polishAllChapters: (projectId: string, payload: BatchPolishPayload = {}) =>
+    http.post<GenerationJob>(
+      `/projects/${projectId}/chapters/polish-all`,
+      payload,
+    ),
+  getProgress: (projectId: string, jobId: string) =>
+    http.get<BatchJobProgress>(`/projects/${projectId}/batch-jobs/${jobId}`),
+};
+
 export const revisionApi = {
   chat: (projectId: string, payload: RevisionChatRequest) =>
     http.post<RevisionChatResponse>(`/projects/${projectId}/revisions/chat`, payload),
