@@ -498,6 +498,92 @@ _POSTGRES_SCHEMA_FIXES = [
     # Sprint 16-E1：chapter 字数预算与场景拍点
     "ALTER TABLE chapters ADD COLUMN IF NOT EXISTS target_words INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE chapters ADD COLUMN IF NOT EXISTS scene_beats JSONB NOT NULL DEFAULT '[]'::jsonb",
+    # Sprint 18-A1：关键状态防遗忘表；旧 Docker 数据卷不会重跑 init SQL。
+    """
+    CREATE TABLE IF NOT EXISTS story_state_items (
+      id VARCHAR(64) PRIMARY KEY,
+      organization_id VARCHAR(64) NOT NULL,
+      project_id VARCHAR(64) NOT NULL REFERENCES projects(id),
+      entity_type VARCHAR(32) NOT NULL,
+      entity_id VARCHAR(64),
+      state_type VARCHAR(32) NOT NULL,
+      name VARCHAR(200) NOT NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'active',
+      summary TEXT NOT NULL DEFAULT '',
+      value_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      source_chapter_id VARCHAR(64),
+      source_scene_id VARCHAR(64),
+      source_excerpt TEXT NOT NULL DEFAULT '',
+      updated_in_chapter_id VARCHAR(64),
+      priority INTEGER NOT NULL DEFAULT 0,
+      is_hard_constraint BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    (
+        "CREATE INDEX IF NOT EXISTS ix_story_state_items_org_project "
+        "ON story_state_items(organization_id, project_id)"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_story_state_items_project_state_type "
+        "ON story_state_items(project_id, state_type)"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_story_state_items_project_status "
+        "ON story_state_items(project_id, status)"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_story_state_items_project_priority "
+        "ON story_state_items(project_id, priority, updated_at)"
+    ),
+    """
+    CREATE TABLE IF NOT EXISTS story_state_history (
+      id VARCHAR(64) PRIMARY KEY,
+      organization_id VARCHAR(64) NOT NULL,
+      project_id VARCHAR(64) NOT NULL,
+      state_item_id VARCHAR(64) NOT NULL REFERENCES story_state_items(id),
+      chapter_id VARCHAR(64),
+      scene_id VARCHAR(64),
+      change_type VARCHAR(32) NOT NULL,
+      before_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      after_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      reason TEXT NOT NULL DEFAULT '',
+      source_excerpt TEXT NOT NULL DEFAULT '',
+      created_by VARCHAR(64),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    (
+        "CREATE INDEX IF NOT EXISTS ix_story_state_history_project_state_item "
+        "ON story_state_history(project_id, state_item_id, created_at)"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_story_state_history_project_chapter "
+        "ON story_state_history(project_id, chapter_id, created_at)"
+    ),
+    """
+    CREATE TABLE IF NOT EXISTS chapter_state_requirements (
+      id VARCHAR(64) PRIMARY KEY,
+      organization_id VARCHAR(64) NOT NULL,
+      project_id VARCHAR(64) NOT NULL REFERENCES projects(id),
+      chapter_id VARCHAR(64) NOT NULL REFERENCES chapters(id),
+      state_item_id VARCHAR(64) NOT NULL REFERENCES story_state_items(id),
+      requirement_type VARCHAR(32) NOT NULL,
+      summary TEXT NOT NULL DEFAULT '',
+      priority INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    (
+        "CREATE INDEX IF NOT EXISTS ix_chapter_state_requirements_project_chapter "
+        "ON chapter_state_requirements(project_id, chapter_id, priority)"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_chapter_state_requirements_project_state_item "
+        "ON chapter_state_requirements(project_id, state_item_id)"
+    ),
 ]
 
 

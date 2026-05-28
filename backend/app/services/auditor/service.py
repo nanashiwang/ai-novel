@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.chapter import Chapter
 from app.models.project import NovelSpec, Project
 from app.models.scene import Scene
-from app.repositories import InformationLedgerRepository
+from app.repositories import CharacterRepository, InformationLedgerRepository
 from app.schemas.story_generation import AuditResultContract
 from app.services.context_builder.service import context_builder
 from app.services.model_gateway.service import model_gateway
@@ -77,6 +77,42 @@ class AuditorService:
             except Exception:  # noqa: BLE001 - 长程审计永不阻断主流程
                 long_range_block = ""
 
+        # Sprint 17-D：注入「截至当前章已登场角色清单」用于 character_too_early 校验
+        already_debuted_block = ""
+        try:
+            chars = list(
+                await CharacterRepository(session).list(
+                    organization_id=organization_id,
+                    project_id=project_id,
+                )
+            )
+            debuted: list[str] = []
+            future_only: list[str] = []
+            unset: list[str] = []
+            for c in chars:
+                if not c.name:
+                    continue
+                chap = getattr(c, "first_appearance_chapter", None)
+                if not isinstance(chap, int):
+                    unset.append(c.name)
+                elif chap <= chapter.chapter_index:
+                    debuted.append(f"{c.name}(第{chap}章)")
+                else:
+                    future_only.append(f"{c.name}(第{chap}章)")
+            if debuted or future_only:
+                lines = ["\n\n## 截至当前章已登场角色清单"]
+                if debuted:
+                    lines.append("已可出场：" + "、".join(debuted))
+                if future_only:
+                    lines.append("尚未到登场时机（禁止出现）：" + "、".join(future_only))
+                if unset:
+                    lines.append(
+                        "登场章节未设置（不参与 character_too_early 判定）：" + "、".join(unset)
+                    )
+                already_debuted_block = "\n".join(lines)
+        except Exception:  # noqa: BLE001
+            already_debuted_block = ""
+
         task_lines = [
             "请审查上述正文是否违反以下任一类约束，并给出可立刻执行的修复建议：",
             "- continuity：是否与故事圣经、之前 scenes 摘要存在情节/时间冲突",
@@ -89,13 +125,18 @@ class AuditorService:
             "- temporal_continuity：是否与上下文「故事时间」段提供的当前日偏移/时段一致；"
             "未交代过夜的隔日切换、无闪回标注的时间倒退、明显季节矛盾均应报告",
             "- pacing：本章正文情感强度与场面密度是否符合上下文「本章节奏」段提供的"
-            "pacing_type / emotion_intensity（climax 章���应通篇内心独白；"
+            "pacing_type / emotion_intensity（climax 章不应通篇内心独白；"
             "cool_down 章不应再起激烈对抗；emotion_intensity=2 章不应出现高强度场面）",
             "- intra_chapter_continuity：本场是否承接同章前序场（参考上下文"
             "「本章前序场已发生」段）；是否漏接前序场留下的钩子、重复了前序场"
             "已用的标志性动作/道具/揭示、人物语气/状态与同章前场是否矛盾、"
             "过渡到本场的方式（时间/地点/视角切换）是否自然；若上下文未提供"
             "该段（即本场是章首），不要报告 intra_chapter_continuity",
+            "- character_too_early：本场正文中实际参与剧情的角色（作为对白主语 / "
+            "动作主体 / 视角主体 / 场景描写主体出现）必须全部在「截至当前章已登场角色清单」"
+            "的「已可出场」列表内。出现「尚未到登场时机」列表里的角色即报，severity=high。"
+            "仅作\"路过/远远看见/被名字提及\"的不算实际出场，需判断是否构成\"参与剧情\"。"
+            "如果上下文未提供该清单段，不要报告 character_too_early",
         ]
         if mode == "long_range":
             task_lines.append(
@@ -113,6 +154,7 @@ class AuditorService:
             + "\n\n## 待审稿正文\n"
             + draft_content
             + long_range_block
+            + already_debuted_block
             + "\n\n## 任务指令\n"
             + "\n".join(task_lines)
         )

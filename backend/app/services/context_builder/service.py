@@ -381,6 +381,7 @@ class ContextBuilder:
                     project_id,
                     focus_names=list(scene.characters or []),
                     pov_character_name=pov_name,
+                    before_chapter_index=chapter.chapter_index,
                 ),
                 True,
             ),
@@ -611,6 +612,12 @@ class ContextBuilder:
         anchors: list[str] = ["# 永不改写的核心锚点（最高优先级，与下文冲突时以此为准）"]
         if protagonist:
             desc_bits = [protagonist.name]
+            # Sprint 17-D：主角默认首登场第 1 章，显式标注让 LLM 永远把主角视作"已登场"
+            proto_chap = getattr(protagonist, "first_appearance_chapter", None)
+            if isinstance(proto_chap, int) and proto_chap >= 1:
+                desc_bits.append(f"首次登场第 {proto_chap} 章")
+            else:
+                desc_bits.append("首次登场第 1 章")
             if protagonist.role:
                 desc_bits.append(protagonist.role[:40])
             if protagonist.description:
@@ -1071,6 +1078,7 @@ class ContextBuilder:
         limit_per_character: int = 5,
         excerpt_chars: int = 160,
         pov_character_name: str | None = None,
+        before_chapter_index: int | None = None,
     ) -> str:
         """按角色召回最近 K 场出场的简短动作摘要。
 
@@ -1081,6 +1089,10 @@ class ContextBuilder:
         做过什么"与"其它已出场角色的外显行为"。draft 摘要本就是写出来的
         正文片段，全部都是外显信息，因此摘要内容本身无须二次过滤；只在
         渲染层面给 POV 加 [POV] 标记，提示模型注意视角归属。
+
+        Sprint 17-D：before_chapter_index 非 None 时，只取严格小于该章节号的
+        scenes，杜绝未来章节信息回流（写第 3 章时不应看到第 8 章的角色动作，
+        否则会让 LLM 误以为该角色"已经登场"）。None ��保持原行为向后兼容。
 
         策略：
         - 只对 focus_names 内的角色查询（通常 = scene.characters）
@@ -1108,6 +1120,11 @@ class ContextBuilder:
             )
             .order_by(ChapterModel.chapter_index.desc(), Scene.scene_index.desc())
         )
+        if before_chapter_index is not None:
+            # Sprint 17-D：只看严格小于该章的 scenes，避免未来章节信息回流污染
+            scene_stmt = scene_stmt.where(
+                ChapterModel.chapter_index < before_chapter_index
+            )
         scenes_with_chapter: list[tuple[Scene, int]] = list(
             (await session.execute(scene_stmt)).all()
         )
@@ -1366,8 +1383,11 @@ class ContextBuilder:
 
         Sprint 17-A：读时计算 stalled——如果 expected_resolve_chapter 存在
         且 < current_chapter_index，标 [stalled]；段落底部追加硬性提示。
-        current_chapter_index 为 None 时不做 stalled 计算（兼容 chapter
-        planning 等还没确定章号的入口）。
+        current_chapter_index 为 None 时不做 stalled 计算。
+
+        Sprint 17-D：在 description 中出现的角色名后注入"（首次登场第 N 章）"
+        标注（基于 characters.first_appearance_chapter），杜绝 LLM 把 plot_threads
+        描述里"全书人物清单"误读为"已登场清单"——这是林栀夏空降第 3 章的根因。
         """
         repo = PlotThreadRepository(session)
         rows = list(
@@ -1380,8 +1400,16 @@ class ContextBuilder:
         open_threads = [r for r in rows if r.status == "open"]
         if not open_threads:
             return ""
+        first_appearance_map = await self._load_character_first_appearance_map(
+            session, organization_id=organization_id, project_id=project_id
+        )
+        # 按 name 长度倒序：先匹配长名字（沈闻舟 优先于 沈砚 + 闻舟）
+        names_by_length = sorted(
+            first_appearance_map.keys(), key=lambda s: -len(s)
+        )
         parts: list[str] = []
         any_stalled = False
+        any_future = False
         for t in open_threads:
             eta = getattr(t, "expected_resolve_chapter", None)
             is_stalled = bool(
@@ -1391,8 +1419,15 @@ class ContextBuilder:
             )
             prefix = "[stalled] " if is_stalled else ""
             eta_hint = f"（预期收线于第 {eta} 章）" if eta else ""
+            desc = t.description or "—"
+            # 给描述里的角色名注入首登场标注（一次性替换，避免在已注入的串里再嵌套）
+            annotated, has_future = self._annotate_character_names(
+                desc, names_by_length, first_appearance_map, current_chapter_index
+            )
+            if has_future:
+                any_future = True
             parts.append(
-                f"{prefix}[{t.thread_type}] {t.title}{eta_hint}：{t.description or '—'}"
+                f"{prefix}[{t.thread_type}] {t.title}{eta_hint}：{annotated}"
             )
             if is_stalled:
                 any_stalled = True
@@ -1402,7 +1437,78 @@ class ContextBuilder:
                 "选择以下之一：(a) 显式推进至少一步，(b) 显式宣告冻结/废弃"
                 "并给出原因，(c) 重置预期收线章节。不要继续无视。"
             )
+        if any_future:
+            parts.append(
+                "⚠️ 上述 plot_threads 描述中的角色登场章节标注是创作硬约束。"
+                "**当前章节小于该角色首次登场章时，禁止让该角色在本章出场**"
+                "——plot_threads 描述是全书人物清单，不代表已登场。"
+            )
         return "\n".join(parts)
+
+    @staticmethod
+    def _annotate_character_names(
+        text: str,
+        names_by_length: list[str],
+        first_appearance_map: dict[str, int],
+        current_chapter_index: int | None,
+    ) -> tuple[str, bool]:
+        """给文本中出现的角色名后追加"（首次登场第 N 章）"。
+
+        返回 (annotated_text, has_future_character)。
+        has_future_character=True 表示文本中至少有一个角色 N > current。
+        """
+        if not text or not names_by_length:
+            return text, False
+        result = text
+        has_future = False
+        annotated_names: set[str] = set()
+        for name in names_by_length:
+            if name in annotated_names:
+                continue
+            chap = first_appearance_map.get(name)
+            if chap is None:
+                continue
+            tag = f"（首次登场第 {chap} 章）"
+            # 仅替换首次出现，避免长描述里重复爆炸
+            if name in result and tag not in result:
+                result = result.replace(name, f"{name}{tag}", 1)
+                annotated_names.add(name)
+                if (
+                    current_chapter_index is not None
+                    and chap > current_chapter_index
+                ):
+                    has_future = True
+        return result, has_future
+
+    async def _load_character_first_appearance_map(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+    ) -> dict[str, int]:
+        """从 characters 表加载 name → first_appearance_chapter 字典。
+
+        Sprint 17-D：用于 plot_threads / hard_constraints 渲染时给角色名加
+        首登场注解。失败返回空字典，调用方按"未设置"处理。
+        """
+        try:
+            from app.repositories import CharacterRepository  # noqa: PLC0415
+
+            chars = list(
+                await CharacterRepository(session).list(
+                    organization_id=organization_id,
+                    project_id=project_id,
+                )
+            )
+        except Exception:  # noqa: BLE001
+            return {}
+        result: dict[str, int] = {}
+        for ch in chars:
+            chap = getattr(ch, "first_appearance_chapter", None)
+            if isinstance(chap, int) and chap >= 1 and ch.name:
+                result[ch.name] = chap
+        return result
 
     async def _fmt_story_states(
         self,
@@ -1972,6 +2078,30 @@ class ContextBuilder:
                 if nm not in seen:
                     seen.add(nm)
                     char_names.append(nm)
+
+        # Sprint 17-D：兜底——若 scenes.characters 字段为空（实际数据常见），
+        # 扫描所有前章 scenes 的 entry_state/exit_state/goal/conflict 文本，
+        # 用项目内已登记角色名做子串匹配补充。这是 plan_scenes 强约束的
+        # 关键依据，缺失会让 LLM 误以为"前章已出场"集合是空的。
+        first_appearance_map = await self._load_character_first_appearance_map(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+        )
+        known_names = sorted(first_appearance_map.keys(), key=lambda s: -len(s))
+        if known_names:
+            text_blob_parts: list[str] = []
+            for s in scenes:
+                for f in ("entry_state", "exit_state", "goal", "conflict", "reveal", "hook"):
+                    val = getattr(s, f, None) or ""
+                    if val:
+                        text_blob_parts.append(val)
+            text_blob = "\n".join(text_blob_parts)
+            for nm in known_names:
+                if nm not in seen and nm in text_blob:
+                    seen.add(nm)
+                    char_names.append(nm)
+
         char_actions_text = ""
         if char_names:
             char_actions_text = await self._fmt_character_actions(
@@ -1979,6 +2109,7 @@ class ContextBuilder:
                 organization_id,
                 project_id,
                 focus_names=char_names,
+                before_chapter_index=chapter.chapter_index,
             )
 
         open_threads_text = await self._fmt_plot_threads(
@@ -2002,6 +2133,40 @@ class ContextBuilder:
                 "前一章末尾实际产出片段（首场 entry_state 必须延续此处的"
                 "人物位置/情绪/未完成动作/在场道具）：\n" + tail_excerpt
             )
+        # Sprint 17-D：前一章实际出场人物清单 + 本章首次登场人物清单。
+        # plan_scenes 强约束核心：让 LLM 知道哪些角色已登场可继续在新章出现，
+        # 哪些角色还没到登场章节不能引入。
+        prev_appeared_line = (
+            "前一章实际出场人物：" + "、".join(char_names)
+            if char_names
+            else "前一章实际出场人物：（无登记角色，本章应延续前章末尾段中已出现的人物）"
+        )
+        debut_this_chapter = [
+            nm for nm, chap in first_appearance_map.items()
+            if chap == chapter.chapter_index
+        ]
+        debut_line = (
+            "本章首次登场角色（首次允许出场）：" + "、".join(debut_this_chapter)
+            if debut_this_chapter
+            else "本章无新角色首次登场"
+        )
+        future_only = [
+            nm for nm, chap in first_appearance_map.items()
+            if chap > chapter.chapter_index
+        ]
+        future_line = (
+            "禁止登场角色（first_appearance_chapter > 本章）：" + "、".join(future_only)
+            if future_only
+            else ""
+        )
+        parts.append(
+            "## 出场人物约束（plan_scenes 必须严格遵守）\n"
+            + prev_appeared_line + "\n"
+            + debut_line
+            + (("\n" + future_line) if future_line else "")
+            + "\n本章 scene.characters 中的人物必须仅来自上述两类（已出场 + 本章首次登场），"
+            "不可引入「禁止登场」清单中的角色，不可凭 plot_threads 描述里的全书清单推断他们已登场。"
+        )
         if open_threads_text:
             parts.append(
                 "当前未解决线索（open plot_threads，本章应推进或显式悬置）：\n"

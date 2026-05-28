@@ -354,6 +354,64 @@ CREATE TABLE IF NOT EXISTS scenes (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS story_state_items (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  entity_type VARCHAR(32) NOT NULL,
+  entity_id TEXT,
+  state_type VARCHAR(32) NOT NULL,
+  name VARCHAR(200) NOT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'active',
+  summary TEXT NOT NULL DEFAULT '',
+  value_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  source_chapter_id TEXT,
+  source_scene_id TEXT,
+  source_excerpt TEXT NOT NULL DEFAULT '',
+  updated_in_chapter_id TEXT,
+  priority INTEGER NOT NULL DEFAULT 0,
+  is_hard_constraint BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_story_state_items_org_project ON story_state_items(organization_id, project_id);
+CREATE INDEX IF NOT EXISTS ix_story_state_items_project_state_type ON story_state_items(project_id, state_type);
+CREATE INDEX IF NOT EXISTS ix_story_state_items_project_status ON story_state_items(project_id, status);
+CREATE INDEX IF NOT EXISTS ix_story_state_items_project_priority ON story_state_items(project_id, priority, updated_at);
+
+CREATE TABLE IF NOT EXISTS story_state_history (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  state_item_id TEXT NOT NULL REFERENCES story_state_items(id),
+  chapter_id TEXT,
+  scene_id TEXT,
+  change_type VARCHAR(32) NOT NULL,
+  before_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  after_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  reason TEXT NOT NULL DEFAULT '',
+  source_excerpt TEXT NOT NULL DEFAULT '',
+  created_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_story_state_history_project_state_item ON story_state_history(project_id, state_item_id, created_at);
+CREATE INDEX IF NOT EXISTS ix_story_state_history_project_chapter ON story_state_history(project_id, chapter_id, created_at);
+
+CREATE TABLE IF NOT EXISTS chapter_state_requirements (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  chapter_id TEXT NOT NULL REFERENCES chapters(id),
+  state_item_id TEXT NOT NULL REFERENCES story_state_items(id),
+  requirement_type VARCHAR(32) NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  priority INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_chapter_state_requirements_project_chapter ON chapter_state_requirements(project_id, chapter_id, priority);
+CREATE INDEX IF NOT EXISTS ix_chapter_state_requirements_project_state_item ON chapter_state_requirements(project_id, state_item_id);
+
 CREATE TABLE IF NOT EXISTS generation_jobs (
   id TEXT PRIMARY KEY,
   organization_id TEXT NOT NULL REFERENCES organizations(id),

@@ -6,7 +6,7 @@
 输出契约：JSON，符合 AuditResultContract schema。
 
 字段约束：
-- issue_type 必须为 "continuity" / "character" / "world_rule" / "style" / "cross_chapter" / "long_range_continuity" / "style_drift" / "temporal_continuity" / "pacing" / "intra_chapter_continuity" 之一
+- issue_type 必须为 "continuity" / "character" / "world_rule" / "style" / "cross_chapter" / "long_range_continuity" / "style_drift" / "temporal_continuity" / "pacing" / "intra_chapter_continuity" / "character_too_early" 之一
 - severity 必须为 "low" / "medium" / "high" 之一
 - description 是一句话问题陈述（不带"我建议..."这类元评论）
 - suggested_fix 是一句话可执行修复（含位置/动作/期望结果），可以为空
@@ -22,5 +22,6 @@
 - temporal_continuity 问题必须基于上下文"故事时间"段提供的"距开篇第 X 天 / 时段 Y"与本场正文的实际矛盾来判定（例如：上一场是 evening 而本场正文写晨光直接接续却没有过夜交代；倒退超过 1 天且非闪回；季节明显矛盾如刚过夏季就描写积雪）；不要凭空猜测时间
 - pacing 问题必须基于上下文"本章节奏"段（pacing_type / emotion_intensity）与本场情感强度的实际偏离来判定（例如：本章节奏是 cool_down 但正文通篇高潮对抗；本章是 climax 但正文通篇内心独白没有冲突；emotion_intensity=2 但正文出现激烈打斗）；如果上下文未提供节奏段则不要报告 pacing
 - intra_chapter_continuity 问题必须基于上下文"## 本章前序场已发生"段与本场正文的实际矛盾来判定（例如：前序场已留下的钩子在本场被忽略未承接；前序场已写过的标志性动作/道具在本场重复描写；同一章内人物语气/动作骤变；本场对前序场已确立的状态做矛盾描写）；如果上下文未提供该段（即本场是章首），不要报告 intra_chapter_continuity
-- 正文整体没问��时返回 {"issues": []}
+- character_too_early 问题必须基于上下文"## 截至当前章已登场角色清单"段与本场正文的实际矛盾来判定：**本场正文中实际参与剧情的角色名（作为对白主语 / 动作主体 / 视角主体 / 场景描写主体出现）必须全部在清单内**；不在清单的角色出现即报，severity=high。仅作"路过/远远看见/被提到名字"的不算出场，需 LLM 判断是否构成"实际参与"。如果上下文未提供该清单段，不要报告 character_too_early
+- 正文整体没问题时返回 {"issues": []}
 - 不要输出 JSON 之外的任何文字

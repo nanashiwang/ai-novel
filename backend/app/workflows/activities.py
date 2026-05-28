@@ -800,6 +800,10 @@ async def _sync_bible_characters(session: AsyncSession, job: GenerationJob, bibl
             "relationships": seed.relationships,
             "current_state": seed.current_state,
         }
+        # Sprint 17-D：LLM 给出登场章节时透传；None 保留原值（兼容旧 bible）
+        first_appearance = getattr(seed, "first_appearance_chapter", None)
+        if isinstance(first_appearance, int) and first_appearance >= 1:
+            values["first_appearance_chapter"] = first_appearance
         if existing:
             for key, value in values.items():
                 setattr(existing, key, value)

@@ -1,4 +1,4 @@
-from sqlalchemy import JSON, ForeignKey, String, Text
+from sqlalchemy import JSON, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -20,3 +20,10 @@ class Character(Base, TenantMixin, TimestampMixin):
     arc: Mapped[str] = mapped_column(Text, default="")
     relationships: Mapped[dict] = mapped_column(JSON, default=dict)
     current_state: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Sprint 17-D 角色登场约束：该角色首次以正面戏份登场的章节号。
+    # 由 bible LLM 生成，作为 plan_scenes / audit 的硬约束依据，杜绝
+    # plot_threads 描述里"全书人物清单"导致的角色提前空降。
+    # NULL = 未指定，渲染时不强制约束（保持向后兼容）。
+    first_appearance_chapter: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, index=True
+    )

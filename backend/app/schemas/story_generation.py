@@ -17,6 +17,10 @@ class CharacterSeed(APIModel):
     arc: str = ""
     relationships: dict[str, Any] = Field(default_factory=dict)
     current_state: dict[str, Any] = Field(default_factory=dict)
+    # Sprint 17-D 角色登场约束：bible LLM 估计该角色首次正面登场的章节号。
+    # plan_scenes / audit 据此杜绝"未来角色被写进早期章节"的污染。
+    # None = 未指定，渲染时不强制约束。
+    first_appearance_chapter: int | None = None
 
     @field_validator(
         "name",
@@ -323,6 +327,10 @@ class AuditIssueItem(APIModel):
             "章内连贯": "intra_chapter_continuity",
             "intra_chapter": "intra_chapter_continuity",
             "intra_chapter_continuity": "intra_chapter_continuity",
+            "角色提前": "character_too_early",
+            "角色登场过早": "character_too_early",
+            "角色空降": "character_too_early",
+            "character_too_early": "character_too_early",
         }
         return mapping.get(v, v or "continuity")
 
