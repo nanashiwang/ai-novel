@@ -18,6 +18,7 @@ from app.api import (
     quotas,
     revisions,
     scenes,
+    story_states,
     style_samples,
     world_item_revisions,
     world_items,
@@ -39,6 +40,7 @@ api_router.include_router(characters.router)
 api_router.include_router(character_revisions.router)
 api_router.include_router(character_revisions.project_router)
 api_router.include_router(chapters.router)
+api_router.include_router(story_states.chapter_router)
 api_router.include_router(scenes.router)
 # Sprint 12-C: 注册 revision 子路由必须在 world_items/plot_threads 主路由之前，
 # 否则 GET /projects/{pid}/world-items/pending-count 会被 /{item_id} 吞掉。
@@ -48,6 +50,7 @@ api_router.include_router(world_items.router)
 api_router.include_router(plot_threads.router)
 api_router.include_router(information_ledger.router)
 api_router.include_router(style_samples.router)
+api_router.include_router(story_states.router)
 api_router.include_router(generation_jobs.router)
 api_router.include_router(events.router)
 

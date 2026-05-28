@@ -1,5 +1,6 @@
 from .audit_log import AdminAuditLog
 from .chapter import Chapter, Volume
+from .chapter_state_requirement import ChapterStateRequirement
 from .character import Character
 from .character_revision import CharacterRevision
 from .continuity_issue import ContinuityIssue
@@ -20,6 +21,8 @@ from .quota import QuotaBalance, QuotaReservation
 from .revision import RevisionAppliedChange, RevisionMessage, RevisionProposal, RevisionSession
 from .scene import Scene
 from .style_sample import StyleSample
+from .story_state_history import StoryStateHistory
+from .story_state_item import StoryStateItem
 from .system_setting import SystemSetting
 from .usage import UsageEvent
 from .user import User
@@ -29,6 +32,7 @@ from .world_item_revision import WorldItemRevision
 __all__ = [
     "AdminAuditLog",
     "Chapter",
+    "ChapterStateRequirement",
     "Character",
     "CharacterRevision",
     "ContinuityIssue",
@@ -56,6 +60,8 @@ __all__ = [
     "RevisionAppliedChange",
     "Scene",
     "StyleSample",
+    "StoryStateHistory",
+    "StoryStateItem",
     "SystemSetting",
     "UsageEvent",
     "User",
