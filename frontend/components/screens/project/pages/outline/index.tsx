@@ -318,8 +318,6 @@ export function OutlinePage({ projectId }: { projectId: string }) {
     }
     if (!activeId || !active) return;
     if (!filteredChapters.some((chapter) => chapter.id === activeId) && filteredChapters[0]) {
-      // 过滤变化导致当前 active 失效时回退到首项；不可省略。
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setActiveId(filteredChapters[0].id);
     }
   }, [active, activeId, filteredChapters]);
@@ -359,7 +357,6 @@ export function OutlinePage({ projectId }: { projectId: string }) {
       return;
     }
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setCollapsedGroups((current) => {
       const next: Record<string, boolean> = {};
       const currentGroupKey =
