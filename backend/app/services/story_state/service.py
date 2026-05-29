@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chapter import Chapter
@@ -31,6 +32,21 @@ def _json_dict(value: Any) -> dict[str, Any]:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+_NEXT_CHAPTER_REQUIREMENT_MARKERS = (
+    "下一章",
+    "下章",
+    "下个章节",
+    "后续章节",
+    "后文",
+    "此后",
+    "之后",
+    "日后",
+    "往后",
+    "以后",
+    "后续",
+)
 
 
 @dataclass(slots=True)
@@ -169,16 +185,18 @@ class StoryStateService:
         state_inputs: Sequence[StoryStateInput],
     ) -> dict[str, int]:
         req_repo = ChapterStateRequirementRepository(session)
-        deleted = await req_repo.delete_for_chapter(
+        deleted = await self._delete_rebuildable_requirements(
+            req_repo,
             organization_id=organization_id,
             project_id=project_id,
             chapter_id=chapter.id,
         )
-        created = 0
         state_repo = StoryStateRepository(session)
+        requirement_items: list[tuple[StoryStateInput, StoryStateItem, str]] = []
         dedupe_keys: set[tuple[str, str, str]] = set()
         for item in state_inputs:
-            if not item.requirement_hint.strip():
+            summary = item.requirement_hint.strip()
+            if not summary:
                 continue
             state = await state_repo.get_by_identity(
                 organization_id=organization_id,
@@ -190,26 +208,144 @@ class StoryStateService:
             )
             if not state:
                 continue
-            dedupe_key = (state.id, item.requirement_type, item.requirement_hint.strip())
+            dedupe_key = (state.id, item.requirement_type, summary)
             if dedupe_key in dedupe_keys:
                 continue
             dedupe_keys.add(dedupe_key)
-            await req_repo.create(
+            requirement_items.append((item, state, summary))
+
+        created, updated = await self._upsert_requirements_for_chapter(
+            req_repo,
+            organization_id=organization_id,
+            project_id=project_id,
+            chapter_id=chapter.id,
+            requirement_items=requirement_items,
+        )
+        next_items = [
+            item
+            for item in requirement_items
+            if _is_next_chapter_requirement(item[2])
+        ]
+        next_chapter = (
+            await self._find_next_chapter(
+                session,
                 organization_id=organization_id,
                 project_id=project_id,
-                chapter_id=chapter.id,
-                state_item_id=state.id,
-                requirement_type=item.requirement_type or "must_remember",
-                summary=item.requirement_hint.strip(),
-                priority=max(0, int(item.priority or 0)),
+                chapter=chapter,
             )
-            created += 1
+            if next_items
+            else None
+        )
+        next_created = 0
+        next_updated = 0
+        if next_chapter is not None:
+            next_created, next_updated = await self._upsert_requirements_for_chapter(
+                req_repo,
+                organization_id=organization_id,
+                project_id=project_id,
+                chapter_id=next_chapter.id,
+                requirement_items=next_items,
+            )
         return {
             "deleted": deleted,
             "created": created,
+            "updated": updated,
+            "next_chapter_created": next_created,
+            "next_chapter_updated": next_updated,
+            "next_chapter_id": next_chapter.id if next_chapter else None,
             "chapter_id": chapter.id,
             "scene_id": scene.id if scene else None,
         }
+
+    async def _delete_rebuildable_requirements(
+        self,
+        req_repo: ChapterStateRequirementRepository,
+        *,
+        organization_id: str,
+        project_id: str,
+        chapter_id: str,
+    ) -> int:
+        """重建当前章要求时，保留从前文传播来的未来向承接要求。"""
+        existing = list(
+            await req_repo.list_for_chapter(
+                organization_id=organization_id,
+                project_id=project_id,
+                chapter_id=chapter_id,
+            )
+        )
+        deleted = 0
+        for row in existing:
+            if _is_next_chapter_requirement(row.summary):
+                continue
+            await req_repo.session.delete(row)
+            deleted += 1
+        if deleted:
+            await req_repo.session.flush()
+        return deleted
+
+    async def _upsert_requirements_for_chapter(
+        self,
+        req_repo: ChapterStateRequirementRepository,
+        *,
+        organization_id: str,
+        project_id: str,
+        chapter_id: str,
+        requirement_items: Sequence[tuple[StoryStateInput, StoryStateItem, str]],
+    ) -> tuple[int, int]:
+        existing = list(
+            await req_repo.list_for_chapter(
+                organization_id=organization_id,
+                project_id=project_id,
+                chapter_id=chapter_id,
+            )
+        )
+        existing_by_key = {
+            (row.state_item_id, row.requirement_type, row.summary.strip()): row
+            for row in existing
+        }
+        created = 0
+        updated = 0
+        for item, state, summary in requirement_items:
+            requirement_type = item.requirement_type or "must_remember"
+            priority = max(0, int(item.priority or 0))
+            key = (state.id, requirement_type, summary)
+            current = existing_by_key.get(key)
+            if current is not None:
+                if int(current.priority or 0) < priority:
+                    current.priority = priority
+                    updated += 1
+                continue
+            created_row = await req_repo.create(
+                organization_id=organization_id,
+                project_id=project_id,
+                chapter_id=chapter_id,
+                state_item_id=state.id,
+                requirement_type=requirement_type,
+                summary=summary,
+                priority=priority,
+            )
+            existing_by_key[key] = created_row
+            created += 1
+        if updated:
+            await req_repo.session.flush()
+        return created, updated
+
+    async def _find_next_chapter(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        chapter: Chapter,
+    ) -> Chapter | None:
+        result = await session.execute(
+            select(Chapter).where(
+                Chapter.organization_id == organization_id,
+                Chapter.project_id == project_id,
+                Chapter.chapter_index == int(chapter.chapter_index or 0) + 1,
+            )
+        )
+        return result.scalar_one_or_none()
 
     def snapshot(self, state: StoryStateItem) -> dict[str, Any]:
         return {
@@ -230,3 +366,10 @@ class StoryStateService:
 
 
 story_state_service = StoryStateService()
+
+
+def _is_next_chapter_requirement(summary: str) -> bool:
+    text = (summary or "").strip()
+    if not text or text.startswith("本章后续"):
+        return False
+    return any(marker in text for marker in _NEXT_CHAPTER_REQUIREMENT_MARKERS)

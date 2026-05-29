@@ -227,6 +227,13 @@ async def extract_story_state_from_scene(
         "changed_count": changed,
         "requirement_count": requirement_result["created"],
         "requirement_deleted": requirement_result["deleted"],
+        "requirement_next_chapter_count": requirement_result.get(
+            "next_chapter_created", 0
+        ),
+        "requirement_next_chapter_updated": requirement_result.get(
+            "next_chapter_updated", 0
+        ),
+        "requirement_next_chapter_id": requirement_result.get("next_chapter_id"),
     }
 
 
