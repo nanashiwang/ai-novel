@@ -53,6 +53,7 @@ class SceneDrafterAgent:
         scene: Scene,
         beats: list[BeatItem],
         total_target_words: int,
+        extra_metadata: dict[str, object] | None = None,
     ) -> str:
         if not beats:
             # fail-fast：planner 失败时上层应该拦截，这里再加一道防线。
@@ -85,6 +86,7 @@ class SceneDrafterAgent:
                 "pipeline_step": "drafter",
                 "beat_count": len(beats),
                 "total_target_words": total_target_words,
+                **(extra_metadata or {}),
             },
         )
 

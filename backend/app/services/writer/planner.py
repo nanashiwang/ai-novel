@@ -36,6 +36,7 @@ class ScenePlannerAgent:
         ctx_prompt: str,
         scene: Scene,
         target_words: int,
+        extra_metadata: dict[str, object] | None = None,
     ) -> BeatSheetContract:
         system_prompt = prompt_manager.load(_PROMPT_KEY, version=_PROMPT_VERSION)
         user_prompt = (
@@ -60,6 +61,7 @@ class ScenePlannerAgent:
                 "scene_id": scene.id,
                 "pipeline_step": "planner",
                 "target_words": target_words,
+                **(extra_metadata or {}),
             },
         )
         beat_sheet = BeatSheetContract.model_validate(raw)

@@ -19,6 +19,11 @@ from app.schemas.story_generation import SceneDraftContract
 from app.services.context_builder.service import context_builder
 from app.services.model_gateway.service import model_gateway
 from app.services.prompt_manager.service import prompt_manager
+from app.services.story_state.prompting import (
+    build_anti_forgetting_prompt_block,
+    format_story_state_brief,
+    load_story_state_items_by_id,
+)
 
 _PROMPT_REWRITE_SCENE = "writing/rewrite_scene"
 # Sprint 13-B3：与 write_scene v2 对齐，同样强化人物口吻 + 节奏 + show 优先。
@@ -49,14 +54,33 @@ class RewriterService:
             chapter=chapter,
             scene=scene,
         )
+        anti_forgetting_block, anti_forgetting_meta = await build_anti_forgetting_prompt_block(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            chapter=chapter,
+            scene=scene,
+            purpose="writing",
+        )
+        linked_state_ids = {
+            issue.story_state_item_id
+            for issue in issues
+            if issue.story_state_item_id
+        }
+        linked_states = await load_story_state_items_by_id(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            state_item_ids=linked_state_ids,
+        )
         issues_block = "\n".join(
-            f"- [{issue.severity}/{issue.issue_type}] {issue.description}"
-            + (f"  修复建议：{issue.suggested_fix}" if issue.suggested_fix else "")
+            self._format_issue_line(issue, linked_states)
             for issue in issues
         ) or "（审稿系统未给出问题，仅做风格打磨。）"
 
         user_prompt = (
             ctx.to_prompt()
+            + anti_forgetting_block
             + "\n\n## 当前正文\n"
             + current_content
             + "\n\n## 待修复问题\n"
@@ -65,8 +89,10 @@ class RewriterService:
             + f"请基于以上上下文重新生成 scene #{scene.scene_index} 正文，"
             + f"目标字数约 {target_words} 字。要求：\n"
             + "- 修复每条问题的描述/建议，保持原情节走向\n"
+            + "- 严格遵守“写作防遗忘承接清单”，尤其是待修复问题关联的关键状态项\n"
             + "- 保留场景目标、冲突、揭示与钩子\n"
             + "- 不要在正文中输出 issue 编号或自我点评\n"
+            + "- 不要在正文中输出 story_state_item_id、requirement_id 或清单文字\n"
             + "- 只返回 JSON。"
         )
         raw = await model_gateway.generate_json(
@@ -85,6 +111,8 @@ class RewriterService:
                 "chapter_id": chapter.id,
                 "context_total_tokens": ctx.total_tokens,
                 "issue_count": len(issues),
+                "linked_story_state_issue_count": len(linked_state_ids),
+                **anti_forgetting_meta,
             },
         )
         draft = SceneDraftContract.model_validate(
@@ -101,6 +129,21 @@ class RewriterService:
                 unresolved_threads=[],
             )
         return draft
+
+    def _format_issue_line(
+        self,
+        issue: ContinuityIssue,
+        linked_states: dict[str, object],
+    ) -> str:
+        line = f"- [{issue.severity}/{issue.issue_type}] {issue.description}"
+        if issue.story_state_item_id:
+            line += f"；story_state_item_id={issue.story_state_item_id}"
+            linked = linked_states.get(issue.story_state_item_id)
+            if linked is not None:
+                line += f"；关联关键状态：{format_story_state_brief(linked)}"
+        if issue.suggested_fix:
+            line += f"  修复建议：{issue.suggested_fix}"
+        return line
 
 
 rewriter_service = RewriterService()

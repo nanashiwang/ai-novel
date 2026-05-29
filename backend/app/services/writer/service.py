@@ -11,6 +11,7 @@ from app.services.context_builder.service import context_builder
 from app.services.model_gateway.providers import ModelJsonParseError
 from app.services.model_gateway.service import model_gateway
 from app.services.prompt_manager.service import prompt_manager
+from app.services.story_state.prompting import build_anti_forgetting_prompt_block
 from app.services.writer.drafter import scene_drafter_agent
 from app.services.writer.planner import scene_planner_agent
 from app.services.writer.stylist import scene_stylist_agent
@@ -74,6 +75,16 @@ class WriterService:
             previous_excerpt=previous_scene_excerpt,
         )
         ctx_prompt = ctx.to_prompt()
+        anti_forgetting_block, anti_forgetting_meta = await build_anti_forgetting_prompt_block(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            chapter=chapter,
+            scene=scene,
+            purpose="writing",
+        )
+        if anti_forgetting_block:
+            ctx_prompt = ctx_prompt + anti_forgetting_block
 
         settings = get_settings()
         if settings.writer_pipeline_mode == "multi":
@@ -88,6 +99,7 @@ class WriterService:
                 ctx_prompt=ctx_prompt,
                 ctx_total_tokens=ctx.total_tokens,
                 ctx_truncated=[s.label for s in ctx.segments if s.truncated],
+                anti_forgetting_meta=anti_forgetting_meta,
                 target_words=target_words,
             )
         return await self._write_scene_draft_single(
@@ -100,6 +112,7 @@ class WriterService:
             ctx_prompt=ctx_prompt,
             ctx_total_tokens=ctx.total_tokens,
             ctx_truncated=[s.label for s in ctx.segments if s.truncated],
+            anti_forgetting_meta=anti_forgetting_meta,
             target_words=target_words,
         )
 
@@ -115,6 +128,7 @@ class WriterService:
         ctx_prompt: str,
         ctx_total_tokens: int,
         ctx_truncated: list[str],
+        anti_forgetting_meta: dict[str, object],
         target_words: int,
     ) -> SceneDraftContract:
         """原 single 模式：单次 generate_json 直接产 SceneDraftContract。"""
@@ -146,6 +160,7 @@ class WriterService:
                     # 把 ContextBuilder 的诊断指标记到 metadata，便于运维侧观察预算分配
                     "context_total_tokens": ctx_total_tokens,
                     "context_truncated_segments": ctx_truncated,
+                    **anti_forgetting_meta,
                 },
             )
         except ModelJsonParseError as exc:
@@ -190,6 +205,7 @@ class WriterService:
         ctx_prompt: str,
         ctx_total_tokens: int,
         ctx_truncated: list[str],
+        anti_forgetting_meta: dict[str, object],
         target_words: int,
     ) -> SceneDraftContract:
         """multi 模式：planner → drafter → stylist 三步流水线。
@@ -206,6 +222,7 @@ class WriterService:
             ctx_prompt=ctx_prompt,
             scene=scene,
             target_words=target_words,
+            extra_metadata=anti_forgetting_meta,
         )
         if not beat_sheet.beats:
             raise ValueError("scene_planner_returned_no_beats")
@@ -220,6 +237,7 @@ class WriterService:
             scene=scene,
             beats=beat_sheet.beats,
             total_target_words=beat_sheet.total_target_words or target_words,
+            extra_metadata=anti_forgetting_meta,
         )
         if not draft_markdown.strip():
             raise ValueError("scene_drafter_returned_empty_markdown")

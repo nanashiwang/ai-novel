@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import random
-from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,17 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.chapter import Chapter
 from app.models.project import NovelSpec, Project
 from app.models.scene import Scene
-from app.repositories import (
-    ChapterStateRequirementRepository,
-    CharacterRepository,
-    InformationLedgerRepository,
-    StoryStateRepository,
-)
+from app.repositories import CharacterRepository, InformationLedgerRepository
 from app.schemas.story_generation import AuditResultContract
 from app.services.context_builder.service import context_builder
 from app.services.model_gateway.service import model_gateway
 from app.services.prompt_manager.service import prompt_manager
 from app.services.scene_budget import build_scene_budget_plan
+from app.services.story_state.prompting import build_anti_forgetting_prompt_block
 
 _PROMPT_AUDIT_SCENE = "audit/audit_scene"
 _PROMPT_VERSION = "v1"
@@ -65,12 +60,13 @@ class AuditorService:
             chapter=chapter,
             scene=scene,
         )
-        anti_forgetting_block, anti_forgetting_meta = await _build_anti_forgetting_audit_block(
+        anti_forgetting_block, anti_forgetting_meta = await build_anti_forgetting_prompt_block(
             session,
             organization_id=organization_id,
             project_id=project_id,
             chapter=chapter,
             scene=scene,
+            purpose="audit",
         )
         draft_word_count = len(draft_content or "")
 
@@ -217,125 +213,6 @@ class AuditorService:
             },
         )
         return AuditResultContract.model_validate(raw)
-
-
-async def _build_anti_forgetting_audit_block(
-    session: AsyncSession,
-    *,
-    organization_id: str,
-    project_id: str,
-    chapter: Chapter,
-    scene: Scene,
-    state_limit: int = 18,
-    requirement_limit: int = 10,
-) -> tuple[str, dict[str, Any]]:
-    """为审稿额外注入结构化防遗忘清单。
-
-    ContextBuilder 已经会把 story_states 作为写作上下文注入；这里再为审稿
-    单独组织一份带 id、状态和判定规则的清单，降低模型把普通上下文当成
-    可选参考、从而漏检关键设定冲突的概率。
-    """
-    meta: dict[str, Any] = {
-        "anti_forgetting_state_count": 0,
-        "anti_forgetting_requirement_count": 0,
-    }
-    try:
-        state_repo = StoryStateRepository(session)
-        req_repo = ChapterStateRequirementRepository(session)
-        state_rows = list(
-            await state_repo.list_filtered(
-                organization_id=organization_id,
-                project_id=project_id,
-                limit=max(state_limit * 4, 60),
-            )
-        )
-        requirement_rows = list(
-            await req_repo.list_for_chapter(
-                organization_id=organization_id,
-                project_id=project_id,
-                chapter_id=chapter.id,
-            )
-        )[:requirement_limit]
-    except Exception:  # noqa: BLE001 - 防遗忘审稿清单不可阻断主审稿
-        return "", meta
-
-    if not state_rows and not requirement_rows:
-        return "", meta
-
-    chapter_ids = {
-        chapter_ref
-        for item in state_rows
-        for chapter_ref in (item.source_chapter_id, item.updated_in_chapter_id)
-        if chapter_ref
-    }
-    chapter_index_by_id: dict[str, int] = {}
-    if chapter_ids:
-        try:
-            rows = (
-                await session.execute(
-                    select(Chapter.id, Chapter.chapter_index).where(Chapter.id.in_(chapter_ids))
-                )
-            ).all()
-            chapter_index_by_id = {row[0]: int(row[1] or 0) for row in rows}
-        except Exception:  # noqa: BLE001
-            chapter_index_by_id = {}
-
-    focus_names = {name.strip() for name in (scene.characters or []) if name and name.strip()}
-    ranked = list(
-        context_builder._select_story_state_items(
-            state_rows,
-            current_chapter_index=chapter.chapter_index,
-            chapter_index_by_id=chapter_index_by_id,
-            focus_names=focus_names,
-            limit=state_limit,
-        )
-    )
-
-    required_state_ids = {req.state_item_id for req in requirement_rows if req.state_item_id}
-    ranked_ids = {item.id for item in ranked}
-    required_items = [
-        item for item in state_rows if item.id in required_state_ids and item.id not in ranked_ids
-    ]
-    if required_items:
-        ranked = (required_items + ranked)[: max(state_limit, len(required_items))]
-
-    lines = [
-        "\n\n## 防遗忘审稿清单",
-        "判定规则：只基于本清单、ContextBuilder 上下文和待审稿正文里的明示内容判定；"
-        "不要凭空增加正文必须出现的设定。",
-        "若发现正文与某条关键状态或本章承接要求冲突，请优先使用 "
-        "state_conflict / forgotten_state / premature_state_use / "
-        "resolved_state_reused / hard_constraint_violation。",
-    ]
-
-    if requirement_rows:
-        lines.append("\n本章承接要求（必须检查正文是否承接、推进或合理悬置）：")
-        for req in requirement_rows:
-            lines.append(
-                f"· requirement_id={req.id}；story_state_item_id={req.state_item_id}；"
-                f"[{req.requirement_type}] P{int(req.priority or 0)}：{req.summary}"
-            )
-
-    if ranked:
-        lines.append("\n关键状态项（用于检查前后矛盾、提前使用、遗忘承接）：")
-        for item in ranked:
-            prefix = "[硬约束] " if item.is_hard_constraint else ""
-            source_index = chapter_index_by_id.get(
-                item.updated_in_chapter_id or item.source_chapter_id or "",
-                0,
-            )
-            source = f"；来源章=第{source_index}章" if source_index else ""
-            payload = context_builder._stringify_value(item.value_json or {})
-            detail = f"；细节={payload}" if payload and payload != "{}" else ""
-            lines.append(
-                f"· story_state_item_id={item.id}；{prefix}[{item.entity_type}/{item.state_type}] "
-                f"{item.name}；status={item.status or 'active'}；"
-                f"P{int(item.priority or 0)}{source}：{item.summary or '—'}{detail}"
-            )
-
-    meta["anti_forgetting_state_count"] = len(ranked)
-    meta["anti_forgetting_requirement_count"] = len(requirement_rows)
-    return "\n".join(lines), meta
 
 
 async def _resolve_audit_scene_target_words(
