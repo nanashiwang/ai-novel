@@ -18,6 +18,7 @@ from app.models import (
     QuotaBalance,
     QuotaReservation,
     Scene,
+    StoryStateItem,
 )
 from app.models.common import new_id
 from app.schemas.story_generation import AuditIssueItem, AuditResultContract
@@ -195,6 +196,83 @@ async def test_audit_scene_writes_issues(client, db_engine, db_session, monkeypa
     api_issues = [issue for issue in list_res.json() if issue["scene_id"] == scene_id]
     assert len(api_issues) == len(issues)
     assert api_issues[0]["chapter_id"] is not None
+
+
+@pytest.mark.asyncio
+async def test_audit_scene_persists_story_state_link(
+    client, db_engine, db_session, monkeypatch
+):
+    """审稿返回 story_state_item_id 时，落库并透出到 continuity issues API。"""
+    Session = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+    monkeypatch.setattr(activities, "AsyncSessionLocal", Session)
+
+    org_id, project_id, chapter_id, scene_id, _, headers = await _setup_with_draft(
+        client, db_session, email="audit-state-link@example.com"
+    )
+    state_id = new_id("state")
+    db_session.add(
+        StoryStateItem(
+            id=state_id,
+            organization_id=org_id,
+            project_id=project_id,
+            entity_type="artifact",
+            entity_id=None,
+            state_type="artifact",
+            name="因果印",
+            status="damaged",
+            summary="因果印已有裂痕，不能写成完好无损。",
+            value_json={},
+            source_chapter_id=chapter_id,
+            source_scene_id=scene_id,
+            source_excerpt="因果印出现裂痕。",
+            updated_in_chapter_id=chapter_id,
+            priority=90,
+            is_hard_constraint=True,
+        )
+    )
+    await db_session.commit()
+
+    async def _review_with_state_link(*args, **kwargs):
+        return AuditResultContract(
+            issues=[
+                AuditIssueItem(
+                    issue_type="设定冲突",
+                    severity="高",
+                    description="正文把因果印写成完好无损，与关键状态冲突。",
+                    suggested_fix="把因果印改为裂痕反噬状态。",
+                    story_state_item_id=state_id,
+                )
+            ]
+        )
+
+    monkeypatch.setattr(activities.auditor_service, "audit_scene_draft", _review_with_state_link)
+
+    res = await client.post(
+        f"/api/v1/projects/{project_id}/scenes/{scene_id}/audit",
+        headers=headers,
+        json={"estimate_words": 500},
+    )
+    assert res.status_code == 202, res.text
+    job = await _await_job_terminal(db_session, res.json()["id"])
+    assert job.status == "succeeded"
+
+    db_session.expire_all()
+    issue = (
+        await db_session.execute(
+            select(ContinuityIssue).where(ContinuityIssue.scene_id == scene_id)
+        )
+    ).scalar_one()
+    assert issue.issue_type == "state_conflict"
+    assert issue.severity == "high"
+    assert issue.story_state_item_id == state_id
+
+    list_res = await client.get(
+        f"/api/v1/projects/{project_id}/continuity-issues",
+        headers=headers,
+    )
+    assert list_res.status_code == 200
+    api_issue = next(issue for issue in list_res.json() if issue["scene_id"] == scene_id)
+    assert api_issue["story_state_item_id"] == state_id
 
 
 @pytest.mark.asyncio

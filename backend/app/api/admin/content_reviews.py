@@ -18,6 +18,7 @@ async def content_reviews(user: CurrentUserDep, db: DbDep):
             "id": r.id,
             "organization_id": r.organization_id,
             "project_id": r.project_id,
+            "story_state_item_id": r.story_state_item_id,
             "issue_type": r.issue_type,
             "severity": r.severity,
             "description": r.description,

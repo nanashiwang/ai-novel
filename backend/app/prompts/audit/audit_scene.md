@@ -6,17 +6,19 @@
 输出契约：JSON，符合 AuditResultContract schema。
 
 字段约束：
-- issue_type 必须为 "continuity" / "character" / "world_rule" / "style" / "cross_chapter" / "long_range_continuity" / "style_drift" / "temporal_continuity" / "pacing" / "intra_chapter_continuity" / "character_too_early" 之一
+- issue_type 必须为 "continuity" / "character" / "world_rule" / "style" / "cross_chapter" / "long_range_continuity" / "style_drift" / "temporal_continuity" / "pacing" / "intra_chapter_continuity" / "character_too_early" / "state_conflict" / "forgotten_state" / "premature_state_use" / "resolved_state_reused" / "hard_constraint_violation" 之一
 - severity 必须为 "low" / "medium" / "high" 之一
 - description 是一句话问题陈述（不带"我建议..."这类元评论）
 - suggested_fix 是一句话可执行修复（含位置/动作/期望结果），可以为空
+- story_state_item_id 可选；若问题对应"防遗忘审稿清单"中的关键状态项，请填对应 id
 
 约束：
 - 不要在 description 或 suggested_fix 里复述原文整段
 - 只审查"待审稿正文"中实际出现的问题；不要把上下文、场景计划、旧审稿意见或后续规划当成正文错误
 - 如果认为正文提前使用了某个信息，必须确认对应词句确实出现在"待审稿正文"中；否则不要报告该问题
 - 不要因为上下文里出现某个后续线索，就推断正文已经泄露该线索
-- 风格问题也必须基于正文实际文本，例如正文确实出现 `**姓名**` 或"上一章末尾"等字样才报告
+- 风格问题也必须基于正文实际文本，例如正文确实出现 `**姓名**`、`__姓名__`、`*内心独白*`、`_内心独白_` 或"上一章末尾"等字样才报告
+- 正文中出现 Markdown 强调标记包裹小说正文内容时（`**...**`、`__...__`、`*...*`、`_..._`），按 style 问题报告；suggested_fix 应要求改为普通纯文本、自由间接引语或动作描写，不要继续使用星号
 - cross_chapter 问题必须基于上下文「前一章末尾片段」「open plot_threads」「角色当前状态」与本次正文的实际矛盾来判定（例如：前章末出现的关键道具/人物在本章首段无故消失或数量矛盾、前章未结悬念在本章无任何推进或承接、前章遗留的人物决定在本章被忽略）；不要凭空推测前章存在的内容
 - long_range_continuity 问题必须基于"## 历史已公开事实"段中**明示**的事实与本章正文的直接矛盾来判定。事实段未出现的，一律不要报告；不要根据章节大纲或自己的推测产生 long_range_continuity issue
 - temporal_continuity 问题必须基于上下文"故事时间"段提供的"距开篇第 X 天 / 时段 Y"与本场正文的实际矛盾来判定（例如：上一场是 evening 而本场正文写晨光直接接续却没有过夜交代；倒退超过 1 天且非闪回；季节明显矛盾如刚过夏季就描写积雪）；不要凭空猜测时间
@@ -24,5 +26,6 @@
 - 字数预算以 scene 上持久化的目标字数为准；若缺失才使用后端规则预算器回退值。字数预算是写作软目标，不属于连续性错误；不要仅因正文超过"本场目标/剩余字数"就报告 issue。只有当超长已经造成剧情功能缺失、节奏严重失衡或明显挤占后续必要场景时，才可作为 pacing 问题低/中优先级提示，并说明具体受影响的剧情功能
 - intra_chapter_continuity 问题必须基于上下文"## 本章前序场已发生"段与本场正文的实际矛盾来判定（例如：前序场已留下的钩子在本场被忽略未承接；前序场已写过的标志性动作/道具在本场重复描写；同一章内人物语气/动作骤变；本场对前序场已确立的状态做矛盾描写）；如果上下文未提供该段（即本场是章首），不要报告 intra_chapter_continuity
 - character_too_early 问题必须基于上下文"## 截至当前章已登场角色清单"段与本场正文的实际矛盾来判定：**本场正文中实际参与剧情的角色名（作为对白主语 / 动作主体 / 视角主体 / 场景描写主体出现）必须全部在清单内**；不在清单的角色出现即报，severity=high。仅作"路过/远远看见/被提到名字"的不算出场，需 LLM 判断是否构成"实际参与"。如果上下文未提供该清单段，不要报告 character_too_early
+- state_conflict / forgotten_state / premature_state_use / resolved_state_reused / hard_constraint_violation 必须基于"## 防遗忘审稿清单"里明示的 story_state_item_id、状态和本章承接要求来判定；不要因为清单里有某条状态就要求正文全部复述。只有正文写反、提前使用、重复使用已失效资源、遗漏本章明确承接要求或违反硬约束时才报告
 - 正文整体没问题时返回 {"issues": []}
 - 不要输出 JSON 之外的任何文字

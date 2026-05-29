@@ -17,6 +17,12 @@ class ContinuityIssue(Base, TenantMixin, TimestampMixin):
     project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), index=True)
     chapter_id: Mapped[Optional[str]] = mapped_column(String(64), ForeignKey("chapters.id"))
     scene_id: Mapped[Optional[str]] = mapped_column(String(64), ForeignKey("scenes.id"))
+    story_state_item_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        ForeignKey("story_state_items.id"),
+        nullable=True,
+        index=True,
+    )
     issue_type: Mapped[str] = mapped_column(String(64), index=True)
     severity: Mapped[str] = mapped_column(String(32), index=True)
     description: Mapped[str] = mapped_column(Text)

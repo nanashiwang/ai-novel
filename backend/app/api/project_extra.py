@@ -107,6 +107,7 @@ class ContinuityIssueResponse(APIModel):
     project_id: str
     chapter_id: str | None = None
     scene_id: str | None = None
+    story_state_item_id: str | None = None
     issue_type: str
     severity: str
     description: str

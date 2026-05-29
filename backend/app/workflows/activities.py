@@ -31,6 +31,7 @@ from app.models.plot_thread import PlotThread
 from app.models.project import NovelSpec, Project
 from app.models.quota import QuotaReservation
 from app.models.scene import Scene
+from app.models.story_state_item import StoryStateItem
 from app.models.world_item import WorldItem
 from app.repositories import (
     ChapterRepository,
@@ -402,24 +403,6 @@ async def _run_chapter_in_extracts(
     except Exception:  # noqa: BLE001
         _logger.warning("inchapter_plot_extract_failed", exc_info=True)
 
-    try:
-        from app.services.story_state.extract import (  # noqa: PLC0415
-            extract_story_state_from_scene as _extract_story_state,
-        )
-
-        await _extract_story_state(
-            session,
-            organization_id=organization_id,
-            project_id=project_id,
-            job_id=job_id,
-            chapter=chapter,
-            scene=scene,
-            draft=draft,
-            created_by=created_by,
-        )
-    except Exception:  # noqa: BLE001
-        _logger.warning("inchapter_story_state_extract_failed", exc_info=True)
-
     # Sprint 17-B 全局时间线：同步推演结构化时间戳并写回 scenes 表。
     try:
         from app.services.temporal_tracker.extract import (  # noqa: PLC0415
@@ -437,6 +420,49 @@ async def _run_chapter_in_extracts(
         )
     except Exception:  # noqa: BLE001
         _logger.warning("inchapter_temporal_extract_failed", exc_info=True)
+
+
+async def _run_story_state_extract(
+    session: AsyncSession,
+    *,
+    organization_id: str,
+    project_id: str,
+    job_id: str | None,
+    chapter: Chapter,
+    scene: Scene,
+    draft: DraftVersion,
+    created_by: str | None,
+    source: str,
+) -> dict[str, Any]:
+    """从最新正文提取长期关键设定。
+
+    关键设定是防遗忘/审稿的基础数据，不能再依赖
+    inchapter_extract_enabled 这个高成本推演开关；失败只记录日志，不阻断正文落库。
+    """
+    if not draft or not draft.content:
+        return {"upserted_count": 0, "requirement_count": 0, "skipped": "no_draft"}
+    try:
+        from app.services.story_state.extract import (  # noqa: PLC0415
+            extract_story_state_from_scene as _extract_story_state,
+        )
+
+        return await _extract_story_state(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            job_id=job_id,
+            chapter=chapter,
+            scene=scene,
+            draft=draft,
+            created_by=created_by,
+        )
+    except Exception:  # noqa: BLE001
+        _logger.warning(
+            "story_state_extract_failed",
+            exc_info=True,
+            extra={"scene_id": scene.id, "chapter_id": chapter.id, "source": source},
+        )
+        return {"upserted_count": 0, "requirement_count": 0, "error": "failed"}
 
 
 _summarize_tasks: set[Any] = set()
@@ -655,11 +681,18 @@ def _spawn_long_range_audit(
                 )
                 issue_repo = ContinuityIssueRepository(session)
                 for item in contract.issues:
+                    story_state_item_id = await _resolve_issue_story_state_item_id(
+                        session,
+                        organization_id=organization_id,
+                        project_id=project_id,
+                        review_item=item,
+                    )
                     await issue_repo.create(
                         organization_id=organization_id,
                         project_id=project_id,
                         chapter_id=chapter_id,
                         scene_id=target_scene.id,
+                        story_state_item_id=story_state_item_id,
                         issue_type=item.issue_type,
                         severity=item.severity,
                         description=item.description,
@@ -2029,6 +2062,8 @@ async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
         force = bool(payload.get("force_regenerate_drafts"))
         created = 0
         reused = 0
+        story_state_upserted = 0
+        story_state_requirements = 0
         total_words = sum(draft.word_count for draft in draft_by_scene.values())
         # Sprint 16-E2：按 chapter 分组算 target_words / scene，让每场都贴合
         # chapter.target_words 预算；旧 chapter（target_words=0）回落到旧的
@@ -2109,6 +2144,21 @@ async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
                 chapter=chapter,
                 scene=scene,
                 draft=saved,
+            )
+            story_state_result = await _run_story_state_extract(
+                session,
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                job_id=job_row.id,
+                chapter=chapter,
+                scene=scene,
+                draft=saved,
+                created_by=job_row.user_id,
+                source="write_scene_drafts",
+            )
+            story_state_upserted += int(story_state_result.get("upserted_count") or 0)
+            story_state_requirements += int(
+                story_state_result.get("requirement_count") or 0
             )
             # Sprint 16-E4：章内同步等待三链推演（与 single scene workflow 行为对齐）
             if get_settings().inchapter_extract_enabled:
@@ -2206,6 +2256,8 @@ async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
             "created_draft_count": created,
             "reused_draft_count": reused,
             "word_count": total_words,
+            "story_state_upserted": story_state_upserted,
+            "story_state_requirements": story_state_requirements,
         }
 
 
@@ -2306,6 +2358,17 @@ async def run_scene_writing(job: dict[str, Any]) -> dict[str, Any]:
             scene=scene,
             draft=saved,
         )
+        story_state_result = await _run_story_state_extract(
+            session,
+            organization_id=job_row.organization_id,
+            project_id=job_row.project_id,
+            job_id=job_row.id,
+            chapter=chapter,
+            scene=scene,
+            draft=saved,
+            created_by=job_row.user_id,
+            source="run_scene_writing",
+        )
 
         # 与 generate_chapter_scene_cards 对称：单 scene 写作自身结算 quota
         await _settle_job_usage(session, job_row, amount=job_row.reserved_quota)
@@ -2343,6 +2406,7 @@ async def run_scene_writing(job: dict[str, Any]) -> dict[str, Any]:
             "context_summary": context_summary,
             "context_total_tokens": ctx_inspector.total_tokens,
             "memory": memory_result,
+            "story_state": story_state_result,
         }
         job_row.output_payload = result
         return result
@@ -2710,6 +2774,17 @@ async def write_chapter_scenes_for_full_novel(
                 scene=scene,
                 draft=saved,
             )
+            story_state_result = await _run_story_state_extract(
+                session,
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                job_id=job_row.id,
+                chapter=chapter,
+                scene=scene,
+                draft=saved,
+                created_by=job_row.user_id,
+                source="write_chapter_scenes_for_full_novel",
+            )
             # Sprint 16-E4：章内同步等待三链推演（与 single scene workflow 对齐）
             if get_settings().inchapter_extract_enabled:
                 await _run_chapter_in_extracts(
@@ -2730,6 +2805,7 @@ async def write_chapter_scenes_for_full_novel(
                 "status": "drafted",
                 "words": word_count,
                 "draft_id": saved.id,
+                "story_state": story_state_result,
             })
 
         # 更新 chapter 状态：若本章所有 scenes 都已 drafted/reused → 标 drafted
@@ -2908,11 +2984,18 @@ async def audit_scene(job: dict[str, Any]) -> dict[str, Any]:
 
         created_issues: list[dict[str, Any]] = []
         for item in contract.issues:
+            story_state_item_id = await _resolve_issue_story_state_item_id(
+                session,
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                review_item=item,
+            )
             row = await issue_repo.create(
                 organization_id=job_row.organization_id,
                 project_id=job_row.project_id,
                 chapter_id=chapter.id,
                 scene_id=scene.id,
+                story_state_item_id=story_state_item_id,
                 issue_type=item.issue_type,
                 severity=item.severity,
                 description=item.description,
@@ -2925,6 +3008,7 @@ async def audit_scene(job: dict[str, Any]) -> dict[str, Any]:
                     "issue_type": row.issue_type,
                     "severity": row.severity,
                     "description": row.description,
+                    "story_state_item_id": row.story_state_item_id,
                 }
             )
 
@@ -3446,10 +3530,37 @@ def _issue_text(value: str | None) -> str:
     return "".join(str(value or "").lower().split())
 
 
+async def _resolve_issue_story_state_item_id(
+    session: AsyncSession,
+    *,
+    organization_id: str,
+    project_id: str,
+    review_item: Any,
+) -> str | None:
+    """只落库真实存在的 story_state_item_id，防止模型幻觉 id 触发外键失败。"""
+    candidate = str(getattr(review_item, "story_state_item_id", "") or "").strip()
+    if not candidate:
+        return None
+    exists = (
+        await session.execute(
+            select(StoryStateItem.id).where(
+                StoryStateItem.organization_id == organization_id,
+                StoryStateItem.project_id == project_id,
+                StoryStateItem.id == candidate,
+            )
+        )
+    ).scalar_one_or_none()
+    return str(exists) if exists else None
+
+
 def _issue_matches_review(original: ContinuityIssue, review_item: Any) -> bool:
     """判断复审问题是否仍指向原问题，避免重复 open 同一条。"""
     if original.issue_type != getattr(review_item, "issue_type", ""):
         return False
+    original_state_id = (original.story_state_item_id or "").strip()
+    review_state_id = str(getattr(review_item, "story_state_item_id", "") or "").strip()
+    if original_state_id and review_state_id and original_state_id == review_state_id:
+        return True
     original_text = _issue_text(
         f"{original.description} {original.suggested_fix or ''}"
     )
@@ -3471,6 +3582,7 @@ def _issue_summary(row: ContinuityIssue) -> dict[str, Any]:
         "severity": row.severity,
         "description": row.description,
         "status": row.status,
+        "story_state_item_id": row.story_state_item_id,
     }
 
 
@@ -3577,6 +3689,17 @@ async def rewrite_scene(job: dict[str, Any]) -> dict[str, Any]:
             draft_content=new_draft.content,
             source="rewrite_scene",
         )
+        story_state_result = await _run_story_state_extract(
+            session,
+            organization_id=job_row.organization_id,
+            project_id=job_row.project_id,
+            job_id=job_row.id,
+            chapter=chapter,
+            scene=scene,
+            draft=saved,
+            created_by=job_row.user_id,
+            source="rewrite_scene",
+        )
 
         review_error = ""
         review_items: list[Any] = []
@@ -3617,11 +3740,18 @@ async def rewrite_scene(job: dict[str, Any]) -> dict[str, Any]:
                     matched_issue_ids.add(matched.id)
                     matched.status = "open"
                     continue
+                story_state_item_id = await _resolve_issue_story_state_item_id(
+                    session,
+                    organization_id=job_row.organization_id,
+                    project_id=job_row.project_id,
+                    review_item=item,
+                )
                 row = await issue_repo.create(
                     organization_id=job_row.organization_id,
                     project_id=job_row.project_id,
                     chapter_id=chapter.id,
                     scene_id=scene.id,
+                    story_state_item_id=story_state_item_id,
                     issue_type=item.issue_type,
                     severity=item.severity,
                     description=item.description,
@@ -3656,6 +3786,7 @@ async def rewrite_scene(job: dict[str, Any]) -> dict[str, Any]:
             "remaining_issue_count": remaining_issue_count,
             "review_error": review_error or None,
             "review_issues": created_review_issues,
+            "story_state": story_state_result,
         }
 
 

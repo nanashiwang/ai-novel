@@ -595,6 +595,20 @@ _POSTGRES_SCHEMA_FIXES = [
         "CREATE INDEX IF NOT EXISTS ix_chapter_state_requirements_project_state_item "
         "ON chapter_state_requirements(project_id, state_item_id)"
     ),
+    # Sprint 18-B1：审稿问题关联关键状态项；旧数据卷需要运行时补列。
+    "ALTER TABLE continuity_issues ADD COLUMN IF NOT EXISTS story_state_item_id VARCHAR(64)",
+    (
+        "CREATE INDEX IF NOT EXISTS ix_continuity_issues_story_state_item_id "
+        "ON continuity_issues(story_state_item_id)"
+    ),
+    """
+    DO $$ BEGIN
+      ALTER TABLE continuity_issues
+      ADD CONSTRAINT fk_continuity_issues_story_state_item_id
+      FOREIGN KEY (story_state_item_id) REFERENCES story_state_items(id);
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$;
+    """,
 ]
 
 

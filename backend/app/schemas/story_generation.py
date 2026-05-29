@@ -291,6 +291,8 @@ class AuditIssueItem(APIModel):
     severity: str = "medium"
     description: str = ""
     suggested_fix: str = ""
+    # 防遗忘审稿问题可关联到具体关键状态项，便于 UI 跳转查看/修正。
+    story_state_item_id: str | None = None
 
     @field_validator("issue_type", mode="before")
     @classmethod
@@ -331,6 +333,24 @@ class AuditIssueItem(APIModel):
             "角色登场过早": "character_too_early",
             "角色空降": "character_too_early",
             "character_too_early": "character_too_early",
+            "设定冲突": "state_conflict",
+            "关键设定冲突": "state_conflict",
+            "状态冲突": "state_conflict",
+            "state_conflict": "state_conflict",
+            "遗忘设定": "forgotten_state",
+            "遗忘状态": "forgotten_state",
+            "防遗忘遗漏": "forgotten_state",
+            "forgotten_state": "forgotten_state",
+            "提前使用": "premature_state_use",
+            "提前使用设定": "premature_state_use",
+            "premature_state_use": "premature_state_use",
+            "已解决复用": "resolved_state_reused",
+            "已消耗复用": "resolved_state_reused",
+            "失效复用": "resolved_state_reused",
+            "resolved_state_reused": "resolved_state_reused",
+            "硬约束违规": "hard_constraint_violation",
+            "硬规则违规": "hard_constraint_violation",
+            "hard_constraint_violation": "hard_constraint_violation",
         }
         return mapping.get(v, v or "continuity")
 
