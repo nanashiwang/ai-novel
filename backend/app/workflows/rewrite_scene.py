@@ -1,7 +1,8 @@
 """场景重写 workflow。
 
 单 activity 任务：调 rewrite_scene，基于当前 open issues 重写 draft，新建
-version_type=rewrite 的 DraftVersion，把 issues 标 fixed。Sprint 5-A。
+version_type=rewrite 的 DraftVersion，并自动复审。只有复审通过的问题才会
+标 fixed；复审仍发现的问题保持/新增为 open。
 
 Sprint 10 Phase B：rewrite 主 activity 后追加 fire-and-forget 角色推演。
 """

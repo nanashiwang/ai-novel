@@ -350,6 +350,11 @@ CREATE TABLE IF NOT EXISTS scenes (
   reveal TEXT NOT NULL DEFAULT '',
   hook TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'planned',
+  target_words INTEGER NOT NULL DEFAULT 0,
+  beat_start INTEGER,
+  beat_end INTEGER,
+  beat_group_summary TEXT NOT NULL DEFAULT '',
+  budget_reason TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

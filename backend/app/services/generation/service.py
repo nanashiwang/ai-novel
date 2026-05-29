@@ -19,6 +19,7 @@ from app.repositories import (
     GenerationJobRepository,
     NovelSpecRepository,
     ProjectRepository,
+    SceneRepository,
 )
 from app.services.entitlement.service import require_entitlement
 from app.services.event_bus import build_event, publish_event_fire_and_forget
@@ -32,6 +33,14 @@ PLAN_QUEUE = {
     "Team": "queue_team",
     "Enterprise": "queue_enterprise",
 }
+
+
+def _stored_target_words(scene: Any, fallback: int) -> int:
+    try:
+        value = int(getattr(scene, "target_words", 0) or 0)
+    except (TypeError, ValueError):
+        value = 0
+    return value if value > 0 else fallback
 
 
 def _compute_dedupe_key(
@@ -522,6 +531,12 @@ class GenerationService:
         if not project:
             raise NotFoundError("project_not_found")
         ensure_same_tenant(project.organization_id, tenant)
+        scene = await SceneRepository(session).get(
+            scene_id, organization_id=tenant.organization_id
+        )
+        if not scene or scene.project_id != project_id:
+            raise NotFoundError("scene_not_found")
+        target_words = _stored_target_words(scene, target_words)
 
         dedupe = _compute_dedupe_key(
             organization_id=tenant.organization_id,
@@ -588,6 +603,11 @@ class GenerationService:
         if not project:
             raise NotFoundError("project_not_found")
         ensure_same_tenant(project.organization_id, tenant)
+        scene = await SceneRepository(session).get(
+            scene_id, organization_id=tenant.organization_id
+        )
+        if not scene or scene.project_id != project_id:
+            raise NotFoundError("scene_not_found")
 
         estimate_words = max(1, estimate_words)
         job = await GenerationJobRepository(session).create(
@@ -628,10 +648,11 @@ class GenerationService:
         target_words: int = 1200,
         estimate_words: int = 2000,
     ) -> GenerationJob:
-        """基于 scene 的 open issues 触发重写。
+        """基于 scene 的 open issues 触发重写，并在重写后自动复审。
 
         Sprint 5-A：activity 自动捞所有 open issues，无需调用方筛选；
-        Sprint 5+ 再支持"只修复某几条"的细粒度。
+        复审通过后才把对应问题标 fixed。Sprint 5+ 再支持
+        "只修复某几条"的细粒度。
         """
         require_permission(user, "generation_job:create", tenant)
         require_entitlement(tenant, "generation:scene")
@@ -641,6 +662,12 @@ class GenerationService:
         if not project:
             raise NotFoundError("project_not_found")
         ensure_same_tenant(project.organization_id, tenant)
+        scene = await SceneRepository(session).get(
+            scene_id, organization_id=tenant.organization_id
+        )
+        if not scene or scene.project_id != project_id:
+            raise NotFoundError("scene_not_found")
+        target_words = _stored_target_words(scene, target_words)
 
         estimate_words = max(1, estimate_words)
         job = await GenerationJobRepository(session).create(

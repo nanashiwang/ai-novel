@@ -31,6 +31,11 @@ class ScenePayload(APIModel):
     reveal: str = ""
     hook: str = ""
     status: str = "planned"
+    target_words: int = 0
+    beat_start: int | None = None
+    beat_end: int | None = None
+    beat_group_summary: str = ""
+    budget_reason: str = ""
     # Sprint 14-C6：单场景 POV 锚定；空 → 回落 spec.narrative_pov
     pov_character_name: str | None = None
 

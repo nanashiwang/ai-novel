@@ -29,6 +29,13 @@ class Scene(Base, TenantMixin, TimestampMixin):
     reveal: Mapped[str] = mapped_column(Text, default="")
     hook: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(64), default="planned")
+    # 持久化的场景预算。scene_beats 是章内剧情拍点，生成场景计划时会把
+    # 相邻 beat 合并到实际 scene，并把本场目标字数与覆盖范围固定下来。
+    target_words: Mapped[int] = mapped_column(Integer, default=0)
+    beat_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    beat_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    beat_group_summary: Mapped[str] = mapped_column(Text, default="")
+    budget_reason: Mapped[str] = mapped_column(Text, default="")
     # Sprint 14-C6：Per-scene POV 锚定。空 = 无固定 POV（沿用 spec.narrative_pov），
     # 非空 = 该场景视角主角名（必须出现在 characters 中）。ContextBuilder 据此
     # 隐藏其它角色的 secret/motivation/arc/current_state，避免"全知视角泄密"。

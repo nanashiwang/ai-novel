@@ -278,6 +278,11 @@ export type Scene = {
   reveal: string;
   hook: string;
   status: string;
+  target_words: number;
+  beat_start?: number | null;
+  beat_end?: number | null;
+  beat_group_summary?: string;
+  budget_reason?: string;
 };
 
 export type GenerateScenePlanPayload = {
@@ -300,6 +305,105 @@ export type RewriteScenePayload = {
   estimate_words?: number;
 };
 
+// 与 backend/app/schemas/story_state.py 对齐
+export type StoryStateEntityType =
+  | "character"
+  | "artifact"
+  | "plot_thread"
+  | "relationship"
+  | "world_rule";
+export type StoryStateType =
+  | "skill"
+  | "artifact"
+  | "identity"
+  | "grudge"
+  | "foreshadow"
+  | "oath";
+export type StoryStateStatus =
+  | "active"
+  | "hidden"
+  | "damaged"
+  | "resolved"
+  | "consumed"
+  | "inactive";
+export type StoryStateChangeType =
+  | "create"
+  | "update"
+  | "resolve"
+  | "remove"
+  | "reveal"
+  | "hide"
+  | "upgrade"
+  | "damage"
+  | "repair";
+export type ChapterStateRequirementType =
+  | "must_remember"
+  | "must_not_conflict"
+  | "should_reference"
+  | "candidate_payoff";
+
+export type StoryStateItem = {
+  id: string;
+  entity_type: StoryStateEntityType;
+  entity_id: string | null;
+  state_type: StoryStateType;
+  name: string;
+  status: StoryStateStatus;
+  summary: string;
+  value_json: Record<string, unknown>;
+  source_chapter_id: string | null;
+  source_scene_id: string | null;
+  source_excerpt: string;
+  updated_in_chapter_id: string | null;
+  priority: number;
+  is_hard_constraint: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type StoryStateHistory = {
+  id: string;
+  state_item_id: string;
+  chapter_id: string | null;
+  scene_id: string | null;
+  change_type: StoryStateChangeType;
+  before_json: Record<string, unknown>;
+  after_json: Record<string, unknown>;
+  reason: string;
+  source_excerpt: string;
+  created_by: string | null;
+  created_at?: string | null;
+};
+
+export type ChapterStateRequirement = {
+  id: string;
+  state_item_id: string;
+  requirement_type: ChapterStateRequirementType;
+  summary: string;
+  priority: number;
+};
+
+export type StoryStatePatch = {
+  status?: StoryStateStatus | null;
+  summary?: string | null;
+  value_json?: Record<string, unknown> | null;
+  priority?: number | null;
+  is_hard_constraint?: boolean | null;
+  reason?: string | null;
+};
+
+export type StoryStateListResponse = {
+  items: StoryStateItem[];
+};
+
+export type StoryStateHistoryListResponse = {
+  items: StoryStateHistory[];
+};
+
+export type ChapterStateRequirementListResponse = {
+  items: ChapterStateRequirement[];
+};
+
 // 与 backend/app/models/continuity_issue.py 对齐
 export type ContinuityIssue = {
   id: string;
@@ -319,6 +423,35 @@ export type ContinuityIssue = {
 export const continuityIssuesApi = {
   list: (projectId: string) =>
     http.get<ContinuityIssue[]>(`/projects/${projectId}/continuity-issues`),
+};
+
+export const storyStatesApi = {
+  list: (
+    projectId: string,
+    params?: {
+      state_type?: StoryStateType;
+      status?: StoryStateStatus;
+      entity_type?: StoryStateEntityType;
+      hard_only?: boolean;
+      limit?: number;
+    },
+  ) =>
+    http.get<StoryStateListResponse>(`/projects/${projectId}/story-states`, params),
+  get: (projectId: string, stateId: string) =>
+    http.get<StoryStateItem>(`/projects/${projectId}/story-states/${stateId}`),
+  history: (projectId: string, stateId: string) =>
+    http.get<StoryStateHistoryListResponse>(
+      `/projects/${projectId}/story-states/${stateId}/history`,
+    ),
+  update: (projectId: string, stateId: string, payload: StoryStatePatch) =>
+    http.patch<StoryStateItem>(
+      `/projects/${projectId}/story-states/${stateId}`,
+      payload,
+    ),
+  listChapterRequirements: (projectId: string, chapterId: string) =>
+    http.get<ChapterStateRequirementListResponse>(
+      `/projects/${projectId}/chapters/${chapterId}/state-requirements`,
+    ),
 };
 
 export const projectsApi = {

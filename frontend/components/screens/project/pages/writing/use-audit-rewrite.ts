@@ -97,7 +97,7 @@ export function useAuditRewrite({
         return Promise.reject(new Error("no_active_scene"));
       }
       return projectsApi.rewriteScene(projectId, activeScene.id, {
-        target_words: 1200,
+        target_words: activeScene.target_words || 1200,
         estimate_words: 2000,
       });
     },

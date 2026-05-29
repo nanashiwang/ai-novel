@@ -41,6 +41,7 @@ from app.repositories import (
 )
 from app.services.embedding import embedding_service, recall_style_samples_by_vector
 from app.services.model_gateway.service import _estimate_tokens
+from app.services.scene_budget import build_scene_budget_plan
 
 SegmentLabel = Literal[
     "hard_constraints",
@@ -653,21 +654,22 @@ class ContextBuilder:
     ) -> tuple[tuple[int, int] | None, int | None]:
         """Sprint 16-E2：返回 ((当前场序号, 总场数), 本章已写字数)。
 
-        - 总场数优先取 chapter.scene_beats 长度，其次按 chapter 下 scene 数 fallback
-        - 已写字数：scene 表中同 chapter_id 的 drafts.word_count 总和；查询失败回 0
+        - 总场数优先取 chapter 下已落库 scene 数；scene_beats 只作为拍点分组参考
+        - 已写字数：只统计当前场之前的场景；后续场景不能倒扣当前场预算。
+          每个前序场按最新 draft/rewrite/polish 版本计入；查询失败回 0。
         """
+        previous_scene_ids: list[str] = []
         try:
             scene_count_stmt = (
-                select(Scene.scene_index)
+                select(Scene.id, Scene.scene_index)
                 .where(
                     Scene.organization_id == organization_id,
                     Scene.chapter_id == chapter.id,
                 )
                 .order_by(Scene.scene_index.asc())
             )
-            scene_indices = [
-                row[0] for row in (await session.execute(scene_count_stmt)).all()
-            ]
+            scene_rows = list((await session.execute(scene_count_stmt)).all())
+            scene_indices = [row[1] for row in scene_rows]
             total = len(scene_indices) or len(list(chapter.scene_beats or []))
             current = (
                 (scene_indices.index(scene.scene_index) + 1)
@@ -675,23 +677,42 @@ class ContextBuilder:
                 else (scene.scene_index or 1)
             )
             position = (max(1, current), max(1, total)) if total else None
+            previous_scene_ids = [
+                row[0] for row in scene_rows if int(row[1] or 0) < int(scene.scene_index or 1)
+            ]
         except Exception:  # noqa: BLE001
             position = None
 
         try:
-            from sqlalchemy import func as _sa_func  # noqa: PLC0415
-
             from app.models.draft_version import DraftVersion  # noqa: PLC0415
 
-            words_stmt = select(
-                _sa_func.coalesce(_sa_func.sum(DraftVersion.word_count), 0)
-            ).where(
-                DraftVersion.organization_id == organization_id,
-                DraftVersion.chapter_id == chapter.id,
-                DraftVersion.version_type == "draft",
-                DraftVersion.scene_id != scene.id,
-            )
-            words_written = int((await session.execute(words_stmt)).scalar_one() or 0)
+            if not previous_scene_ids:
+                words_written = 0
+            else:
+                versions_stmt = (
+                    select(
+                        DraftVersion.scene_id,
+                        DraftVersion.word_count,
+                        DraftVersion.created_at,
+                        DraftVersion.id,
+                    )
+                    .where(
+                        DraftVersion.organization_id == organization_id,
+                        DraftVersion.chapter_id == chapter.id,
+                        DraftVersion.scene_id.in_(previous_scene_ids),
+                        DraftVersion.version_type.in_(("draft", "rewrite", "polish")),
+                    )
+                    .order_by(DraftVersion.created_at.asc())
+                )
+                latest_by_scene: dict[str, tuple[int, object, str]] = {}
+                for row in (await session.execute(versions_stmt)).all():
+                    scene_id, word_count, created_at, draft_id = row
+                    latest_by_scene[str(scene_id)] = (
+                        int(word_count or 0),
+                        created_at,
+                        str(draft_id),
+                    )
+                words_written = sum(item[0] for item in latest_by_scene.values())
         except Exception:  # noqa: BLE001
             words_written = 0
         return position, words_written
@@ -719,7 +740,7 @@ class ContextBuilder:
                 "rising": "推进主线，张力上升，加入新冲突",
                 "climax": "关键转折 / 高潮对抗 / 重要揭示，必须有强冲突",
                 "cool_down": "高潮后缓冲，多内心戏 / 关系修复 / 余韵，避免再起高潮",
-                "transition": "场景或弧线之间的过渡，多信息传递，少情��张力",
+                "transition": "场景或弧线之间的过渡，多信息传递，少情绪张力",
             }
             hint = pacing_hints.get(pacing_type, "")
             pacing_line = (
@@ -732,17 +753,29 @@ class ContextBuilder:
             return ""
         lines: list[str] = []
         if beats:
-            lines.append("本章 scene 拍点（按时间顺序，不要重排或合并）：")
-            marker_idx = position[0] - 1 if position else -1
-            for i, beat in enumerate(beats):
-                prefix = "→ " if i == marker_idx else "  "
-                lines.append(f"{prefix}{i + 1}. {beat}")
+            total = position[1] if position else len(beats)
+            plan = build_scene_budget_plan(chapter=chapter, forced_scene_count=total)
+            lines.append("本章剧情拍点（按时间顺序，已按当前场景数合并；不要重排）：")
+            cur = position[0] if position else -1
+            for group in plan.beat_groups:
+                prefix = "→ " if group.scene_index == cur else "  "
+                if group.beats:
+                    lines.append(
+                        f"{prefix}{group.scene_index}. 场景{group.scene_index} "
+                        f"覆盖 {group.range_label}："
+                        f"{'；'.join(group.beats)}"
+                    )
+                else:
+                    lines.append(
+                        f"{prefix}{group.scene_index}. 场景{group.scene_index}："
+                        "补充承接、余波或过渡"
+                    )
             if position:
                 cur, total = position
                 lines.append(
                     f"你现在在写第 {cur}/{total} 场（标记为 →）。"
                     "之前的场已经写过；之后的场是你写完后续将要写的——"
-                    "请只完成本场，不要把后续 beats 的信息提前展开。"
+                    "请只完成当前分组，不要把后续分组的信息提前展开。"
                 )
         if pacing_line:
             lines.append(pacing_line.lstrip("\n"))
@@ -764,18 +797,41 @@ class ContextBuilder:
         # Sprint 16-E2：注入章字数预算与位置，让 writer 主动控字数
         budget_lines: list[str] = []
         chapter_target = getattr(chapter, "target_words", 0) or 0
+        stored_scene_target = int(getattr(scene, "target_words", 0) or 0)
         if chapter_position:
             cur, total = chapter_position
             budget_lines.append(
                 f"位置：你在写第 {cur}/{total} 场（顺序写作，前后场之间应保持连贯）"
             )
-            if chapter_target > 0 and total > 0:
-                per_scene = max(400, chapter_target // total)
-                remaining = chapter_target - (chapter_words_written or 0)
-                budget_lines.append(
-                    f"字数预算：本场目标约 {per_scene} 字；本章总预算 {chapter_target} 字，"
-                    f"剩余 {max(0, remaining)} 字（含本场）。请严格控制不要 overshoot"
+            if (chapter_target > 0 or stored_scene_target > 0) and total > 0:
+                plan = build_scene_budget_plan(
+                    chapter=chapter,
+                    forced_scene_count=total,
                 )
+                per_scene = stored_scene_target or plan.target_for_scene(
+                    cur,
+                    max(400, (chapter_target // total) if chapter_target else 1200),
+                )
+                remaining = chapter_target - (chapter_words_written or 0)
+                if chapter_target > 0:
+                    budget_lines.append(
+                        f"字数预算：本场目标约 {per_scene} 字；本章总预算 {chapter_target} 字，"
+                        f"剩余 {max(0, remaining)} 字（含本场）。这是软目标：优先完成本场剧情功能，"
+                        "允许必要的高潮/转折小幅上浮，但不要因重复描写或无效扩写造成大幅 overshoot"
+                    )
+                else:
+                    budget_lines.append(
+                        f"字数预算：本场目标约 {per_scene} 字。这是持久化场景预算软目标，"
+                        "优先完成本场剧情功能，避免重复描写或无效扩写"
+                    )
+                beat_group_summary = (
+                    getattr(scene, "beat_group_summary", "") or ""
+                ).strip()
+                if beat_group_summary:
+                    budget_lines.append(f"拍点覆盖：{beat_group_summary}")
+                budget_reason = (getattr(scene, "budget_reason", "") or "").strip()
+                if budget_reason:
+                    budget_lines.append(f"拆分依据：{budget_reason}")
         elif chapter_target > 0:
             budget_lines.append(f"字数预算：本章总预算 {chapter_target} 字")
         budget_block = ("\n".join(budget_lines) + "\n") if budget_lines else ""

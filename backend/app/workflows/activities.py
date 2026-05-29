@@ -9,6 +9,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from typing import Any
 
 from sqlalchemy import select
@@ -58,6 +59,7 @@ from app.services.moderation import log_moderation_event, moderation_service
 from app.services.novel_planner.service import novel_planner_service
 from app.services.quota.service import quota_service
 from app.services.rewriter.service import rewriter_service
+from app.services.scene_budget import SceneBudgetPlan, build_scene_budget_plan
 from app.services.writer.service import writer_service
 
 _logger = logging.getLogger(__name__)
@@ -142,6 +144,97 @@ def _payload_int(payload: dict[str, Any], key: str, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _scene_budget_values(
+    budget_plan: SceneBudgetPlan,
+    scene_index: int,
+    *,
+    default_words: int,
+) -> dict[str, Any]:
+    assignment = budget_plan.assignment_for_scene(scene_index, default_words)
+    return {
+        "target_words": assignment.target_words,
+        "beat_start": assignment.beat_start,
+        "beat_end": assignment.beat_end,
+        "beat_group_summary": assignment.beat_group_summary,
+        "budget_reason": assignment.budget_reason,
+    }
+
+
+def _apply_scene_budget_values(scene: Scene, values: dict[str, Any]) -> None:
+    scene.target_words = int(values.get("target_words") or 0)
+    scene.beat_start = values.get("beat_start")
+    scene.beat_end = values.get("beat_end")
+    scene.beat_group_summary = str(values.get("beat_group_summary") or "")
+    scene.budget_reason = str(values.get("budget_reason") or "")
+
+
+def _stored_scene_target_words(scene: Scene, default: int = 1200) -> int:
+    try:
+        stored = int(getattr(scene, "target_words", 0) or 0)
+    except (TypeError, ValueError):
+        stored = 0
+    return stored if stored > 0 else max(600, int(default or 1200))
+
+
+async def _ensure_chapter_scene_budgets(
+    session: AsyncSession,
+    *,
+    chapter: Chapter,
+    scenes: list[Scene],
+    fallback_scene_words: int,
+) -> dict[str, int]:
+    """确保当前章 scenes 有持久化预算；旧数据缺失时按统一预算器回填。"""
+    ordered = sorted(scenes, key=lambda item: item.scene_index)
+    if not ordered:
+        return {}
+    budget_plan = build_scene_budget_plan(
+        chapter=chapter,
+        forced_scene_count=len(ordered),
+        fallback_scene_words=fallback_scene_words,
+    )
+    targets: dict[str, int] = {}
+    changed = False
+    for position, scene in enumerate(ordered, start=1):
+        if int(getattr(scene, "target_words", 0) or 0) <= 0:
+            values = _scene_budget_values(
+                budget_plan,
+                position,
+                default_words=fallback_scene_words,
+            )
+            _apply_scene_budget_values(scene, values)
+            changed = True
+        targets[scene.id] = _stored_scene_target_words(scene, fallback_scene_words)
+    if changed:
+        await session.flush()
+    return targets
+
+
+async def _ensure_scene_budget(
+    session: AsyncSession,
+    *,
+    chapter: Chapter,
+    scene: Scene,
+    fallback_scene_words: int,
+) -> int:
+    if int(getattr(scene, "target_words", 0) or 0) > 0:
+        return _stored_scene_target_words(scene, fallback_scene_words)
+    siblings = list(
+        await SceneRepository(session).list(
+            organization_id=scene.organization_id,
+            project_id=scene.project_id,
+            chapter_id=scene.chapter_id,
+            order_by=Scene.scene_index.asc(),
+        )
+    )
+    targets = await _ensure_chapter_scene_budgets(
+        session,
+        chapter=chapter,
+        scenes=siblings or [scene],
+        fallback_scene_words=fallback_scene_words,
+    )
+    return targets.get(scene.id, _stored_scene_target_words(scene, fallback_scene_words))
 
 
 _moderation_tasks: set[Any] = set()
@@ -1657,19 +1750,16 @@ async def _plan_and_persist_scenes_for_chapter(
     （单章模式）两个 activity 复用。返回写入的 Scene ORM 对象列表，调用方
     可以基于它做 memory 写入等后处理。
 
-    Sprint 16-E2：当 chapter.scene_beats 非空时，scene 数取 beats 长度（覆盖
-    调用方传入的 scenes_per_chapter）；同时按 chapter.target_words / scene 数
-    精准给每场 target_words，避免一锅端把字数算炸。
+    scene_beats 是剧情拍点，不再等同于 scene 数。scene 数由规则预算器
+    根据章节字数、节奏、情绪强度和用户手动指定值决定；beats 只做连续
+    合并分组，避免 4 个 beat 把 2600 字章节切成 4 个 650 字场景。
     """
-    effective_scene_count = scenes_per_chapter
-    beats = list(chapter.scene_beats or [])
-    if beats:
-        effective_scene_count = max(2, min(len(beats), 6))
-    effective_expected_words = expected_words
-    if chapter.target_words and chapter.target_words > 0 and effective_scene_count:
-        effective_expected_words = max(
-            400, chapter.target_words // max(1, effective_scene_count)
-        )
+    budget_plan = build_scene_budget_plan(
+        chapter=chapter,
+        requested_scene_count=scenes_per_chapter,
+        fallback_scene_words=expected_words,
+    )
+    effective_expected_words = budget_plan.target_for_scene(1, expected_words)
     # Sprint 17-A：前一章承接上下文是"软增强"，失败不应阻断 scene plan 生成。
     # 并发 full_novel 场景下 chapter 1 可能尚未写完 scenes，此时降级返回空串。
     try:
@@ -1694,15 +1784,21 @@ async def _plan_and_persist_scenes_for_chapter(
         project=project,
         bible=spec,
         chapter=chapter,
-        scenes_per_chapter=effective_scene_count,
+        scenes_per_chapter=budget_plan.scene_count,
         expected_words=effective_expected_words,
+        scene_budget_plan=budget_plan,
         character_roster=await _character_roster_for_prompt(session, job),
         previous_chapter_context=previous_chapter_context,
     )
-    scene_limit = effective_scene_count or 8
+    scene_limit = budget_plan.scene_count
     scene_repo = SceneRepository(session)
     created: list[Scene] = []
     for item in contract.scenes[:scene_limit]:
+        budget_values = _scene_budget_values(
+            budget_plan,
+            item.scene_index,
+            default_words=expected_words,
+        )
         row = await scene_repo.create(
             organization_id=job.organization_id,
             project_id=job.project_id,
@@ -1724,6 +1820,7 @@ async def _plan_and_persist_scenes_for_chapter(
             reveal=item.reveal,
             hook=item.hook,
             status="planned",
+            **budget_values,
         )
         created.append(row)
     return created
@@ -1767,7 +1864,7 @@ async def generate_scene_cards(job: dict[str, Any]) -> dict[str, Any]:
         )
         raw_scenes_per_chapter = payload.get("scenes_per_chapter")
         scenes_per_chapter = (
-            max(2, min(int(raw_scenes_per_chapter), 8))
+            max(1, min(int(raw_scenes_per_chapter), 8))
             if raw_scenes_per_chapter is not None
             else None
         )
@@ -1847,7 +1944,7 @@ async def generate_chapter_scene_cards(job: dict[str, Any]) -> dict[str, Any]:
 
         raw_scenes_per_chapter = payload.get("scenes_per_chapter")
         scenes_per_chapter = (
-            max(2, min(int(raw_scenes_per_chapter), 8))
+            max(1, min(int(raw_scenes_per_chapter), 8))
             if raw_scenes_per_chapter is not None
             else None
         )
@@ -1939,18 +2036,19 @@ async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
         scenes_by_chapter: dict[str, list[Scene]] = {}
         for scene in scenes:
             scenes_by_chapter.setdefault(scene.chapter_id, []).append(scene)
-        chapter_target_words: dict[str, int] = {}
+        scene_target_words: dict[str, int] = {}
         for chapter_id, chapter_scenes in scenes_by_chapter.items():
             chapter = chapter_by_id[chapter_id]
-            scene_count = max(1, len(chapter_scenes))
-            if chapter.target_words and chapter.target_words > 0:
-                chapter_target_words[chapter_id] = max(
-                    400, chapter.target_words // scene_count
+            ordered_scenes = sorted(chapter_scenes, key=lambda item: item.scene_index)
+            fallback_scene_words = max(600, estimate_words // max(1, len(scenes)))
+            scene_target_words.update(
+                await _ensure_chapter_scene_budgets(
+                    session,
+                    chapter=chapter,
+                    scenes=ordered_scenes,
+                    fallback_scene_words=fallback_scene_words,
                 )
-            else:
-                chapter_target_words[chapter_id] = max(
-                    600, estimate_words // max(1, len(scenes))
-                )
+            )
         previous_excerpt = ""
         for scene in scenes:
             chapter = chapter_by_id[scene.chapter_id]
@@ -1958,7 +2056,10 @@ async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
                 previous_excerpt = draft_by_scene[scene.id].content[-1500:]
                 reused += 1
                 continue
-            target_words = chapter_target_words[chapter.id]
+            target_words = scene_target_words.get(
+                scene.id,
+                _stored_scene_target_words(scene, 1200),
+            )
             draft = await writer_service.write_scene_draft(
                 session,
                 organization_id=job_row.organization_id,
@@ -2145,7 +2246,12 @@ async def run_scene_writing(job: dict[str, Any]) -> dict[str, Any]:
         scene.status = "writing"
         await session.flush()
 
-        target_words = _payload_int(payload, "target_words", 1200)
+        target_words = await _ensure_scene_budget(
+            session,
+            chapter=chapter,
+            scene=scene,
+            fallback_scene_words=_payload_int(payload, "target_words", 1200),
+        )
         previous_excerpt = await _previous_scene_excerpt(session, scene)
         draft = await writer_service.write_scene_draft(
             session,
@@ -2513,9 +2619,19 @@ async def write_chapter_scenes_for_full_novel(
         # reserved_quota - consumed_quota 作为"剩余可花"，每写一个 scene
         # 都更新 consumed_quota（暂态，最终在 finalize_full_novel 内 settle）。
         budget_left = max(0, (job_row.reserved_quota or 0) - (job_row.consumed_quota or 0))
-        target_words = max(600, int(target_words_per_scene or 1200))
+        fallback_target_words = max(600, int(target_words_per_scene or 1200))
+        scene_target_words = await _ensure_chapter_scene_budgets(
+            session,
+            chapter=chapter,
+            scenes=scenes,
+            fallback_scene_words=fallback_target_words,
+        )
 
         for scene in scenes:
+            target_words = scene_target_words.get(
+                scene.id,
+                _stored_scene_target_words(scene, fallback_target_words),
+            )
             existing_drafts = list(
                 await draft_repo.list(
                     organization_id=job_row.organization_id,
@@ -2876,7 +2992,6 @@ async def polish_chapter(job: dict[str, Any]) -> dict[str, Any]:
             "word_count": draft.word_count,
             "status": "created",
         }
-
 
 @activity.defn(name="run_batch")
 async def run_batch(job: dict[str, Any]) -> dict[str, Any]:
@@ -3327,16 +3442,49 @@ def _make_handler_noop():
     return _handler
 
 
+def _issue_text(value: str | None) -> str:
+    return "".join(str(value or "").lower().split())
+
+
+def _issue_matches_review(original: ContinuityIssue, review_item: Any) -> bool:
+    """判断复审问题是否仍指向原问题，避免重复 open 同一条。"""
+    if original.issue_type != getattr(review_item, "issue_type", ""):
+        return False
+    original_text = _issue_text(
+        f"{original.description} {original.suggested_fix or ''}"
+    )
+    review_text = _issue_text(
+        f"{getattr(review_item, 'description', '')} "
+        f"{getattr(review_item, 'suggested_fix', '')}"
+    )
+    if not original_text or not review_text:
+        return False
+    if original_text in review_text or review_text in original_text:
+        return True
+    return SequenceMatcher(None, original_text, review_text).ratio() >= 0.45
+
+
+def _issue_summary(row: ContinuityIssue) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "issue_type": row.issue_type,
+        "severity": row.severity,
+        "description": row.description,
+        "status": row.status,
+    }
+
+
 @activity.defn(name="rewrite_scene")
 async def rewrite_scene(job: dict[str, Any]) -> dict[str, Any]:
-    """基于当前 scene 的 open issues 重写 draft，并把那些 issues 标 fixed。
+    """基于当前 scene 的 open issues 重写 draft，并自动复审。
 
     input_payload 字段：
       - scene_id (必填)
       - target_words (可选，默认 1200)
 
-    activity 自动捞取本 scene 的所有 open issues，全部送给 rewriter；
-    Sprint 5-A 不提供 "只修复某几条" 的细粒度。
+    activity 自动捞取本 scene 的所有 open issues，全部送给 rewriter。
+    重写后立即复审新版本：复审没再报同类问题才把原 issue 标 fixed；
+    复审仍发现的问题保持/新增为 open，避免"假修复"。
     """
     async with _activity_session() as session:
         job_row = await _load_job(session, job["id"])
@@ -3381,7 +3529,12 @@ async def rewrite_scene(job: dict[str, Any]) -> dict[str, Any]:
         scene.status = "writing"
         await session.flush()
 
-        target_words = _payload_int(payload, "target_words", 1200)
+        target_words = await _ensure_scene_budget(
+            session,
+            chapter=chapter,
+            scene=scene,
+            fallback_scene_words=_payload_int(payload, "target_words", 1200),
+        )
         new_draft = await rewriter_service.rewrite_scene_draft(
             session,
             organization_id=job_row.organization_id,
@@ -3417,7 +3570,7 @@ async def rewrite_scene(job: dict[str, Any]) -> dict[str, Any]:
             scene_id=scene.id,
             source="rewrite_scene",
         )
-        await _run_ledger_check(session, 
+        await _run_ledger_check(session,
             organization_id=job_row.organization_id,
             project_id=job_row.project_id,
             scene_id=scene.id,
@@ -3425,9 +3578,70 @@ async def rewrite_scene(job: dict[str, Any]) -> dict[str, Any]:
             source="rewrite_scene",
         )
 
-        # 把本次涉及的 issues 标 fixed（不删除，保留可审计的修复历史）
-        for issue in issues:
-            issue.status = "fixed"
+        review_error = ""
+        review_items: list[Any] = []
+        try:
+            review_contract = await auditor_service.audit_scene_draft(
+                session,
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                job_id=job_row.id,
+                project=project,
+                spec=spec,
+                chapter=chapter,
+                scene=scene,
+                draft_content=new_draft.content,
+            )
+            review_items = list(review_contract.issues)
+        except Exception as exc:  # noqa: BLE001 - 复审失败不回滚已生成 rewrite
+            review_error = str(exc) or exc.__class__.__name__
+            _logger.warning(
+                "rewrite_auto_review_failed",
+                extra={"job_id": job_row.id, "scene_id": scene.id, "error": review_error},
+            )
+
+        matched_issue_ids: set[str] = set()
+        created_review_issues: list[dict[str, Any]] = []
+        if not review_error:
+            for item in review_items:
+                matched = next(
+                    (
+                        issue
+                        for issue in issues
+                        if issue.id not in matched_issue_ids
+                        and _issue_matches_review(issue, item)
+                    ),
+                    None,
+                )
+                if matched:
+                    matched_issue_ids.add(matched.id)
+                    matched.status = "open"
+                    continue
+                row = await issue_repo.create(
+                    organization_id=job_row.organization_id,
+                    project_id=job_row.project_id,
+                    chapter_id=chapter.id,
+                    scene_id=scene.id,
+                    issue_type=item.issue_type,
+                    severity=item.severity,
+                    description=item.description,
+                    suggested_fix=item.suggested_fix,
+                    status="open",
+                )
+                created_review_issues.append(_issue_summary(row))
+
+        fixed_issue_count = 0
+        if not review_error:
+            for issue in issues:
+                if issue.id in matched_issue_ids:
+                    issue.status = "open"
+                    continue
+                issue.status = "fixed"
+                fixed_issue_count += 1
+
+        remaining_original_count = len(issues) - fixed_issue_count
+        remaining_issue_count = remaining_original_count + len(created_review_issues)
+        review_passed = not review_error and not review_items
 
         await _settle_job_usage(session, job_row, amount=job_row.reserved_quota)
 
@@ -3436,7 +3650,12 @@ async def rewrite_scene(job: dict[str, Any]) -> dict[str, Any]:
             "draft_id": saved.id,
             "parent_version_id": latest_draft.id,
             "word_count": word_count,
-            "fixed_issue_count": len(issues),
+            "fixed_issue_count": fixed_issue_count,
+            "review_passed": review_passed,
+            "review_issue_count": len(review_items),
+            "remaining_issue_count": remaining_issue_count,
+            "review_error": review_error or None,
+            "review_issues": created_review_issues,
         }
 
 

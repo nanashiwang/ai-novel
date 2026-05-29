@@ -91,6 +91,8 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
     latestAuditJob,
     isAuditing,
     latestAuditIssueCount,
+    latestRewriteJob,
+    latestRewriteReview,
     isRewriting,
   } = useSceneJobs({ projectId, activeScene });
 
@@ -119,7 +121,7 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
         return Promise.reject(new Error("no_active_scene"));
       }
       return projectsApi.writeScene(projectId, activeScene.id, {
-        target_words: 1200,
+        target_words: activeScene.target_words || 1200,
       });
     },
     onSuccess: (job) => {
@@ -413,6 +415,7 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
                 isSaving={saveVersion.isPending}
                 onSave={(content, format) => saveVersion.mutate({ content, format })}
                 onAutoSave={(content, format) => autoSave.mutate({ content, format })}
+                characterTarget={activeScene?.target_words || undefined}
               />
             )}
             {/* Sprint 5-A：审稿与重写面板。仅当 scene 已有 draft 且非对比模式时显示 */}
@@ -444,6 +447,35 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
                           {typeof latestAuditIssueCount === "number"
                             ? ` · ${latestAuditIssueCount} 个问题`
                             : ""}
+                        </Badge>
+                      ) : null}
+                      {latestRewriteJob ? (
+                        <Badge
+                          tone={
+                            latestRewriteJob.status === "failed" ||
+                            latestRewriteReview?.review_error
+                              ? "rose"
+                              : latestRewriteJob.status === "succeeded" &&
+                                  latestRewriteReview?.review_passed
+                                ? "green"
+                                : latestRewriteJob.status === "succeeded"
+                                  ? "amber"
+                                  : "blue"
+                          }
+                        >
+                          {latestRewriteJob.status === "succeeded"
+                            ? latestRewriteReview?.review_error
+                              ? "自动复审失败"
+                              : latestRewriteReview?.review_passed
+                                ? `自动复审通过 · 修复 ${
+                                    latestRewriteReview.fixed_issue_count ?? 0
+                                  } 条`
+                                : `自动复审仍有 ${
+                                    latestRewriteReview?.remaining_issue_count ??
+                                    latestRewriteReview?.review_issue_count ??
+                                    0
+                                  } 个问题`
+                            : `自动复审：${latestRewriteJob.status}`}
                         </Badge>
                       ) : null}
                     </div>

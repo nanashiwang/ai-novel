@@ -15,6 +15,11 @@ from app.schemas.story_generation import (
 )
 from app.services.model_gateway.service import model_gateway
 from app.services.prompt_manager.service import prompt_manager
+from app.services.scene_budget import (
+    SceneBudgetPlan,
+    build_scene_budget_plan,
+    format_scene_budget_prompt_block,
+)
 
 # Prompt 标识与版本：作为常量集中，便于版本号升级与 model_calls 表追溯。
 # 修改这里的版本号 → prompt 文件命名 → model_calls.prompt_version 同步生效。
@@ -128,8 +133,8 @@ class NovelPlannerService:
             f"\n字数预算：每章默认目标字数约 {default_chapter_words} 字"
             f"（来自项目级目标 {twc} ÷ {tcc}）。"
             "对节奏轻的过渡章可下调 20%，转折/高潮章可上调 20%，整体不要偏离默认值过多。"
-            "scene_beats 列出本章 2-4 场的功能要点（每条一句话，按时间顺序），"
-            "决定 scene_count 与跨场连贯性；scene 数偏少（2-3）通常比偏多更可读。"
+            "scene_beats 列出本章 2-4 个剧情拍点（每条一句话，按时间顺序），"
+            "用于后续合并成 scene；拍点数量不等同于 scene_count。"
         )
         user_prompt = (
             "请把故事圣经拆成章节大纲，采用三幕式推进，但不要输出幕名层级。\n"
@@ -190,34 +195,26 @@ class NovelPlannerService:
         chapter: Chapter,
         scenes_per_chapter: int | None,
         expected_words: int,
+        scene_budget_plan: SceneBudgetPlan | None = None,
         character_roster: str = "",
         previous_chapter_context: str = "",
     ) -> ScenePlanContract:
         prompt = prompt_manager.load(_PROMPT_PLAN_SCENES, version=_PROMPT_VERSION)
-        scenes_per_chapter = (
-            max(2, min(scenes_per_chapter, 8)) if scenes_per_chapter is not None else None
+        scene_budget_plan = scene_budget_plan or build_scene_budget_plan(
+            chapter=chapter,
+            requested_scene_count=scenes_per_chapter,
+            fallback_scene_words=expected_words,
         )
+        scenes_per_chapter = scene_budget_plan.scene_count
+        expected_words = scene_budget_plan.target_for_scene(1, expected_words)
         scene_count_instruction = (
             f"建议场景数：{scenes_per_chapter}\n"
-            if scenes_per_chapter is not None
-            else "场景数：请根据本章复杂度自行判断，范围 1-8 个；过渡章少，高潮/群像章多。\n"
+            "注意：这是后端规则预算器给出的硬约束，不要自行增减。\n"
         )
-        # Sprint 16-E2：把 chapter 的字数预算 + scene_beats 显式塞进 prompt，
-        # 让 LLM 拆出来的 scene 与大纲阶段定的拍点保持一致。
-        beats = list(chapter.scene_beats or [])
-        beats_block = ""
-        if beats:
-            joined = "\n".join(f"  {i + 1}. {b}" for i, b in enumerate(beats))
-            beats_block = (
-                "\n本章 scene_beats（大纲阶段已��定好的功能顺序，"
-                "请严格按顺序拆，不要增删或重排）：\n" + joined + "\n"
-            )
-        budget_block = ""
-        if chapter.target_words and chapter.target_words > 0:
-            budget_block = (
-                f"\n本章字数预算：{chapter.target_words} 字，"
-                f"平摊后单场约 {expected_words} 字（±15% 区间）。\n"
-            )
+        budget_block = "\n" + format_scene_budget_prompt_block(
+            scene_budget_plan,
+            chapter_target_words=chapter.target_words or 0,
+        )
         roster_block = (
             f"\n已登记人物名册（scene 出场人物必须优先从这里选择，不要凭空替换主线角色姓名）：\n"
             f"{character_roster}\n"
@@ -241,12 +238,13 @@ class NovelPlannerService:
             f"章节目标：{chapter.goal}\n"
             f"章节冲突：{chapter.conflict}\n"
             f"结尾钩子：{chapter.ending_hook}\n"
-            f"{beats_block}"
             f"{budget_block}"
             f"{scene_count_instruction}"
-            f"单场景目标字数：{expected_words}\n"
+            f"首场目标字数：{expected_words}；其余场景按「目标场景分组」中的字数执行。\n"
             "要求：每个 scene 必须有 scene_purpose、entry_state、exit_state、"
             "must_include、must_avoid、微冲突、情绪变化、揭示与钩子；"
+            "若 beat 数多于场景数，请把相邻 beat 合并到同一 scene 的"
+            "scene_purpose / must_include 中；"
             "相邻场景必须顺序承接，避免重复上一场已完成的信息；"
             "若提供了「前一章承接信息」，首场 entry_state 必须显式承接其中的"
             "人物位置/情绪/未结悬念/关键道具/未完成动作，不要从空白状态开始；"
@@ -267,17 +265,37 @@ class NovelPlannerService:
                 "module": "novel_planner",
                 "chapter_id": chapter.id,
                 "scenes_per_chapter": scenes_per_chapter,
-                "scene_count_mode": "manual" if scenes_per_chapter is not None else "auto",
+                "scene_count_mode": scene_budget_plan.mode,
             },
         )
         contract = ScenePlanContract.model_validate(raw)
         if not contract.scenes:
             return self._fallback_scenes(
                 chapter,
-                scenes_per_chapter or self._infer_scene_count(chapter),
+                scene_budget_plan.scene_count,
                 expected_words,
+                scene_budget_plan=scene_budget_plan,
             )
-        return self._normalize_scenes(contract, chapter, expected_words)
+        normalized = self._normalize_scenes(
+            contract,
+            chapter,
+            expected_words,
+            scene_budget_plan=scene_budget_plan,
+        )
+        scenes = normalized.scenes[: scene_budget_plan.scene_count]
+        if len(scenes) < scene_budget_plan.scene_count:
+            fallback = self._fallback_scenes(
+                chapter,
+                scene_budget_plan.scene_count,
+                expected_words,
+                scene_budget_plan=scene_budget_plan,
+            )
+            scenes.extend(fallback.scenes[len(scenes) : scene_budget_plan.scene_count])
+        return ScenePlanContract(
+            chapter_index=normalized.chapter_index,
+            chapter_title=normalized.chapter_title,
+            scenes=scenes,
+        )
 
     def _normalize_story_bible(
         self,
@@ -414,9 +432,15 @@ class NovelPlannerService:
         chapter: Chapter,
         scenes_per_chapter: int,
         expected_words: int,
+        scene_budget_plan: SceneBudgetPlan | None = None,
     ) -> ScenePlanContract:
         scenes: list[ScenePlanItem] = []
         for index in range(1, scenes_per_chapter + 1):
+            target_words = (
+                scene_budget_plan.target_for_scene(index, expected_words)
+                if scene_budget_plan
+                else expected_words
+            )
             previous = (
                 f"承接场景 {index - 1} 的新信息与情绪压力"
                 if index > 1
@@ -445,7 +469,7 @@ class NovelPlannerService:
                     emotion_end="更强的不确定感",
                     reveal="暴露一个新的事实或人物态度。",
                     hook="留下下一场必须回应的问题。",
-                    expected_words=expected_words,
+                    expected_words=target_words,
                 )
             )
         return ScenePlanContract(
@@ -522,11 +546,12 @@ class NovelPlannerService:
         contract: ScenePlanContract,
         chapter: Chapter,
         expected_words: int,
+        scene_budget_plan: SceneBudgetPlan | None = None,
     ) -> ScenePlanContract:
         scenes = []
         for index, item in enumerate(contract.scenes, start=1):
             data = item.model_dump()
-            data["scene_index"] = data.get("scene_index") or index
+            data["scene_index"] = index
             data["title"] = data.get("title") or f"{chapter.title}·场景{index}"
             data["scene_purpose"] = data.get("scene_purpose") or data.get("goal") or "推进本章目标"
             data["entry_state"] = data.get("entry_state") or (
@@ -535,7 +560,12 @@ class NovelPlannerService:
             data["exit_state"] = data.get("exit_state") or data.get("hook") or "留下下一步压力"
             data["must_include"] = data.get("must_include") or ["推进本章目标"]
             data["must_avoid"] = data.get("must_avoid") or ["重复上一场已完成的信息"]
-            data["expected_words"] = data.get("expected_words") or expected_words
+            target_words = (
+                scene_budget_plan.target_for_scene(index, expected_words)
+                if scene_budget_plan
+                else expected_words
+            )
+            data["expected_words"] = target_words
             scenes.append(ScenePlanItem(**data))
         return ScenePlanContract(
             chapter_index=contract.chapter_index or chapter.chapter_index,

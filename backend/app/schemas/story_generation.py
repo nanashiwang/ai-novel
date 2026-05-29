@@ -116,8 +116,8 @@ class ChapterPlanItem(APIModel):
     volume_index: int | None = None
     # Sprint 16-E1：字数预算与场景拍点。
     # target_words 为 0 时 activity 会按 spec.target_word_count /
-    # target_chapter_count 反推默认值；scene_beats 为空时回落到调用方
-    # 显式指定的 scenes_per_chapter。
+    # target_chapter_count 反推默认值；scene_beats 是剧情拍点，不等同于
+    # scene_count，后续由 scene_budget 规则预算器合并成实际场景。
     target_words: int = 0
     scene_beats: list[str] = Field(default_factory=list)
     # Sprint 17-B 节奏调度：每章节奏标签 + 情感强度（1-5）

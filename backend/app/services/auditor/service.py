@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import random
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chapter import Chapter
@@ -20,6 +21,7 @@ from app.schemas.story_generation import AuditResultContract
 from app.services.context_builder.service import context_builder
 from app.services.model_gateway.service import model_gateway
 from app.services.prompt_manager.service import prompt_manager
+from app.services.scene_budget import build_scene_budget_plan
 
 _PROMPT_AUDIT_SCENE = "audit/audit_scene"
 _PROMPT_VERSION = "v1"
@@ -51,6 +53,13 @@ class AuditorService:
             chapter=chapter,
             scene=scene,
         )
+        scene_target_words = await _resolve_audit_scene_target_words(
+            session,
+            organization_id=organization_id,
+            chapter=chapter,
+            scene=scene,
+        )
+        draft_word_count = len(draft_content or "")
 
         long_range_block = ""
         if mode == "long_range":
@@ -127,6 +136,11 @@ class AuditorService:
             "- pacing：本章正文情感强度与场面密度是否符合上下文「本章节奏」段提供的"
             "pacing_type / emotion_intensity（climax 章不应通篇内心独白；"
             "cool_down 章不应再起激烈对抗；emotion_intensity=2 章不应出现高强度场面）",
+            f"- 统一字数预算：本场持久化/规则预算目标约 {scene_target_words} 字；"
+            f"当前正文估算约 {draft_word_count} 字；"
+            "允许上下浮动 20%。字数预算是软目标，不属于连续性错误；"
+            "只有超长已经造成剧情功能缺失、节奏严重失衡或明显挤占后续必要场景时，"
+            "才可作为 pacing 问题提示，并说明具体受影响的剧情功能",
             "- intra_chapter_continuity：本场是否承接同章前序场（参考上下文"
             "「本章前序场已发生」段）；是否漏接前序场留下的钩子、重复了前序场"
             "已用的标志性动作/道具/揭示、人物语气/状态与同章前场是否矛盾、"
@@ -174,9 +188,52 @@ class AuditorService:
                 "chapter_id": chapter.id,
                 "context_total_tokens": ctx.total_tokens,
                 "audit_mode": mode,
+                "scene_target_words": scene_target_words,
+                "draft_word_count": draft_word_count,
             },
         )
         return AuditResultContract.model_validate(raw)
+
+
+async def _resolve_audit_scene_target_words(
+    session: AsyncSession,
+    *,
+    organization_id: str,
+    chapter: Chapter,
+    scene: Scene,
+) -> int:
+    try:
+        stored = int(getattr(scene, "target_words", 0) or 0)
+    except (TypeError, ValueError):
+        stored = 0
+    if stored > 0:
+        return stored
+    rows = list(
+        (
+            await session.execute(
+                select(Scene.id, Scene.scene_index)
+                .where(
+                    Scene.organization_id == organization_id,
+                    Scene.chapter_id == chapter.id,
+                )
+                .order_by(Scene.scene_index.asc())
+            )
+        ).all()
+    )
+    scene_indices = [row[1] for row in rows]
+    total = len(scene_indices) or len(list(chapter.scene_beats or [])) or 1
+    position = (
+        scene_indices.index(scene.scene_index) + 1
+        if scene.scene_index in scene_indices
+        else max(1, int(scene.scene_index or 1))
+    )
+    fallback = max(600, int((chapter.target_words or 0) / max(1, total)) or 1200)
+    plan = build_scene_budget_plan(
+        chapter=chapter,
+        forced_scene_count=total,
+        fallback_scene_words=fallback,
+    )
+    return plan.target_for_scene(position, fallback)
 
 
 auditor_service = AuditorService()

@@ -12,6 +12,14 @@ export type UseSceneJobsArgs = {
   activeScene?: Scene;
 };
 
+export type RewriteReviewPayload = {
+  review_passed?: boolean;
+  review_issue_count?: number;
+  remaining_issue_count?: number;
+  fixed_issue_count?: number;
+  review_error?: string | null;
+};
+
 /**
  * 写作工作台：jobs 列表查询 + 当前 scene 三类任务（write/audit/rewrite）的派生状态。
  *
@@ -87,6 +95,10 @@ export function useSceneJobs({ projectId, activeScene }: UseSceneJobsArgs) {
   );
   const isRewriting =
     latestRewriteJob?.status === "queued" || latestRewriteJob?.status === "running";
+  const latestRewriteReview = latestRewriteJob?.output_payload as
+    | RewriteReviewPayload
+    | null
+    | undefined;
 
   return {
     jobsKey,
@@ -97,6 +109,7 @@ export function useSceneJobs({ projectId, activeScene }: UseSceneJobsArgs) {
     isAuditing,
     latestAuditIssueCount,
     latestRewriteJob,
+    latestRewriteReview,
     isRewriting,
   };
 }

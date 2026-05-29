@@ -77,6 +77,11 @@ export type Scene = {
   emotionStart: string;
   emotionEnd: string;
   status: SceneStatus;
+  targetWords?: number;
+  beatStart?: number | null;
+  beatEnd?: number | null;
+  beatGroupSummary?: string;
+  budgetReason?: string;
   draftVersionId?: string;
   wordCount: number;
 };

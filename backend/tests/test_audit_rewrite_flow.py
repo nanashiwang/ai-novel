@@ -20,6 +20,7 @@ from app.models import (
     Scene,
 )
 from app.models.common import new_id
+from app.schemas.story_generation import AuditIssueItem, AuditResultContract
 from app.workflows import activities
 
 
@@ -226,11 +227,16 @@ async def test_rewrite_scene_fixes_issues_and_chains_version(
     """重写后：
 
     - DraftVersion(version_type='rewrite') 写入，parent 指向原 draft
-    - 原 open issues 全部 status='fixed'
+    - 自动复审无问题时，原 open issues 全部 status='fixed'
     - quota 消耗
     """
     Session = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
     monkeypatch.setattr(activities, "AsyncSessionLocal", Session)
+
+    async def _clean_review(*args, **kwargs):
+        return AuditResultContract(issues=[])
+
+    monkeypatch.setattr(activities.auditor_service, "audit_scene_draft", _clean_review)
 
     org_id, project_id, chapter_id, scene_id, draft_id, headers = await _setup_with_draft(
         client, db_session, email="rewrite-happy@example.com"
@@ -266,6 +272,8 @@ async def test_rewrite_scene_fixes_issues_and_chains_version(
     job = await _await_job_terminal(db_session, job_id)
     assert job.status == "succeeded"
     assert job.consumed_quota == 2000
+    assert job.output_payload["review_passed"] is True
+    assert job.output_payload["fixed_issue_count"] == 2
 
     db_session.expire_all()
     drafts = (
@@ -286,6 +294,71 @@ async def test_rewrite_scene_fixes_issues_and_chains_version(
 
     scene = await db_session.get(Scene, scene_id)
     assert scene.status == "drafted"
+
+
+@pytest.mark.asyncio
+async def test_rewrite_scene_keeps_issue_open_when_auto_review_still_finds_it(
+    client, db_engine, db_session, monkeypatch
+):
+    """重写后自动复审仍发现同一问题时，不把原 issue 标 fixed。"""
+    Session = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+    monkeypatch.setattr(activities, "AsyncSessionLocal", Session)
+
+    async def _review_same_issue(*args, **kwargs):
+        return AuditResultContract(
+            issues=[
+                AuditIssueItem(
+                    issue_type="continuity",
+                    severity="medium",
+                    description="测试问题仍未解决：关键道具属性仍不一致",
+                    suggested_fix="测试修复建议",
+                )
+            ]
+        )
+
+    monkeypatch.setattr(activities.auditor_service, "audit_scene_draft", _review_same_issue)
+
+    org_id, project_id, chapter_id, scene_id, _, headers = await _setup_with_draft(
+        client, db_session, email="rewrite-review-open@example.com"
+    )
+    issue_id = new_id("issue")
+    db_session.add(
+        ContinuityIssue(
+            id=issue_id,
+            organization_id=org_id,
+            project_id=project_id,
+            chapter_id=chapter_id,
+            scene_id=scene_id,
+            issue_type="continuity",
+            severity="medium",
+            description="测试问题：关键道具属性仍不一致",
+            suggested_fix="测试修复建议",
+            status="open",
+        )
+    )
+    await db_session.commit()
+
+    res = await client.post(
+        f"/api/v1/projects/{project_id}/scenes/{scene_id}/rewrite",
+        headers=headers,
+        json={"target_words": 1000, "estimate_words": 2000},
+    )
+    assert res.status_code == 202, res.text
+    job = await _await_job_terminal(db_session, res.json()["id"])
+    assert job.status == "succeeded"
+    assert job.output_payload["review_passed"] is False
+    assert job.output_payload["fixed_issue_count"] == 0
+    assert job.output_payload["remaining_issue_count"] == 1
+
+    db_session.expire_all()
+    issues = (
+        await db_session.execute(
+            select(ContinuityIssue).where(ContinuityIssue.scene_id == scene_id)
+        )
+    ).scalars().all()
+    assert len(issues) == 1
+    assert issues[0].id == issue_id
+    assert issues[0].status == "open"
 
 
 @pytest.mark.asyncio

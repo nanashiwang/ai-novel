@@ -157,6 +157,9 @@ async def test_generate_scene_plan_happy_path(client, db_engine, db_session, mon
         assert s.conflict
         assert s.must_include
         assert s.must_avoid
+        assert s.target_words == 1200
+        assert s.beat_group_summary
+        assert s.budget_reason
 
     # memory_entries：每个 scene 一条 source_type=scene 的摘要
     memories = (
@@ -224,6 +227,7 @@ async def test_generate_scene_plan_auto_scene_count(client, db_engine, db_sessio
     ).scalars().all()
     assert len(scenes) == 4
     assert all(scene.entry_state and scene.exit_state for scene in scenes)
+    assert all(scene.target_words > 0 for scene in scenes)
 
 
 @pytest.mark.asyncio

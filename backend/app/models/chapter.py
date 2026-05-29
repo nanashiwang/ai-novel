@@ -40,9 +40,9 @@ class Chapter(Base, TenantMixin, TimestampMixin):
     # target_chapter_count 反推默认值，可被 outline prompt 覆盖。
     # 0 = 未设置，writer 路径需 fallback 到旧的 estimate_words 平摊逻辑。
     target_words: Mapped[int] = mapped_column(Integer, default=0)
-    # scene_beats: 章内每场的功能/动作要点（list[str]），由 novel_planner 在
-    # 生成 chapters 时一并产出；scene_count 由 len(scene_beats) 决定，无 beat
-    # 时回落到调用方指定的 scenes_per_chapter。
+    # scene_beats: 章内剧情拍点（list[str]），由 novel_planner 在生成 chapters
+    # 时一并产出；它不是 scene_count，实际场景数由 scene_budget 规则预算器
+    # 根据章节字数、节奏和用户手动指定值决定。
     scene_beats: Mapped[list[str]] = mapped_column(JSON, default=list)
     # Sprint 17-B 节奏调度：
     # pacing_type ∈ {setup, rising, climax, cool_down, transition, ''}

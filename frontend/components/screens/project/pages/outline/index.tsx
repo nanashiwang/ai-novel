@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronUp,
+  Eye,
   RefreshCw,
   Search,
   Sparkles,
@@ -23,18 +24,26 @@ import { BibleBlock } from "@/components/screens/project/shared/bible-block";
 import { BatchJobProgressDialog } from "@/components/batch/BatchJobProgressDialog";
 import {
   batchApi,
+  type ChapterStateRequirement,
   type Chapter,
   chaptersApi,
   type GenerationJob,
   type RevisionTargetType,
+  type StoryStateItem,
   jobsApi,
   projectsApi,
   scenesApi,
+  storyStatesApi,
 } from "@/lib/api";
 import { useProjectEvents, type ProjectEvent } from "@/lib/hooks/use-event-source";
 import { ApiError } from "@/lib/http";
 import { useScopedKey } from "@/lib/use-scoped-key";
 import { RevisionCopilotDrawer } from "../bible/revision-copilot-drawer";
+import {
+  ChapterRequirementListDialog,
+  StoryStateDetailDialog,
+  StoryStateListDialog,
+} from "./story-state-detail-dialog";
 
 type RevisionDrawerConfig = {
   scope: string;
@@ -47,9 +56,222 @@ type RevisionDrawerConfig = {
 
 type OutlineFilter = "all" | "no-scenes" | "has-scenes" | "written" | "safe-optimize";
 type OutlineQuickView = "all" | "current-group" | "safe-optimize" | "written";
+type BadgeTone = "slate" | "blue" | "green" | "amber" | "rose" | "violet" | "orange";
 
 const CHAPTER_GROUP_SIZE = 50;
 const WRITTEN_SCENE_STATUSES = new Set(["drafted", "audited", "rewritten", "approved"]);
+
+const STORY_STATE_TYPE_LABEL: Record<string, string> = {
+  skill: "能力",
+  artifact: "器物",
+  identity: "身份",
+  grudge: "恩怨",
+  foreshadow: "伏笔",
+  oath: "誓约",
+};
+
+const STORY_STATE_ENTITY_LABEL: Record<string, string> = {
+  character: "人物",
+  artifact: "器物",
+  plot_thread: "剧情线",
+  relationship: "关系",
+  world_rule: "世界规则",
+};
+
+const REQUIREMENT_TYPE_LABEL: Record<string, string> = {
+  must_remember: "必须承接",
+  must_not_conflict: "禁止冲突",
+  should_reference: "建议呼应",
+  candidate_payoff: "可回收",
+};
+
+function getRequirementTone(type: string): BadgeTone {
+  if (type === "must_not_conflict") return "rose";
+  if (type === "must_remember") return "amber";
+  if (type === "candidate_payoff") return "violet";
+  return "blue";
+}
+
+function getStoryStateTone(state: StoryStateItem): BadgeTone {
+  if (state.is_hard_constraint) return "rose";
+  if (state.state_type === "foreshadow") return "violet";
+  if (state.state_type === "skill") return "green";
+  if (state.state_type === "grudge") return "amber";
+  return "slate";
+}
+
+function storyStateMeta(state: StoryStateItem) {
+  const entityLabel = STORY_STATE_ENTITY_LABEL[state.entity_type] ?? state.entity_type;
+  const typeLabel = STORY_STATE_TYPE_LABEL[state.state_type] ?? state.state_type;
+  return `${entityLabel} · ${typeLabel} · 优先级 ${state.priority}`;
+}
+
+function ChapterRequirementPanel({
+  items,
+  onSelectState,
+  onOpenList,
+}: {
+  items: Array<{ requirement: ChapterStateRequirement; state: StoryStateItem | null }>;
+  onSelectState: (state: StoryStateItem) => void;
+  onOpenList: () => void;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white">
+      <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-3 py-2.5">
+        <div className="min-w-0">
+          <p className="text-sm font-black text-slate-950">本章承接要求</p>
+          <p className="mt-0.5 truncate text-xs text-slate-500">当前章节需要保持一致的状态项。</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <Badge
+            tone={items.length > 0 ? "amber" : "slate"}
+            className="whitespace-nowrap rounded-md !px-1.5 !py-0.5 !text-[10px]"
+          >
+            {items.length} 条
+          </Badge>
+          <button
+            type="button"
+            className="inline-flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-1.5 text-[10px] font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+            onClick={onOpenList}
+          >
+            <Eye className="size-3" /> 本章全部
+          </button>
+        </div>
+      </div>
+      {items.length === 0 ? (
+        <div className="px-4 py-6 text-sm text-slate-500">
+          暂无承接要求，可点击“本章全部”确认列表状态。
+        </div>
+      ) : (
+        <div className="max-h-72 divide-y divide-slate-100 overflow-y-auto">
+          {items.map(({ requirement, state }) => (
+            <div key={requirement.id} className="px-4 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge tone={getRequirementTone(requirement.requirement_type)}>
+                      {REQUIREMENT_TYPE_LABEL[requirement.requirement_type] ??
+                        requirement.requirement_type}
+                    </Badge>
+                    {state?.is_hard_constraint ? (
+                      <Badge tone="rose">硬约束</Badge>
+                    ) : null}
+                  </div>
+                  <p className="mt-2 truncate text-sm font-bold text-slate-950">
+                    {state?.name ?? "未匹配到关键设定"}
+                  </p>
+                </div>
+                <span className="shrink-0 text-[11px] font-semibold text-slate-400">
+                  P{requirement.priority}
+                </span>
+              </div>
+              <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-600">
+                {requirement.summary || state?.summary || "—"}
+              </p>
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <p className="min-w-0 truncate text-[11px] text-slate-400">
+                  {state ? storyStateMeta(state) : `关联 ID：${requirement.state_item_id}`}
+                </p>
+                {state ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 shrink-0 px-2 text-[11px]"
+                    onClick={() => onSelectState(state)}
+                  >
+                    <Eye className="size-3.5" /> 查看
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StoryStatePanel({
+  items,
+  totalCount,
+  onSelectState,
+  onOpenList,
+}: {
+  items: StoryStateItem[];
+  totalCount: number;
+  onSelectState: (state: StoryStateItem) => void;
+  onOpenList: () => void;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white">
+      <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-3 py-2.5">
+        <div className="min-w-0">
+          <p className="text-sm font-black text-slate-950">关键设定</p>
+          <p className="mt-0.5 truncate text-xs text-slate-500">当前项目已提取的活跃状态项。</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <Badge
+            tone={totalCount > 0 ? "blue" : "slate"}
+            className="whitespace-nowrap rounded-md !px-1.5 !py-0.5 !text-[10px]"
+          >
+            {totalCount} 条
+          </Badge>
+          <button
+            type="button"
+            className="inline-flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-1.5 text-[10px] font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+            onClick={onOpenList}
+          >
+            <Eye className="size-3" /> 全部
+          </button>
+        </div>
+      </div>
+      {items.length === 0 ? (
+        <div className="px-4 py-6 text-sm text-slate-500">
+          暂无已提取的关键设定，可点击“全部”确认列表状态。
+        </div>
+      ) : (
+        <div className="max-h-72 divide-y divide-slate-100 overflow-y-auto">
+          {items.map((item) => (
+            <div key={item.id} className="px-4 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge tone={getStoryStateTone(item)}>
+                      {STORY_STATE_TYPE_LABEL[item.state_type] ?? item.state_type}
+                    </Badge>
+                    {item.is_hard_constraint ? <Badge tone="rose">硬约束</Badge> : null}
+                  </div>
+                  <p className="mt-2 truncate text-sm font-bold text-slate-950">
+                    {item.name}
+                  </p>
+                </div>
+                <span className="shrink-0 text-[11px] font-semibold text-slate-400">
+                  P{item.priority}
+                </span>
+              </div>
+              <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-600">
+                {item.summary || "—"}
+              </p>
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <p className="min-w-0 truncate text-[11px] text-slate-400">
+                  {storyStateMeta(item)}
+                </p>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 shrink-0 px-2 text-[11px]"
+                  onClick={() => onSelectState(item)}
+                >
+                  <Eye className="size-3.5" /> 查看
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function OutlinePage({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
@@ -144,6 +366,9 @@ export function OutlinePage({ projectId }: { projectId: string }) {
   const [sceneCountMode, setSceneCountMode] = useState<"auto" | "manual">("auto");
   const [manualSceneCount, setManualSceneCount] = useState(3);
   const [revisionConfig, setRevisionConfig] = useState<RevisionDrawerConfig | null>(null);
+  const [selectedStoryState, setSelectedStoryState] = useState<StoryStateItem | null>(null);
+  const [showChapterRequirementList, setShowChapterRequirementList] = useState(false);
+  const [showStoryStateList, setShowStoryStateList] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [highlightChapterId, setHighlightChapterId] = useState<string | null>(null);
   const [batchScenePlanJobId, setBatchScenePlanJobId] = useState<string | null>(null);
@@ -406,6 +631,53 @@ export function OutlinePage({ projectId }: { projectId: string }) {
     queryFn: () => scenesApi.list(projectId, active?.id),
     enabled: !!active,
   });
+  const storyStatesKey = useScopedKey("project", projectId, "story-states", "active");
+  const activeRequirementsKey = useScopedKey(
+    "project",
+    projectId,
+    "chapters",
+    active?.id,
+    "state-requirements",
+  );
+  const { data: storyStateResponse } = useQuery({
+    queryKey: storyStatesKey,
+    queryFn: () => storyStatesApi.list(projectId, { status: "active", limit: 80 }),
+    enabled: chapters.length > 0,
+  });
+  const { data: requirementResponse } = useQuery({
+    queryKey: activeRequirementsKey,
+    queryFn: () =>
+      active
+        ? storyStatesApi.listChapterRequirements(projectId, active.id)
+        : Promise.resolve({ items: [] }),
+    enabled: !!active,
+  });
+  const storyStates = useMemo(
+    () => storyStateResponse?.items ?? [],
+    [storyStateResponse],
+  );
+  const chapterRequirements = useMemo(
+    () => requirementResponse?.items ?? [],
+    [requirementResponse],
+  );
+  const storyStateById = useMemo(
+    () => new Map(storyStates.map((item) => [item.id, item])),
+    [storyStates],
+  );
+  const activeRequirementItems = useMemo(
+    () =>
+      chapterRequirements
+        .map((requirement) => ({
+          requirement,
+          state: storyStateById.get(requirement.state_item_id) ?? null,
+        }))
+        .sort((a, b) => b.requirement.priority - a.requirement.priority),
+    [chapterRequirements, storyStateById],
+  );
+  const storyStateHighlights = useMemo(
+    () => storyStates.slice(0, 8),
+    [storyStates],
+  );
   const activeSceneStats = useMemo(() => {
     if (!active) {
       return { count: 0, isSafeToOptimize: false, hasWrittenScene: false };
@@ -422,9 +694,20 @@ export function OutlinePage({ projectId }: { projectId: string }) {
     queryClient.invalidateQueries({ queryKey: chaptersKey });
     queryClient.invalidateQueries({ queryKey: scenesKey });
     queryClient.invalidateQueries({ queryKey: allScenesKey });
+    queryClient.invalidateQueries({ queryKey: storyStatesKey });
+    queryClient.invalidateQueries({ queryKey: activeRequirementsKey });
     queryClient.invalidateQueries({ queryKey: jobsKey });
     queryClient.invalidateQueries({ queryKey: projectKey });
-  }, [queryClient, chaptersKey, scenesKey, allScenesKey, jobsKey, projectKey]);
+  }, [
+    queryClient,
+    chaptersKey,
+    scenesKey,
+    allScenesKey,
+    storyStatesKey,
+    activeRequirementsKey,
+    jobsKey,
+    projectKey,
+  ]);
 
   const openOutlineRevision = () => {
     setRevisionConfig({
@@ -465,10 +748,25 @@ export function OutlinePage({ projectId }: { projectId: string }) {
         } else if (jobType === "generate_scene_plan") {
           queryClient.invalidateQueries({ queryKey: scenesKey });
           queryClient.invalidateQueries({ queryKey: allScenesKey });
+          queryClient.invalidateQueries({ queryKey: activeRequirementsKey });
+        } else if (jobType === "write_scene" || jobType === "rewrite_scene") {
+          queryClient.invalidateQueries({ queryKey: scenesKey });
+          queryClient.invalidateQueries({ queryKey: allScenesKey });
+          queryClient.invalidateQueries({ queryKey: storyStatesKey });
+          queryClient.invalidateQueries({ queryKey: activeRequirementsKey });
         }
       }
     },
-    [queryClient, jobsKey, chaptersKey, projectKey, scenesKey, allScenesKey],
+    [
+      queryClient,
+      jobsKey,
+      chaptersKey,
+      projectKey,
+      scenesKey,
+      allScenesKey,
+      storyStatesKey,
+      activeRequirementsKey,
+    ],
   );
   useProjectEvents(projectId, { onMessage: handleProjectEvent });
 
@@ -488,6 +786,7 @@ export function OutlinePage({ projectId }: { projectId: string }) {
       toast.success("已提交场景计划生成任务");
       queryClient.invalidateQueries({ queryKey: scenesKey });
       queryClient.invalidateQueries({ queryKey: allScenesKey });
+      queryClient.invalidateQueries({ queryKey: activeRequirementsKey });
       queryClient.invalidateQueries({ queryKey: jobsKey });
     },
     onError: (e: unknown) => {
@@ -894,6 +1193,19 @@ export function OutlinePage({ projectId }: { projectId: string }) {
                 <BibleBlock title="结尾钩子" text={active.ending_hook || "—"} />
                 <BibleBlock title="摘要" text={active.summary || "—"} />
               </div>
+              <div className="grid gap-3 lg:grid-cols-2">
+                <ChapterRequirementPanel
+                  items={activeRequirementItems}
+                  onSelectState={setSelectedStoryState}
+                  onOpenList={() => setShowChapterRequirementList(true)}
+                />
+                <StoryStatePanel
+                  items={storyStateHighlights}
+                  totalCount={storyStates.length}
+                  onSelectState={setSelectedStoryState}
+                  onOpenList={() => setShowStoryStateList(true)}
+                />
+              </div>
               <DataTable
                 rows={scenes}
                 columns={[
@@ -911,6 +1223,26 @@ export function OutlinePage({ projectId }: { projectId: string }) {
                     key: "purpose",
                     header: "目的",
                     render: (row) => row.scene_purpose || row.goal || "—",
+                  },
+                  {
+                    key: "budget",
+                    header: "预算",
+                    render: (row) => (
+                      <div className="min-w-[150px] space-y-1">
+                        <p className="text-sm font-semibold text-slate-800">
+                          {row.target_words ? `约 ${row.target_words} 字` : "—"}
+                        </p>
+                        {row.beat_group_summary ? (
+                          <p className="line-clamp-2 text-xs leading-relaxed text-slate-500">
+                            {row.beat_group_summary}
+                          </p>
+                        ) : row.beat_start || row.beat_end ? (
+                          <p className="text-xs text-slate-500">
+                            beat {row.beat_start ?? "?"}-{row.beat_end ?? "?"}
+                          </p>
+                        ) : null}
+                      </div>
+                    ),
                   },
                   {
                     key: "state",
@@ -956,13 +1288,16 @@ export function OutlinePage({ projectId }: { projectId: string }) {
                       }}
                       className="ml-2 h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800"
                     >
-                      <option value="auto">AI 自动判断</option>
+                      <option value="auto">按章节节奏自动</option>
                       {[1, 2, 3, 4, 5, 6, 7, 8].map((count) => (
                         <option key={count} value={count}>
                           {count} 个
                         </option>
                       ))}
                     </select>
+                    <span className="ml-2 text-[11px] font-medium text-slate-400">
+                      按字数、节奏和拍点合并
+                    </span>
                   </label>
                   <Button
                     onClick={() => generateScenes.mutate()}
@@ -1004,6 +1339,38 @@ export function OutlinePage({ projectId }: { projectId: string }) {
             queryClient.invalidateQueries({ queryKey: jobsKey });
           }}
           onClose={() => setBatchScenePlanJobId(null)}
+        />
+      ) : null}
+      {showChapterRequirementList && active ? (
+        <ChapterRequirementListDialog
+          chapterLabel={`第 ${active.chapter_index} 章`}
+          items={activeRequirementItems}
+          onClose={() => setShowChapterRequirementList(false)}
+          onSelectState={(state) => {
+            setShowChapterRequirementList(false);
+            setSelectedStoryState(state);
+          }}
+        />
+      ) : null}
+      {showStoryStateList ? (
+        <StoryStateListDialog
+          items={storyStates}
+          onClose={() => setShowStoryStateList(false)}
+          onSelectState={(state) => {
+            setShowStoryStateList(false);
+            setSelectedStoryState(state);
+          }}
+        />
+      ) : null}
+      {selectedStoryState ? (
+        <StoryStateDetailDialog
+          projectId={projectId}
+          state={selectedStoryState}
+          onClose={() => setSelectedStoryState(null)}
+          onSaved={() => {
+            queryClient.invalidateQueries({ queryKey: storyStatesKey });
+            queryClient.invalidateQueries({ queryKey: activeRequirementsKey });
+          }}
         />
       ) : null}
     </div>

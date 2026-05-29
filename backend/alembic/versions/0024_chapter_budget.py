@@ -7,7 +7,7 @@ Create Date: 2026-05-23
 把"章节字数预算"和"场景拍点"显式落库：
 - target_words：novel_planner 拆 chapters 时按 spec.target_word_count /
   target_chapter_count 反推默认值，可被 outline prompt 覆盖。
-- scene_beats：章内每场的功能/动作要点，决定 scene_count。
+- scene_beats：章内剧情拍点，供后续规则预算器合并成实际 scene。
 两个字段都是 ADD COLUMN IF NOT EXISTS；旧数据 target_words=0、scene_beats=[]，
 writer 路径会 fallback 到旧的 estimate_words 平摊逻辑，向后兼容。
 """
