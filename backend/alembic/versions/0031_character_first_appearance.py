@@ -1,7 +1,7 @@
 """characters: first_appearance_chapter (Sprint 17-D 角色登场约束).
 
 Revision ID: 0031_character_first_appearance
-Revises: 0030_merge_memory_and_story_state_heads
+Revises: 0030_merge_memory_story_state
 Create Date: 2026-05-28
 
 加 first_appearance_chapter（Integer NULL + index）：bible LLM 估计该角色
@@ -17,7 +17,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0031_character_first_appearance"
-down_revision: str | None = "0030_merge_memory_and_story_state_heads"
+down_revision: str | None = "0030_merge_memory_story_state"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
