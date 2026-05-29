@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chapter import Chapter
+from app.models.chapter_state_requirement import ChapterStateRequirement
 from app.models.scene import Scene
 from app.models.story_state_item import StoryStateItem
 from app.repositories import (
@@ -219,6 +220,10 @@ class StoryStateService:
             organization_id=organization_id,
             project_id=project_id,
             chapter_id=chapter.id,
+            source_chapter_id=chapter.id,
+            source_scene_id=scene.id if scene else None,
+            target_chapter_id=chapter.id,
+            origin_type="current_chapter_extract",
             requirement_items=requirement_items,
         )
         next_items = [
@@ -244,6 +249,10 @@ class StoryStateService:
                 organization_id=organization_id,
                 project_id=project_id,
                 chapter_id=next_chapter.id,
+                source_chapter_id=chapter.id,
+                source_scene_id=scene.id if scene else None,
+                target_chapter_id=next_chapter.id,
+                origin_type="previous_chapter_carryover",
                 requirement_items=next_items,
             )
         return {
@@ -275,7 +284,7 @@ class StoryStateService:
         )
         deleted = 0
         for row in existing:
-            if _is_next_chapter_requirement(row.summary):
+            if _is_preserved_requirement(row):
                 continue
             await req_repo.session.delete(row)
             deleted += 1
@@ -290,6 +299,10 @@ class StoryStateService:
         organization_id: str,
         project_id: str,
         chapter_id: str,
+        source_chapter_id: str | None,
+        source_scene_id: str | None,
+        target_chapter_id: str | None,
+        origin_type: str,
         requirement_items: Sequence[tuple[StoryStateInput, StoryStateItem, str]],
     ) -> tuple[int, int]:
         existing = list(
@@ -314,11 +327,23 @@ class StoryStateService:
                 if int(current.priority or 0) < priority:
                     current.priority = priority
                     updated += 1
+                if _apply_requirement_source(
+                    current,
+                    source_chapter_id=source_chapter_id,
+                    source_scene_id=source_scene_id,
+                    target_chapter_id=target_chapter_id,
+                    origin_type=origin_type,
+                ):
+                    updated += 1
                 continue
             created_row = await req_repo.create(
                 organization_id=organization_id,
                 project_id=project_id,
                 chapter_id=chapter_id,
+                source_chapter_id=source_chapter_id,
+                source_scene_id=source_scene_id,
+                target_chapter_id=target_chapter_id or chapter_id,
+                origin_type=origin_type,
                 state_item_id=state.id,
                 requirement_type=requirement_type,
                 summary=summary,
@@ -373,3 +398,39 @@ def _is_next_chapter_requirement(summary: str) -> bool:
     if not text or text.startswith("本章后续"):
         return False
     return any(marker in text for marker in _NEXT_CHAPTER_REQUIREMENT_MARKERS)
+
+
+def _is_preserved_requirement(row: ChapterStateRequirement) -> bool:
+    origin_type = (row.origin_type or "").strip()
+    if origin_type == "previous_chapter_carryover":
+        return True
+    # Backward compatibility for rows created before origin_type existed.
+    return _is_next_chapter_requirement(row.summary or "")
+
+
+def _apply_requirement_source(
+    row: ChapterStateRequirement,
+    *,
+    source_chapter_id: str | None,
+    source_scene_id: str | None,
+    target_chapter_id: str | None,
+    origin_type: str,
+) -> bool:
+    changed = False
+    if not row.source_chapter_id and source_chapter_id:
+        row.source_chapter_id = source_chapter_id
+        changed = True
+    if not row.source_scene_id and source_scene_id:
+        row.source_scene_id = source_scene_id
+        changed = True
+    if not row.target_chapter_id and target_chapter_id:
+        row.target_chapter_id = target_chapter_id
+        changed = True
+    current_origin = (row.origin_type or "").strip()
+    if (
+        origin_type == "previous_chapter_carryover"
+        and current_origin != "previous_chapter_carryover"
+    ) or not current_origin:
+        row.origin_type = origin_type
+        changed = True
+    return changed

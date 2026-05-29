@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import ForeignKey, Integer, String, Text
+from sqlalchemy import ForeignKey, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -14,6 +14,29 @@ class ChapterStateRequirement(Base, TenantMixin, TimestampMixin):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), index=True)
     chapter_id: Mapped[str] = mapped_column(String(64), ForeignKey("chapters.id"), index=True)
+    source_chapter_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("chapters.id"),
+        nullable=True,
+        index=True,
+    )
+    source_scene_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("scenes.id"),
+        nullable=True,
+    )
+    target_chapter_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("chapters.id"),
+        nullable=True,
+        index=True,
+    )
+    origin_type: Mapped[str] = mapped_column(
+        String(32),
+        default="current_chapter_extract",
+        server_default=text("'current_chapter_extract'"),
+        index=True,
+    )
     state_item_id: Mapped[str] = mapped_column(
         String(64),
         ForeignKey("story_state_items.id"),

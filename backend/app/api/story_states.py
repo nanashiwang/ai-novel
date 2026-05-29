@@ -9,6 +9,7 @@ from sqlalchemy import select
 from app.api.deps import CurrentUserDep, DbDep, TenantDep
 from app.core.exceptions import NotFoundError
 from app.core.permissions import require_permission
+from app.models.chapter import Chapter
 from app.models.story_state_item import StoryStateItem
 from app.repositories import (
     ChapterRepository,
@@ -193,6 +194,11 @@ async def list_chapter_state_requirements(
         chapter_id=chapter_id,
     )
     state_ids = {item.state_item_id for item in items}
+    source_chapter_ids = {
+        item.source_chapter_id
+        for item in items
+        if item.source_chapter_id
+    }
     state_by_id: dict[str, StoryStateItem] = {}
     if state_ids:
         result = await db.execute(
@@ -203,6 +209,16 @@ async def list_chapter_state_requirements(
             )
         )
         state_by_id = {state.id: state for state in result.scalars().all()}
+    source_chapter_by_id: dict[str, Chapter] = {}
+    if source_chapter_ids:
+        result = await db.execute(
+            select(Chapter).where(
+                Chapter.organization_id == tenant.organization_id,
+                Chapter.project_id == project_id,
+                Chapter.id.in_(source_chapter_ids),
+            )
+        )
+        source_chapter_by_id = {row.id: row for row in result.scalars().all()}
     return ChapterStateRequirementListResponse(
         items=[
             {
@@ -211,6 +227,20 @@ async def list_chapter_state_requirements(
                 "requirement_type": item.requirement_type,
                 "summary": item.summary,
                 "priority": item.priority,
+                "origin_type": item.origin_type or "current_chapter_extract",
+                "source_chapter_id": item.source_chapter_id,
+                "source_chapter_index": (
+                    source_chapter_by_id[item.source_chapter_id].chapter_index
+                    if item.source_chapter_id in source_chapter_by_id
+                    else None
+                ),
+                "source_chapter_title": (
+                    source_chapter_by_id[item.source_chapter_id].title
+                    if item.source_chapter_id in source_chapter_by_id
+                    else None
+                ),
+                "source_scene_id": item.source_scene_id,
+                "target_chapter_id": item.target_chapter_id or item.chapter_id,
                 "state_item": state_by_id.get(item.state_item_id),
             }
             for item in items

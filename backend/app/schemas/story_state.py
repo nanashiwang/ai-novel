@@ -27,6 +27,12 @@ RequirementType = Literal[
     "should_reference",
     "candidate_payoff",
 ]
+RequirementOriginType = Literal[
+    "current_chapter_extract",
+    "previous_chapter_carryover",
+    "manual",
+    "backfill",
+]
 
 
 class StoryStateItemResponse(APIModel):
@@ -76,6 +82,12 @@ class ChapterStateRequirementResponse(APIModel):
     requirement_type: RequirementType
     summary: str = ""
     priority: int
+    origin_type: RequirementOriginType = "current_chapter_extract"
+    source_chapter_id: str | None = None
+    source_chapter_index: int | None = None
+    source_chapter_title: str | None = None
+    source_scene_id: str | None = None
+    target_chapter_id: str | None = None
     state_item: StoryStateItemResponse | None = None
 
 

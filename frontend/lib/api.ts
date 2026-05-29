@@ -341,6 +341,11 @@ export type ChapterStateRequirementType =
   | "must_not_conflict"
   | "should_reference"
   | "candidate_payoff";
+export type ChapterStateRequirementOriginType =
+  | "current_chapter_extract"
+  | "previous_chapter_carryover"
+  | "manual"
+  | "backfill";
 
 export type StoryStateItem = {
   id: string;
@@ -381,6 +386,12 @@ export type ChapterStateRequirement = {
   requirement_type: ChapterStateRequirementType;
   summary: string;
   priority: number;
+  origin_type: ChapterStateRequirementOriginType;
+  source_chapter_id: string | null;
+  source_chapter_index: number | null;
+  source_chapter_title: string | null;
+  source_scene_id: string | null;
+  target_chapter_id: string | null;
   state_item?: StoryStateItem | null;
 };
 

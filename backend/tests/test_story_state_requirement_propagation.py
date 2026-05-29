@@ -13,6 +13,20 @@ from app.models.common import new_id
 from app.services.story_state.service import StoryStateInput, story_state_service
 
 
+async def _register(client, email: str) -> tuple[str, str]:
+    res = await client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": email,
+            "password": "password123",
+            "display_name": email.split("@")[0],
+        },
+    )
+    assert res.status_code == 201, res.text
+    data = res.json()
+    return data["access_token"], data["user"]["organization_id"]
+
+
 def _project_chapters_and_state() -> tuple[Project, Chapter, Chapter, StoryStateItem]:
     org_id = new_id("org")
     project_id = new_id("project")
@@ -114,6 +128,12 @@ async def test_rebuild_requirements_propagates_next_chapter_hints(db_session):
     assert current.id in by_chapter
     assert next_chapter.id in by_chapter
     assert by_chapter[next_chapter.id].summary == state_input.requirement_hint
+    assert by_chapter[current.id].origin_type == "current_chapter_extract"
+    assert by_chapter[current.id].source_chapter_id == current.id
+    assert by_chapter[current.id].target_chapter_id == current.id
+    assert by_chapter[next_chapter.id].origin_type == "previous_chapter_carryover"
+    assert by_chapter[next_chapter.id].source_chapter_id == current.id
+    assert by_chapter[next_chapter.id].target_chapter_id == next_chapter.id
 
     # 重跑同一批提取结果时，下一章不应重复插入相同承接要求。
     result = await story_state_service.rebuild_chapter_requirements(
@@ -153,6 +173,9 @@ async def test_rebuild_preserves_forward_requirements_from_previous_chapter(db_s
         requirement_type="must_not_conflict",
         summary="后续七日内旧铜钱应带有霜纹禁制，林照夜不能随意弃钱。",
         priority=100,
+        origin_type="previous_chapter_carryover",
+        source_chapter_id=current.id,
+        target_chapter_id=next_chapter.id,
     )
     rebuildable = ChapterStateRequirement(
         id=new_id("state_req"),
@@ -187,3 +210,91 @@ async def test_rebuild_preserves_forward_requirements_from_previous_chapter(db_s
     ).scalars().all()
     assert result["deleted"] == 1
     assert [row.summary for row in rows] == [preserved.summary]
+    assert rows[0].origin_type == "previous_chapter_carryover"
+
+
+@pytest.mark.asyncio
+async def test_state_requirements_api_returns_source_metadata(client, db_session):
+    token, org_id = await _register(client, "state-req-source@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    project_res = await client.post(
+        "/api/v1/projects",
+        headers=headers,
+        json={"title": "承接来源 API 测试", "target_word_count": 100_000},
+    )
+    assert project_res.status_code == 201, project_res.text
+    project_id = project_res.json()["id"]
+
+    source_chapter = Chapter(
+        id=new_id("chapter"),
+        organization_id=org_id,
+        project_id=project_id,
+        volume_id=None,
+        chapter_index=4,
+        title="戒律堂冷审",
+        summary="",
+        goal="",
+        conflict="",
+        ending_hook="",
+        status="planned",
+    )
+    target_chapter = Chapter(
+        id=new_id("chapter"),
+        organization_id=org_id,
+        project_id=project_id,
+        volume_id=None,
+        chapter_index=5,
+        title="外门第一辱",
+        summary="",
+        goal="",
+        conflict="",
+        ending_hook="",
+        status="planned",
+    )
+    state = StoryStateItem(
+        id=new_id("state"),
+        organization_id=org_id,
+        project_id=project_id,
+        entity_type="artifact",
+        entity_id=None,
+        state_type="artifact",
+        name="旧铜钱",
+        status="active",
+        summary="旧铜钱带有戒律堂霜纹禁制。",
+        value_json={},
+        source_chapter_id=source_chapter.id,
+        source_scene_id=None,
+        source_excerpt="",
+        updated_in_chapter_id=source_chapter.id,
+        priority=100,
+        is_hard_constraint=True,
+    )
+    requirement = ChapterStateRequirement(
+        id=new_id("state_req"),
+        organization_id=org_id,
+        project_id=project_id,
+        chapter_id=target_chapter.id,
+        state_item_id=state.id,
+        requirement_type="must_remember",
+        summary="下一章应承接林照夜成为外门杂役。",
+        priority=100,
+        origin_type="previous_chapter_carryover",
+        source_chapter_id=source_chapter.id,
+        target_chapter_id=target_chapter.id,
+    )
+    db_session.add_all([source_chapter, target_chapter, state, requirement])
+    await db_session.commit()
+
+    res = await client.get(
+        f"/api/v1/projects/{project_id}/chapters/{target_chapter.id}/state-requirements",
+        headers=headers,
+    )
+
+    assert res.status_code == 200, res.text
+    item = res.json()["items"][0]
+    assert item["origin_type"] == "previous_chapter_carryover"
+    assert item["source_chapter_id"] == source_chapter.id
+    assert item["source_chapter_index"] == 4
+    assert item["source_chapter_title"] == "戒律堂冷审"
+    assert item["target_chapter_id"] == target_chapter.id
+    assert item["state_item"]["id"] == state.id

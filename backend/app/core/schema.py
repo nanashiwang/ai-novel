@@ -579,6 +579,10 @@ _POSTGRES_SCHEMA_FIXES = [
       organization_id VARCHAR(64) NOT NULL,
       project_id VARCHAR(64) NOT NULL REFERENCES projects(id),
       chapter_id VARCHAR(64) NOT NULL REFERENCES chapters(id),
+      source_chapter_id VARCHAR(64) REFERENCES chapters(id),
+      source_scene_id VARCHAR(64) REFERENCES scenes(id),
+      target_chapter_id VARCHAR(64) REFERENCES chapters(id),
+      origin_type VARCHAR(32) NOT NULL DEFAULT 'current_chapter_extract',
       state_item_id VARCHAR(64) NOT NULL REFERENCES story_state_items(id),
       requirement_type VARCHAR(32) NOT NULL,
       summary TEXT NOT NULL DEFAULT '',
@@ -594,6 +598,36 @@ _POSTGRES_SCHEMA_FIXES = [
     (
         "CREATE INDEX IF NOT EXISTS ix_chapter_state_requirements_project_state_item "
         "ON chapter_state_requirements(project_id, state_item_id)"
+    ),
+    (
+        "ALTER TABLE chapter_state_requirements "
+        "ADD COLUMN IF NOT EXISTS source_chapter_id VARCHAR(64)"
+    ),
+    (
+        "ALTER TABLE chapter_state_requirements "
+        "ADD COLUMN IF NOT EXISTS source_scene_id VARCHAR(64)"
+    ),
+    (
+        "ALTER TABLE chapter_state_requirements "
+        "ADD COLUMN IF NOT EXISTS target_chapter_id VARCHAR(64)"
+    ),
+    (
+        "ALTER TABLE chapter_state_requirements "
+        "ADD COLUMN IF NOT EXISTS origin_type VARCHAR(32) "
+        "NOT NULL DEFAULT 'current_chapter_extract'"
+    ),
+    (
+        "UPDATE chapter_state_requirements "
+        "SET target_chapter_id = chapter_id "
+        "WHERE target_chapter_id IS NULL"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_chapter_state_requirements_project_origin "
+        "ON chapter_state_requirements(project_id, origin_type)"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_chapter_state_requirements_project_source_chapter "
+        "ON chapter_state_requirements(project_id, source_chapter_id)"
     ),
     # Sprint 18-B1：审稿问题关联关键状态项；旧数据卷需要运行时补列。
     "ALTER TABLE continuity_issues ADD COLUMN IF NOT EXISTS story_state_item_id VARCHAR(64)",
