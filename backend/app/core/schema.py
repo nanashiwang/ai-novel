@@ -104,6 +104,12 @@ _POSTGRES_SCHEMA_FIXES = [
     "ALTER TABLE scenes ADD COLUMN IF NOT EXISTS budget_reason TEXT NOT NULL DEFAULT ''",
     # Sprint 14-C6：Per-scene POV 锚定
     "ALTER TABLE scenes ADD COLUMN IF NOT EXISTS pov_character_name VARCHAR(120)",
+    # Sprint 17-D：旧数据卷不会自动执行 Alembic，运行时补齐角色登场约束字段。
+    "ALTER TABLE characters ADD COLUMN IF NOT EXISTS first_appearance_chapter INTEGER",
+    (
+        "CREATE INDEX IF NOT EXISTS ix_characters_first_appearance "
+        "ON characters(first_appearance_chapter)"
+    ),
     "ALTER TABLE export_files ADD COLUMN IF NOT EXISTS content TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE export_files ADD COLUMN IF NOT EXISTS file_size INTEGER NOT NULL DEFAULT 0",
     (

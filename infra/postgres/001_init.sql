@@ -198,10 +198,12 @@ CREATE TABLE IF NOT EXISTS characters (
   arc TEXT NOT NULL DEFAULT '',
   relationships JSONB NOT NULL DEFAULT '{}',
   current_state JSONB NOT NULL DEFAULT '{}',
+  first_appearance_chapter INTEGER,
   embedding vector(1536),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS ix_characters_first_appearance ON characters(first_appearance_chapter);
 
 CREATE TABLE IF NOT EXISTS world_items (
   id TEXT PRIMARY KEY,
