@@ -51,9 +51,15 @@ class BatchRunner:
         *,
         max_chapter_concurrency: int = 3,
         progress_save_every: int = 1,
+        max_item_attempts: int = 3,
+        item_retry_initial_delay_seconds: float = 1.0,
+        item_retry_backoff: float = 2.0,
     ) -> None:
         self.max_chapter_concurrency = max_chapter_concurrency
         self.progress_save_every = progress_save_every
+        self.max_item_attempts = max(1, max_item_attempts)
+        self.item_retry_initial_delay_seconds = max(0.0, item_retry_initial_delay_seconds)
+        self.item_retry_backoff = max(1.0, item_retry_backoff)
 
     async def run(
         self,
@@ -161,15 +167,26 @@ class BatchRunner:
                     item_status = "succeeded"
                     item_error: str | None = None
                     item_result: dict[str, Any] = {}
+                    item_attempts = 1
                     try:
-                        item_result = await handler(target, None)  # type: ignore[arg-type]
+                        item_result, item_attempts = await self._run_item_with_retries(
+                            batch_job_id=batch_job_id,
+                            batch_type=batch_type,
+                            channel=channel,
+                            target=target,
+                            handler=handler,
+                        )
                     except Exception as exc:  # noqa: BLE001
+                        item_attempts = int(
+                            getattr(exc, "_batch_attempts", item_attempts) or item_attempts
+                        )
                         _logger.warning(
                             "batch_item_failed",
                             exc_info=True,
                             extra={
                                 "batch_job_id": batch_job_id,
                                 "target_id": target.target_id,
+                                "attempts": item_attempts,
                             },
                         )
                         item_status = "failed"
@@ -188,6 +205,7 @@ class BatchRunner:
                                 "scene_index": target.scene_index,
                                 "status": item_status,
                                 "error": item_error,
+                                "attempts": item_attempts,
                                 "result": item_result,
                             }
                         )
@@ -206,6 +224,8 @@ class BatchRunner:
                                 "failed_items": failed_count,
                                 "total_items": total,
                                 "error": item_error,
+                                "attempts": item_attempts,
+                                "max_attempts": self.max_item_attempts,
                             },
                         ),
                     )
@@ -264,6 +284,66 @@ class BatchRunner:
             "failed_items": failed_count,
             "results": results,
         }
+
+    async def _run_item_with_retries(
+        self,
+        *,
+        batch_job_id: str,
+        batch_type: str,
+        channel: str,
+        target: BatchTarget,
+        handler: TargetHandler,
+    ) -> tuple[dict[str, Any], int]:
+        """执行单项，遇到临时失败自动重试，最终只结算一次成功/失败。"""
+        attempts = self.max_item_attempts
+        for attempt in range(1, attempts + 1):
+            try:
+                return await handler(target, None), attempt  # type: ignore[arg-type]
+            except Exception as exc:  # noqa: BLE001
+                if attempt >= attempts:
+                    exc._batch_attempts = attempt  # type: ignore[attr-defined]
+                    raise
+
+                error = str(exc) or exc.__class__.__name__
+                delay = self.item_retry_initial_delay_seconds * (
+                    self.item_retry_backoff ** (attempt - 1)
+                )
+                _logger.warning(
+                    "batch_item_retrying",
+                    exc_info=True,
+                    extra={
+                        "batch_job_id": batch_job_id,
+                        "target_id": target.target_id,
+                        "attempt": attempt,
+                        "next_attempt": attempt + 1,
+                        "max_attempts": attempts,
+                        "retry_delay_seconds": delay,
+                    },
+                )
+                publish_event_fire_and_forget(
+                    channel,
+                    build_event(
+                        "batch_job.item_retrying",
+                        {
+                            "batch_job_id": batch_job_id,
+                            "batch_type": batch_type,
+                            "target_id": target.target_id,
+                            "chapter_id": target.chapter_id,
+                            "chapter_index": target.chapter_index,
+                            "scene_index": target.scene_index,
+                            "attempt": attempt,
+                            "next_attempt": attempt + 1,
+                            "max_attempts": attempts,
+                            "retry_delay_seconds": delay,
+                            "error": error,
+                        },
+                    ),
+                )
+                if delay > 0:
+                    await asyncio.sleep(delay)
+
+        # 理论不会到这里；保底让类型检查和异常语义都清晰。
+        raise RuntimeError("batch_item_retry_exhausted")
 
     @staticmethod
     def _compute_progress(

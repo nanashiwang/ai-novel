@@ -117,7 +117,12 @@ async def test_same_chapter_serial_order(batch_job_row: GenerationJob) -> None:
 
 async def test_single_item_failure_does_not_block_others(batch_job_row: GenerationJob) -> None:
     """处理器抛错的目标被记入 failed_items，其余仍正常完成。"""
-    runner = BatchRunner(max_chapter_concurrency=3, progress_save_every=10)
+    runner = BatchRunner(
+        max_chapter_concurrency=3,
+        progress_save_every=10,
+        max_item_attempts=2,
+        item_retry_initial_delay_seconds=0,
+    )
     targets = [
         BatchTarget(target_id="ok1", chapter_id="cA", chapter_index=1, scene_index=1),
         BatchTarget(target_id="bad", chapter_id="cA", chapter_index=1, scene_index=2),
@@ -144,8 +149,45 @@ async def test_single_item_failure_does_not_block_others(batch_job_row: Generati
     by_target = {r["target_id"]: r for r in result["results"]}
     assert by_target["bad"]["status"] == "failed"
     assert by_target["bad"]["error"] == "boom"
+    assert by_target["bad"]["attempts"] == 2
     assert by_target["ok1"]["status"] == "succeeded"
     assert by_target["ok2"]["status"] == "succeeded"
+
+
+async def test_transient_item_failure_retries_and_succeeds(
+    batch_job_row: GenerationJob,
+) -> None:
+    """单项临时失败时自动重试，重试成功后不计入 failed_items。"""
+    runner = BatchRunner(
+        max_chapter_concurrency=1,
+        progress_save_every=1,
+        max_item_attempts=3,
+        item_retry_initial_delay_seconds=0,
+    )
+    attempts: dict[str, int] = {}
+    targets = [BatchTarget(target_id="flaky", chapter_id="c1", chapter_index=1, scene_index=1)]
+
+    async def handler(target: BatchTarget, _job: GenerationJob) -> dict:
+        attempts[target.target_id] = attempts.get(target.target_id, 0) + 1
+        if attempts[target.target_id] == 1:
+            raise RuntimeError("temporary")
+        return {"ok": True}
+
+    result = await runner.run(
+        batch_job_id=batch_job_row.id,
+        organization_id=batch_job_row.organization_id,
+        project_id=batch_job_row.project_id,
+        batch_type="scene_write",
+        targets=targets,
+        handler=handler,  # type: ignore[arg-type]
+    )
+
+    assert result["completed_items"] == 1
+    assert result["failed_items"] == 0
+    item = result["results"][0]
+    assert item["status"] == "succeeded"
+    assert item["attempts"] == 2
+    assert item["result"] == {"ok": True}
 
 
 async def test_progress_persisted_to_output_payload(
