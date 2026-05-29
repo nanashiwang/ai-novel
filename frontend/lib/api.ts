@@ -381,6 +381,7 @@ export type ChapterStateRequirement = {
   requirement_type: ChapterStateRequirementType;
   summary: string;
   priority: number;
+  state_item?: StoryStateItem | null;
 };
 
 export type StoryStatePatch = {
@@ -411,6 +412,7 @@ export type ContinuityIssue = {
   project_id: string;
   chapter_id: string | null;
   scene_id: string | null;
+  story_state_item_id?: string | null;
   issue_type: string;
   severity: string;
   description: string;

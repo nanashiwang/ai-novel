@@ -9,7 +9,7 @@ import {
   Trash2,
   Wand2,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Badge, StatusBadge } from "@/components/ui/badge";
@@ -23,15 +23,68 @@ import { PreflightCard } from "@/components/screens/project/shared/preflight-car
 import { severityClass, severityTone } from "@/components/screens/project/shared/severity";
 import { labelForVersion } from "@/components/screens/project/shared/version-label";
 import { BatchJobProgressDialog } from "@/components/batch/BatchJobProgressDialog";
-import { batchApi, chaptersApi, projectsApi, scenesApi } from "@/lib/api";
+import {
+  batchApi,
+  chaptersApi,
+  projectsApi,
+  scenesApi,
+  storyStatesApi,
+  type Scene,
+  type StoryStateItem,
+} from "@/lib/api";
 import { ApiError } from "@/lib/http";
 import { useScopedKey } from "@/lib/use-scoped-key";
 
 import { ContextInspector, type ContextSummaryEntry } from "./context-inspector";
+import { StoryStateDetailDialog } from "../outline/story-state-detail-dialog";
 import { SceneEditorCard } from "./scene-editor-card";
 import { useAuditRewrite } from "./use-audit-rewrite";
 import { useSceneJobs } from "./use-scene-jobs";
 import { useSceneVersions } from "./use-scene-versions";
+
+function formatNumber(value: number) {
+  return new Intl.NumberFormat("zh-CN").format(value);
+}
+
+function formatBeatRange(scene: Scene) {
+  const start = scene.beat_start;
+  const end = scene.beat_end;
+  if (!start && !end) return "";
+  if (start && end && start !== end) return `beat ${start}-${end}`;
+  return `beat ${start || end}`;
+}
+
+function SceneBudgetHint({ scene }: { scene: Scene }) {
+  const targetWords = scene.target_words || 0;
+  const beatRange = formatBeatRange(scene);
+  const reason =
+    scene.budget_reason?.trim() || "按章节目标字数、剧情拍点与节奏自动预算";
+  const summary = scene.beat_group_summary?.trim();
+
+  if (!targetWords && !beatRange && !summary && !reason) {
+    return null;
+  }
+
+  return (
+    <div className="border-b border-slate-100 px-5 py-3">
+      <div className="rounded-2xl border border-amber-100 bg-gradient-to-r from-amber-50 via-orange-50/70 to-white px-3 py-2">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="font-bold text-amber-950">场景预算</span>
+          {targetWords ? (
+            <Badge tone="amber">目标 {formatNumber(targetWords)} 字</Badge>
+          ) : null}
+          {beatRange ? <Badge tone="orange">覆盖 {beatRange}</Badge> : null}
+          <span className="text-slate-600">{reason}</span>
+        </div>
+        {summary ? (
+          <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">
+            拍点摘要：{summary}
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
 
 export function WritingWorkspacePage({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
@@ -39,6 +92,7 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
   const notifiedWriteJobIds = useRef<Set<string>>(new Set());
   const chaptersKey = useScopedKey("project", projectId, "chapters");
   const preflightKey = useScopedKey("project", projectId, "preflight", "write_scene");
+  const storyStatesKey = useScopedKey("project", projectId, "story-states", "issue-links");
 
   const { data: chapters = [] } = useQuery({
     queryKey: chaptersKey,
@@ -48,6 +102,19 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
     queryKey: preflightKey,
     queryFn: () => projectsApi.preflight(projectId, "write_scene"),
   });
+  const { data: storyStatesResponse } = useQuery({
+    queryKey: storyStatesKey,
+    queryFn: () => storyStatesApi.list(projectId, { limit: 200 }),
+  });
+  const storyStateById = useMemo(() => {
+    const entries = (storyStatesResponse?.items ?? []).map((item) => [
+      item.id,
+      item,
+    ] as const);
+    return Object.fromEntries(entries) as Record<string, StoryStateItem>;
+  }, [storyStatesResponse?.items]);
+  const [selectedStoryState, setSelectedStoryState] =
+    useState<StoryStateItem | null>(null);
 
   const [activeChapterId, setActiveChapterId] = useState<string | null>(null);
   const activeChapter =
@@ -350,6 +417,7 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
               ) : null}
             </div>
           </CardHeader>
+          {activeScene ? <SceneBudgetHint scene={activeScene} /> : null}
           <CardContent>
             {!activeScene ? (
               <p className="py-12 text-center text-sm text-slate-500">
@@ -528,34 +596,52 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
                   </p>
                 ) : (
                   <ul className="space-y-2">
-                    {sceneIssues.map((issue) => (
-                      <li
-                        key={issue.id}
-                        className={`rounded-xl border p-3 text-xs ${
-                          issue.status === "fixed"
-                            ? "border-emerald-200 bg-emerald-50/40"
-                            : severityClass(issue.severity)
-                        }`}
-                      >
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Badge tone={severityTone(issue.severity)}>
-                            {issue.severity}
-                          </Badge>
-                          <Badge tone="slate">{issue.issue_type}</Badge>
-                          <Badge tone={issue.status === "fixed" ? "green" : "amber"}>
-                            {issue.status}
-                          </Badge>
-                        </div>
-                        <p className="mt-2 font-semibold text-slate-950">
-                          {issue.description}
-                        </p>
-                        {issue.suggested_fix ? (
-                          <p className="mt-1 text-slate-600">
-                            建议：{issue.suggested_fix}
+                    {sceneIssues.map((issue) => {
+                      const linkedState = issue.story_state_item_id
+                        ? storyStateById[issue.story_state_item_id]
+                        : null;
+                      return (
+                        <li
+                          key={issue.id}
+                          className={`rounded-xl border p-3 text-xs ${
+                            issue.status === "fixed"
+                              ? "border-emerald-200 bg-emerald-50/40"
+                              : severityClass(issue.severity)
+                          }`}
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge tone={severityTone(issue.severity)}>
+                              {issue.severity}
+                            </Badge>
+                            <Badge tone="slate">{issue.issue_type}</Badge>
+                            <Badge tone={issue.status === "fixed" ? "green" : "amber"}>
+                              {issue.status}
+                            </Badge>
+                            {linkedState ? (
+                              <button
+                                type="button"
+                                onClick={() => setSelectedStoryState(linkedState)}
+                                className="inline-flex items-center rounded-lg bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700 ring-1 ring-blue-200 transition hover:bg-blue-100"
+                              >
+                                关联关键设定：{linkedState.name}
+                              </button>
+                            ) : issue.story_state_item_id ? (
+                              <Badge tone="slate">
+                                关联关键设定：{issue.story_state_item_id}
+                              </Badge>
+                            ) : null}
+                          </div>
+                          <p className="mt-2 font-semibold text-slate-950">
+                            {issue.description}
                           </p>
-                        ) : null}
-                      </li>
-                    ))}
+                          {issue.suggested_fix ? (
+                            <p className="mt-1 text-slate-600">
+                              建议：{issue.suggested_fix}
+                            </p>
+                          ) : null}
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </div>
@@ -679,6 +765,16 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
             queryClient.invalidateQueries({ queryKey: preflightKey });
           }}
           onClose={() => setBatchWriteJobId(null)}
+        />
+      ) : null}
+      {selectedStoryState ? (
+        <StoryStateDetailDialog
+          projectId={projectId}
+          state={selectedStoryState}
+          onClose={() => setSelectedStoryState(null)}
+          onSaved={() => {
+            queryClient.invalidateQueries({ queryKey: storyStatesKey });
+          }}
         />
       ) : null}
     </div>
