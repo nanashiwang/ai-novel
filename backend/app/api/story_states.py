@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Query
+from sqlalchemy import select
 
 from app.api.deps import CurrentUserDep, DbDep, TenantDep
 from app.core.exceptions import NotFoundError
@@ -191,4 +192,27 @@ async def list_chapter_state_requirements(
         project_id=project_id,
         chapter_id=chapter_id,
     )
-    return ChapterStateRequirementListResponse(items=list(items))
+    state_ids = {item.state_item_id for item in items}
+    state_by_id: dict[str, StoryStateItem] = {}
+    if state_ids:
+        result = await db.execute(
+            select(StoryStateItem).where(
+                StoryStateItem.organization_id == tenant.organization_id,
+                StoryStateItem.project_id == project_id,
+                StoryStateItem.id.in_(state_ids),
+            )
+        )
+        state_by_id = {state.id: state for state in result.scalars().all()}
+    return ChapterStateRequirementListResponse(
+        items=[
+            {
+                "id": item.id,
+                "state_item_id": item.state_item_id,
+                "requirement_type": item.requirement_type,
+                "summary": item.summary,
+                "priority": item.priority,
+                "state_item": state_by_id.get(item.state_item_id),
+            }
+            for item in items
+        ],
+    )

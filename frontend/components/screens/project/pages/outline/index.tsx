@@ -78,6 +78,15 @@ const STORY_STATE_ENTITY_LABEL: Record<string, string> = {
   world_rule: "世界规则",
 };
 
+const STORY_STATE_STATUS_LABEL: Record<string, string> = {
+  active: "活跃",
+  hidden: "隐藏",
+  damaged: "已损坏",
+  resolved: "已解决",
+  consumed: "已消耗",
+  inactive: "非活跃",
+};
+
 const REQUIREMENT_TYPE_LABEL: Record<string, string> = {
   must_remember: "必须承接",
   must_not_conflict: "禁止冲突",
@@ -97,6 +106,13 @@ function getStoryStateTone(state: StoryStateItem): BadgeTone {
   if (state.state_type === "foreshadow") return "violet";
   if (state.state_type === "skill") return "green";
   if (state.state_type === "grudge") return "amber";
+  return "slate";
+}
+
+function getStoryStateStatusTone(status: string): BadgeTone {
+  if (status === "active") return "green";
+  if (status === "damaged" || status === "consumed") return "amber";
+  if (status === "resolved") return "blue";
   return "slate";
 }
 
@@ -156,9 +172,14 @@ function ChapterRequirementPanel({
                     {state?.is_hard_constraint ? (
                       <Badge tone="rose">硬约束</Badge>
                     ) : null}
+                    {state && state.status !== "active" ? (
+                      <Badge tone={getStoryStateStatusTone(state.status)}>
+                        {STORY_STATE_STATUS_LABEL[state.status] ?? state.status}
+                      </Badge>
+                    ) : null}
                   </div>
                   <p className="mt-2 truncate text-sm font-bold text-slate-950">
-                    {state?.name ?? "未匹配到关键设定"}
+                    {state?.name ?? "关联关键设定不可用"}
                   </p>
                 </div>
                 <span className="shrink-0 text-[11px] font-semibold text-slate-400">
@@ -669,7 +690,10 @@ export function OutlinePage({ projectId }: { projectId: string }) {
       chapterRequirements
         .map((requirement) => ({
           requirement,
-          state: storyStateById.get(requirement.state_item_id) ?? null,
+          state:
+            requirement.state_item ??
+            storyStateById.get(requirement.state_item_id) ??
+            null,
         }))
         .sort((a, b) => b.requirement.priority - a.requirement.priority),
     [chapterRequirements, storyStateById],

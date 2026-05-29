@@ -45,6 +45,22 @@ const statusOptions: StoryStateStatus[] = [
   "inactive",
 ];
 
+const statusLabel: Record<string, string> = {
+  active: "活跃",
+  hidden: "隐藏",
+  damaged: "已损坏",
+  resolved: "已解决",
+  consumed: "已消耗",
+  inactive: "非活跃",
+};
+
+function statusTone(status: string) {
+  if (status === "active") return "green" as const;
+  if (status === "damaged" || status === "consumed") return "amber" as const;
+  if (status === "resolved") return "blue" as const;
+  return "slate" as const;
+}
+
 type DetailTab = "detail" | "history" | "edit";
 
 type StoryStateDetailDialogProps = {
@@ -204,7 +220,9 @@ export function StoryStateDetailDialog({
         <div className="flex flex-wrap items-center gap-2">
           <Badge tone="blue">{stateTypeLabel[detail.state_type] ?? detail.state_type}</Badge>
           <Badge tone="slate">{entityTypeLabel[detail.entity_type] ?? detail.entity_type}</Badge>
-          <Badge tone={detail.status === "active" ? "green" : "amber"}>{detail.status}</Badge>
+          <Badge tone={statusTone(detail.status)}>
+            {statusLabel[detail.status] ?? detail.status}
+          </Badge>
           {detail.is_hard_constraint ? <Badge tone="rose">硬约束</Badge> : null}
           <Badge tone="slate">P{detail.priority}</Badge>
         </div>
@@ -491,9 +509,14 @@ export function ChapterRequirementListDialog({
                           requirement.requirement_type}
                       </Badge>
                       {state?.is_hard_constraint ? <Badge tone="rose">硬约束</Badge> : null}
+                      {state && state.status !== "active" ? (
+                        <Badge tone={statusTone(state.status)}>
+                          {statusLabel[state.status] ?? state.status}
+                        </Badge>
+                      ) : null}
                     </div>
                     <p className="mt-2 truncate text-sm font-bold text-slate-950">
-                      {state?.name ?? "未匹配到关键设定"}
+                      {state?.name ?? "关联关键设定不可用"}
                     </p>
                     <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">
                       {requirement.summary || state?.summary || "—"}

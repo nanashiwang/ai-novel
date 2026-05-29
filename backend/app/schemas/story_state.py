@@ -76,6 +76,7 @@ class ChapterStateRequirementResponse(APIModel):
     requirement_type: RequirementType
     summary: str = ""
     priority: int
+    state_item: StoryStateItemResponse | None = None
 
 
 class ChapterStateRequirementListResponse(APIModel):
