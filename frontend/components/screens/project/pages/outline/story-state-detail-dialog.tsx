@@ -97,6 +97,47 @@ function requirementTone(type: string) {
   return "blue" as const;
 }
 
+function requirementOriginTone(requirement: ChapterStateRequirement) {
+  if (requirement.origin_type === "previous_chapter_carryover") return "green" as const;
+  if (requirement.origin_type === "current_chapter_extract") return "blue" as const;
+  if (requirement.origin_type === "manual") return "orange" as const;
+  if (requirement.origin_type === "backfill") return "violet" as const;
+  return "slate" as const;
+}
+
+function requirementOriginLabel(requirement: ChapterStateRequirement): string {
+  if (requirement.origin_type === "previous_chapter_carryover") {
+    return requirement.source_chapter_index != null
+      ? `来自第 ${requirement.source_chapter_index} 章`
+      : "来自前文";
+  }
+  if (requirement.origin_type === "current_chapter_extract") return "本章提取";
+  if (requirement.origin_type === "manual") return "人工添加";
+  if (requirement.origin_type === "backfill") return "历史补全";
+  return "来源未知";
+}
+
+function requirementOriginDetail(requirement: ChapterStateRequirement): string {
+  if (
+    requirement.origin_type === "previous_chapter_carryover" &&
+    requirement.source_chapter_index != null &&
+    requirement.source_chapter_title
+  ) {
+    return `来源：第 ${requirement.source_chapter_index} 章《${requirement.source_chapter_title}》`;
+  }
+  if (
+    requirement.origin_type === "previous_chapter_carryover" &&
+    requirement.source_chapter_index != null
+  ) {
+    return `来源：第 ${requirement.source_chapter_index} 章`;
+  }
+  if (requirement.origin_type === "previous_chapter_carryover") return "来源：前文章节";
+  if (requirement.origin_type === "current_chapter_extract") return "来源：本章正文提取";
+  if (requirement.origin_type === "manual") return "来源：人工添加";
+  if (requirement.origin_type === "backfill") return "来源：历史数据补全";
+  return "来源：未知";
+}
+
 function formatJson(value: unknown) {
   if (!value || (typeof value === "object" && Object.keys(value).length === 0)) {
     return "{}";
@@ -508,6 +549,9 @@ export function ChapterRequirementListDialog({
                         {requirementTypeLabel[requirement.requirement_type] ??
                           requirement.requirement_type}
                       </Badge>
+                      <Badge tone={requirementOriginTone(requirement)}>
+                        {requirementOriginLabel(requirement)}
+                      </Badge>
                       {state?.is_hard_constraint ? <Badge tone="rose">硬约束</Badge> : null}
                       {state && state.status !== "active" ? (
                         <Badge tone={statusTone(state.status)}>
@@ -521,13 +565,16 @@ export function ChapterRequirementListDialog({
                     <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">
                       {requirement.summary || state?.summary || "—"}
                     </p>
-                    <p className="mt-1 truncate text-[11px] text-slate-400">
-                      {state
-                        ? `${entityTypeLabel[state.entity_type] ?? state.entity_type} · ${
-                            stateTypeLabel[state.state_type] ?? state.state_type
-                          }`
-                        : `关联 ID：${requirement.state_item_id}`}
-                    </p>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-400">
+                      <span className="min-w-0 truncate">
+                        {state
+                          ? `${entityTypeLabel[state.entity_type] ?? state.entity_type} · ${
+                              stateTypeLabel[state.state_type] ?? state.state_type
+                            }`
+                          : `关联 ID：${requirement.state_item_id}`}
+                      </span>
+                      <span className="min-w-0 truncate">{requirementOriginDetail(requirement)}</span>
+                    </div>
                   </div>
                   <span className="shrink-0 text-[11px] font-semibold text-slate-400">
                     P{requirement.priority}

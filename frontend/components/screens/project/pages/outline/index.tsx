@@ -101,6 +101,26 @@ function getRequirementTone(type: string): BadgeTone {
   return "blue";
 }
 
+function getRequirementOriginTone(requirement: ChapterStateRequirement): BadgeTone {
+  if (requirement.origin_type === "previous_chapter_carryover") return "green";
+  if (requirement.origin_type === "current_chapter_extract") return "blue";
+  if (requirement.origin_type === "manual") return "orange";
+  if (requirement.origin_type === "backfill") return "violet";
+  return "slate";
+}
+
+function formatRequirementOriginLabel(requirement: ChapterStateRequirement): string {
+  if (requirement.origin_type === "previous_chapter_carryover") {
+    return requirement.source_chapter_index != null
+      ? `来自第 ${requirement.source_chapter_index} 章`
+      : "来自前文";
+  }
+  if (requirement.origin_type === "current_chapter_extract") return "本章提取";
+  if (requirement.origin_type === "manual") return "人工添加";
+  if (requirement.origin_type === "backfill") return "历史补全";
+  return "来源未知";
+}
+
 function getStoryStateTone(state: StoryStateItem): BadgeTone {
   if (state.is_hard_constraint) return "rose";
   if (state.state_type === "foreshadow") return "violet";
@@ -168,6 +188,9 @@ function ChapterRequirementPanel({
                     <Badge tone={getRequirementTone(requirement.requirement_type)}>
                       {REQUIREMENT_TYPE_LABEL[requirement.requirement_type] ??
                         requirement.requirement_type}
+                    </Badge>
+                    <Badge tone={getRequirementOriginTone(requirement)}>
+                      {formatRequirementOriginLabel(requirement)}
                     </Badge>
                     {state?.is_hard_constraint ? (
                       <Badge tone="rose">硬约束</Badge>
