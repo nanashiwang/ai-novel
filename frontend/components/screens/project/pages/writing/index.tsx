@@ -37,6 +37,7 @@ import { useScopedKey } from "@/lib/use-scoped-key";
 
 import { ContextInspector, type ContextSummaryEntry } from "./context-inspector";
 import { StoryStateDetailDialog } from "../outline/story-state-detail-dialog";
+import { AntiForgettingPreviewCard } from "./anti-forgetting-preview-card";
 import { SceneEditorCard } from "./scene-editor-card";
 import { useAuditRewrite } from "./use-audit-rewrite";
 import { useSceneJobs } from "./use-scene-jobs";
@@ -134,6 +135,21 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
 
   const [activeSceneId, setActiveSceneId] = useState<string | null>(null);
   const activeScene = scenes.find((s) => s.id === activeSceneId) ?? scenes[0];
+  const antiForgettingPreviewKey = useScopedKey(
+    "project",
+    projectId,
+    "scene",
+    activeScene?.id,
+    "anti-forgetting-preview",
+  );
+  const {
+    data: antiForgettingPreview,
+    isPending: isAntiForgettingPreviewPending,
+  } = useQuery({
+    queryKey: antiForgettingPreviewKey,
+    queryFn: () => scenesApi.antiForgettingPreview(projectId, activeScene!.id),
+    enabled: !!activeScene,
+  });
 
   // === 三个组合 hook ===
   const {
@@ -198,6 +214,7 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
       queryClient.invalidateQueries({ queryKey: scenesKey });
       queryClient.invalidateQueries({ queryKey: versionsKey });
       queryClient.invalidateQueries({ queryKey: preflightKey });
+      queryClient.invalidateQueries({ queryKey: antiForgettingPreviewKey });
       setDisplayedVersionId(null);
     },
     onError: (e: unknown) => {
@@ -253,6 +270,7 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
       queryClient.invalidateQueries({ queryKey: versionsKey });
       queryClient.invalidateQueries({ queryKey: scenesKey });
       queryClient.invalidateQueries({ queryKey: preflightKey });
+      queryClient.invalidateQueries({ queryKey: antiForgettingPreviewKey });
       setDisplayedVersionId(null);
       toast.success("场景生成完成");
     } else if (latestSceneJob.status === "failed") {
@@ -266,6 +284,7 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
     latestSceneJob,
     preflightKey,
     queryClient,
+    antiForgettingPreviewKey,
     scenesKey,
     setDisplayedVersionId,
     versionsKey,
@@ -418,6 +437,13 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
             </div>
           </CardHeader>
           {activeScene ? <SceneBudgetHint scene={activeScene} /> : null}
+          {activeScene ? (
+            <AntiForgettingPreviewCard
+              preview={antiForgettingPreview}
+              isPending={isAntiForgettingPreviewPending}
+              onSelectState={setSelectedStoryState}
+            />
+          ) : null}
           <CardContent>
             {!activeScene ? (
               <p className="py-12 text-center text-sm text-slate-500">
@@ -774,6 +800,7 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
           onClose={() => setSelectedStoryState(null)}
           onSaved={() => {
             queryClient.invalidateQueries({ queryKey: storyStatesKey });
+            queryClient.invalidateQueries({ queryKey: antiForgettingPreviewKey });
           }}
         />
       ) : null}

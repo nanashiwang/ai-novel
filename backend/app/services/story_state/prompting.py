@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chapter import Chapter
+from app.models.chapter_state_requirement import ChapterStateRequirement
 from app.models.scene import Scene
 from app.models.story_state_item import StoryStateItem
 from app.repositories import (
@@ -15,6 +17,14 @@ from app.repositories import (
 from app.services.context_builder.service import context_builder
 
 AntiForgettingPurpose = Literal["writing", "audit"]
+
+
+@dataclass(frozen=True)
+class AntiForgettingPreview:
+    prompt_block: str
+    meta: dict[str, Any]
+    story_states: list[StoryStateItem]
+    requirements: list[ChapterStateRequirement]
 
 
 async def build_anti_forgetting_prompt_block(
@@ -34,9 +44,36 @@ async def build_anti_forgetting_prompt_block(
     repeats the highest-risk state facts as an explicit checklist so write,
     rewrite, and audit stages apply the same state budget and ids.
     """
+    preview = await build_anti_forgetting_preview(
+        session,
+        organization_id=organization_id,
+        project_id=project_id,
+        chapter=chapter,
+        scene=scene,
+        purpose=purpose,
+        state_limit=state_limit,
+        requirement_limit=requirement_limit,
+    )
+    return preview.prompt_block, preview.meta
+
+
+async def build_anti_forgetting_preview(
+    session: AsyncSession,
+    *,
+    organization_id: str,
+    project_id: str,
+    chapter: Chapter,
+    scene: Scene,
+    purpose: AntiForgettingPurpose,
+    state_limit: int = 18,
+    requirement_limit: int = 10,
+) -> AntiForgettingPreview:
+    """Return the exact anti-forgetting block plus structured rows for UI preview."""
     meta: dict[str, Any] = {
         "anti_forgetting_state_count": 0,
         "anti_forgetting_requirement_count": 0,
+        "anti_forgetting_state_limit": state_limit,
+        "anti_forgetting_requirement_limit": requirement_limit,
     }
     try:
         state_repo = StoryStateRepository(session)
@@ -55,11 +92,35 @@ async def build_anti_forgetting_prompt_block(
                 chapter_id=chapter.id,
             )
         )[:requirement_limit]
+        required_state_ids = {req.state_item_id for req in requirement_rows if req.state_item_id}
+        loaded_state_ids = {item.id for item in state_rows}
+        missing_state_ids = required_state_ids - loaded_state_ids
+        if missing_state_ids:
+            missing_rows = (
+                await session.execute(
+                    select(StoryStateItem).where(
+                        StoryStateItem.organization_id == organization_id,
+                        StoryStateItem.project_id == project_id,
+                        StoryStateItem.id.in_(missing_state_ids),
+                    )
+                )
+            ).scalars().all()
+            state_rows.extend(missing_rows)
     except Exception:  # noqa: BLE001 - Anti-forgetting must not block main flow.
-        return "", meta
+        return AntiForgettingPreview(
+            prompt_block="",
+            meta=meta,
+            story_states=[],
+            requirements=[],
+        )
 
     if not state_rows and not requirement_rows:
-        return "", meta
+        return AntiForgettingPreview(
+            prompt_block="",
+            meta=meta,
+            story_states=[],
+            requirements=[],
+        )
 
     chapter_index_by_id = await _chapter_index_by_id(session, state_rows)
     focus_names = {name.strip() for name in (scene.characters or []) if name and name.strip()}
@@ -93,10 +154,7 @@ async def build_anti_forgetting_prompt_block(
     if requirement_rows:
         lines.append(requirement_title)
         for req in requirement_rows:
-            lines.append(
-                f"· requirement_id={req.id}；story_state_item_id={req.state_item_id}；"
-                f"[{req.requirement_type}] P{int(req.priority or 0)}：{req.summary}"
-            )
+            lines.append(_format_requirement_item(req))
 
     if ranked:
         lines.append(state_title)
@@ -105,7 +163,12 @@ async def build_anti_forgetting_prompt_block(
 
     meta["anti_forgetting_state_count"] = len(ranked)
     meta["anti_forgetting_requirement_count"] = len(requirement_rows)
-    return "\n".join(lines), meta
+    return AntiForgettingPreview(
+        prompt_block="\n".join(lines),
+        meta=meta,
+        story_states=ranked,
+        requirements=requirement_rows,
+    )
 
 
 async def load_story_state_items_by_id(
@@ -196,3 +259,10 @@ def _format_state_item(
     )
     source = f"；来源章=第{source_index}章" if source_index else ""
     return f"· story_state_item_id={item.id}；{format_story_state_brief(item)}{source}"
+
+
+def _format_requirement_item(req: ChapterStateRequirement) -> str:
+    return (
+        f"· requirement_id={req.id}；story_state_item_id={req.state_item_id}；"
+        f"[{req.requirement_type}] P{int(req.priority or 0)}：{req.summary}"
+    )

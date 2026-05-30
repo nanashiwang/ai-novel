@@ -95,6 +95,17 @@ class ChapterStateRequirementListResponse(APIModel):
     items: list[ChapterStateRequirementResponse] = Field(default_factory=list)
 
 
+class AntiForgettingPreviewResponse(APIModel):
+    project_id: str
+    chapter_id: str
+    scene_id: str
+    purpose: Literal["writing", "audit"] = "writing"
+    prompt_block: str = ""
+    meta: dict[str, Any] = Field(default_factory=dict)
+    requirements: list[ChapterStateRequirementResponse] = Field(default_factory=list)
+    story_states: list[StoryStateItemResponse] = Field(default_factory=list)
+
+
 class ChapterStateRequirementCreateRequest(APIModel):
     state_item_id: str
     requirement_type: RequirementType = "must_remember"

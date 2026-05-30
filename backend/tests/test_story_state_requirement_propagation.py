@@ -7,6 +7,7 @@ from app.models import (
     Chapter,
     ChapterStateRequirement,
     Project,
+    Scene,
     StoryStateItem,
 )
 from app.models.common import new_id
@@ -298,6 +299,106 @@ async def test_state_requirements_api_returns_source_metadata(client, db_session
     assert item["source_chapter_title"] == "戒律堂冷审"
     assert item["target_chapter_id"] == target_chapter.id
     assert item["state_item"]["id"] == state.id
+
+
+@pytest.mark.asyncio
+async def test_scene_anti_forgetting_preview_returns_injected_rows(client, db_session):
+    token, org_id = await _register(client, "state-req-preview@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    project_res = await client.post(
+        "/api/v1/projects",
+        headers=headers,
+        json={"title": "写作前注入预览测试", "target_word_count": 100_000},
+    )
+    assert project_res.status_code == 201, project_res.text
+    project_id = project_res.json()["id"]
+
+    chapter = Chapter(
+        id=new_id("chapter"),
+        organization_id=org_id,
+        project_id=project_id,
+        volume_id=None,
+        chapter_index=8,
+        title="夜闯丹房",
+        summary="",
+        goal="",
+        conflict="",
+        ending_hook="",
+        status="planned",
+    )
+    scene = Scene(
+        id=new_id("scene"),
+        organization_id=org_id,
+        project_id=project_id,
+        chapter_id=chapter.id,
+        scene_index=1,
+        title="灰线照见毒丹",
+        time_marker="深夜",
+        location="丹房",
+        characters=["林照夜"],
+        scene_purpose="承接左眼代价并发现毒丹。",
+        entry_state="潜入丹房",
+        exit_state="发现毒丹",
+        goal="找到外门陷害证据",
+        conflict="丹房禁制压制灵识",
+        must_include=[],
+        must_avoid=[],
+        emotion_start="警惕",
+        emotion_end="震惊",
+        reveal="毒丹证据",
+        hook="左眼再次刺痛",
+        status="planned",
+    )
+    state = StoryStateItem(
+        id=new_id("state"),
+        organization_id=org_id,
+        project_id=project_id,
+        entity_type="character",
+        entity_id="lin_zhaoye",
+        state_type="skill",
+        name="林照夜",
+        status="active",
+        summary="林照夜能短暂看见因果灰线，代价是左眼刺痛。",
+        value_json={},
+        source_chapter_id=chapter.id,
+        source_scene_id=scene.id,
+        source_excerpt="左眼刺痛，灰线浮现。",
+        updated_in_chapter_id=chapter.id,
+        priority=95,
+        is_hard_constraint=True,
+    )
+    requirement = ChapterStateRequirement(
+        id=new_id("state_req"),
+        organization_id=org_id,
+        project_id=project_id,
+        chapter_id=chapter.id,
+        target_chapter_id=chapter.id,
+        state_item_id=state.id,
+        requirement_type="must_remember",
+        summary="本章必须承接灰线能力的左眼代价。",
+        priority=98,
+        origin_type="manual",
+    )
+    db_session.add_all([chapter, scene, state, requirement])
+    await db_session.commit()
+
+    res = await client.get(
+        f"/api/v1/projects/{project_id}/scenes/{scene.id}/anti-forgetting-preview",
+        headers=headers,
+    )
+
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["scene_id"] == scene.id
+    assert data["chapter_id"] == chapter.id
+    assert data["meta"]["anti_forgetting_state_count"] >= 1
+    assert data["meta"]["anti_forgetting_requirement_count"] == 1
+    assert data["requirements"][0]["id"] == requirement.id
+    assert data["requirements"][0]["origin_type"] == "manual"
+    assert data["requirements"][0]["state_item"]["id"] == state.id
+    assert data["story_states"][0]["id"] == state.id
+    assert f"requirement_id={requirement.id}" in data["prompt_block"]
+    assert f"story_state_item_id={state.id}" in data["prompt_block"]
 
 
 @pytest.mark.asyncio

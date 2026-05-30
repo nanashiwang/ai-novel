@@ -429,6 +429,23 @@ export type ChapterStateRequirementListResponse = {
   items: ChapterStateRequirement[];
 };
 
+export type AntiForgettingPreviewResponse = {
+  project_id: string;
+  chapter_id: string;
+  scene_id: string;
+  purpose: "writing" | "audit";
+  prompt_block: string;
+  meta: {
+    anti_forgetting_state_count?: number;
+    anti_forgetting_requirement_count?: number;
+    anti_forgetting_state_limit?: number;
+    anti_forgetting_requirement_limit?: number;
+    [key: string]: unknown;
+  };
+  requirements: ChapterStateRequirement[];
+  story_states: StoryStateItem[];
+};
+
 // 与 backend/app/models/continuity_issue.py 对齐
 export type ContinuityIssue = {
   id: string;
@@ -971,6 +988,10 @@ export const chaptersApi = {
 export const scenesApi = {
   list: (projectId: string, chapterId?: string) =>
     http.get<Scene[]>(`/projects/${projectId}/scenes`, { chapter_id: chapterId }),
+  antiForgettingPreview: (projectId: string, sceneId: string) =>
+    http.get<AntiForgettingPreviewResponse>(
+      `/projects/${projectId}/scenes/${sceneId}/anti-forgetting-preview`,
+    ),
 };
 
 export const specApi = {
