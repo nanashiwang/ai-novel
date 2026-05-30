@@ -402,7 +402,7 @@ def _is_next_chapter_requirement(summary: str) -> bool:
 
 def _is_preserved_requirement(row: ChapterStateRequirement) -> bool:
     origin_type = (row.origin_type or "").strip()
-    if origin_type == "previous_chapter_carryover":
+    if origin_type in {"previous_chapter_carryover", "manual"}:
         return True
     # Backward compatibility for rows created before origin_type existed.
     return _is_next_chapter_requirement(row.summary or "")

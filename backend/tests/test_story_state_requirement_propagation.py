@@ -298,3 +298,157 @@ async def test_state_requirements_api_returns_source_metadata(client, db_session
     assert item["source_chapter_title"] == "戒律堂冷审"
     assert item["target_chapter_id"] == target_chapter.id
     assert item["state_item"]["id"] == state.id
+
+
+@pytest.mark.asyncio
+async def test_state_requirements_api_supports_manual_correction(client, db_session):
+    token, org_id = await _register(client, "state-req-manual@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    project_res = await client.post(
+        "/api/v1/projects",
+        headers=headers,
+        json={"title": "承接要求人工修正测试", "target_word_count": 100_000},
+    )
+    assert project_res.status_code == 201, project_res.text
+    project_id = project_res.json()["id"]
+
+    chapter = Chapter(
+        id=new_id("chapter"),
+        organization_id=org_id,
+        project_id=project_id,
+        volume_id=None,
+        chapter_index=6,
+        title="杂役院夜斗",
+        summary="",
+        goal="",
+        conflict="",
+        ending_hook="",
+        status="planned",
+    )
+    state = StoryStateItem(
+        id=new_id("state"),
+        organization_id=org_id,
+        project_id=project_id,
+        entity_type="character",
+        entity_id="lin_zhaoye",
+        state_type="skill",
+        name="因果灰线视野",
+        status="active",
+        summary="林照夜只能短暂看见因果灰线，过度使用会刺痛左眼。",
+        value_json={},
+        source_chapter_id=chapter.id,
+        source_scene_id=None,
+        source_excerpt="左眼刺痛，灰线浮现。",
+        updated_in_chapter_id=chapter.id,
+        priority=92,
+        is_hard_constraint=True,
+    )
+    db_session.add_all([chapter, state])
+    await db_session.commit()
+
+    create_res = await client.post(
+        f"/api/v1/projects/{project_id}/chapters/{chapter.id}/state-requirements",
+        headers=headers,
+        json={
+            "state_item_id": state.id,
+            "requirement_type": "must_remember",
+            "summary": "本章必须承接因果灰线视野的左眼代价。",
+            "priority": 88,
+        },
+    )
+    assert create_res.status_code == 201, create_res.text
+    created = create_res.json()
+    assert created["origin_type"] == "manual"
+    assert created["state_item"]["id"] == state.id
+    assert created["summary"] == "本章必须承接因果灰线视野的左眼代价。"
+
+    patch_res = await client.patch(
+        (
+            f"/api/v1/projects/{project_id}/chapters/{chapter.id}/state-requirements/"
+            f"{created['id']}"
+        ),
+        headers=headers,
+        json={
+            "requirement_type": "must_not_conflict",
+            "summary": "不能把因果灰线写成无限制常驻能力。",
+            "priority": 96,
+        },
+    )
+    assert patch_res.status_code == 200, patch_res.text
+    patched = patch_res.json()
+    assert patched["origin_type"] == "manual"
+    assert patched["requirement_type"] == "must_not_conflict"
+    assert patched["summary"] == "不能把因果灰线写成无限制常驻能力。"
+    assert patched["priority"] == 96
+
+    delete_res = await client.delete(
+        (
+            f"/api/v1/projects/{project_id}/chapters/{chapter.id}/state-requirements/"
+            f"{created['id']}"
+        ),
+        headers=headers,
+    )
+    assert delete_res.status_code == 204, delete_res.text
+    list_res = await client.get(
+        f"/api/v1/projects/{project_id}/chapters/{chapter.id}/state-requirements",
+        headers=headers,
+    )
+    assert list_res.status_code == 200, list_res.text
+    assert list_res.json()["items"] == []
+
+
+@pytest.mark.asyncio
+async def test_rebuild_preserves_manual_requirements(db_session):
+    project, current, _, state = _project_chapters_and_state()
+    db_session.add_all([project, current, state])
+    await db_session.commit()
+
+    manual = ChapterStateRequirement(
+        id=new_id("state_req"),
+        organization_id=project.organization_id,
+        project_id=project.id,
+        chapter_id=current.id,
+        target_chapter_id=current.id,
+        state_item_id=state.id,
+        requirement_type="must_remember",
+        summary="人工要求：本章必须写出旧铜钱禁制仍在。",
+        priority=90,
+        origin_type="manual",
+    )
+    rebuildable = ChapterStateRequirement(
+        id=new_id("state_req"),
+        organization_id=project.organization_id,
+        project_id=project.id,
+        chapter_id=current.id,
+        target_chapter_id=current.id,
+        state_item_id=state.id,
+        requirement_type="should_reference",
+        summary="自动旧要求，重建时可以删除。",
+        priority=50,
+        origin_type="current_chapter_extract",
+    )
+    db_session.add_all([manual, rebuildable])
+    await db_session.commit()
+
+    result = await story_state_service.rebuild_chapter_requirements(
+        db_session,
+        organization_id=project.organization_id,
+        project_id=project.id,
+        chapter=current,
+        scene=None,
+        state_inputs=[],
+    )
+    await db_session.commit()
+
+    rows = (
+        await db_session.execute(
+            select(ChapterStateRequirement).where(
+                ChapterStateRequirement.project_id == project.id,
+                ChapterStateRequirement.chapter_id == current.id,
+            )
+        )
+    ).scalars().all()
+    assert result["deleted"] == 1
+    assert len(rows) == 1
+    assert rows[0].id == manual.id
+    assert rows[0].origin_type == "manual"

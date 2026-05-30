@@ -95,6 +95,32 @@ class ChapterStateRequirementListResponse(APIModel):
     items: list[ChapterStateRequirementResponse] = Field(default_factory=list)
 
 
+class ChapterStateRequirementCreateRequest(APIModel):
+    state_item_id: str
+    requirement_type: RequirementType = "must_remember"
+    summary: str = ""
+    priority: int = Field(default=80, ge=0)
+
+
+class ChapterStateRequirementPatchRequest(APIModel):
+    requirement_type: RequirementType | None = None
+    summary: str | None = None
+    priority: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_non_empty(self) -> ChapterStateRequirementPatchRequest:
+        if all(
+            value is None
+            for value in (
+                self.requirement_type,
+                self.summary,
+                self.priority,
+            )
+        ):
+            raise ValueError("At least one updatable field is required")
+        return self
+
+
 class StoryStatePatchRequest(APIModel):
     status: StateStatus | None = None
     summary: str | None = None

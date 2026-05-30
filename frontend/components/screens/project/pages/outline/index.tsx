@@ -1390,12 +1390,19 @@ export function OutlinePage({ projectId }: { projectId: string }) {
       ) : null}
       {showChapterRequirementList && active ? (
         <ChapterRequirementListDialog
+          projectId={projectId}
+          chapterId={active.id}
           chapterLabel={`第 ${active.chapter_index} 章`}
           items={activeRequirementItems}
+          stateOptions={storyStates}
           onClose={() => setShowChapterRequirementList(false)}
           onSelectState={(state) => {
             setShowChapterRequirementList(false);
             setSelectedStoryState(state);
+          }}
+          onChanged={() => {
+            queryClient.invalidateQueries({ queryKey: activeRequirementsKey });
+            queryClient.invalidateQueries({ queryKey: storyStatesKey });
           }}
         />
       ) : null}

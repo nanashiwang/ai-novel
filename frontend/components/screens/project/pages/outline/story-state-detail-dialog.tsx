@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Save } from "lucide-react";
+import { Pencil, Plus, Save, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import {
   type ChapterStateRequirement,
+  type ChapterStateRequirementType,
   type StoryStateHistory,
   type StoryStateItem,
   type StoryStatePatch,
@@ -77,10 +78,14 @@ type StoryStateListDialogProps = {
 };
 
 type ChapterRequirementListDialogProps = {
+  projectId: string;
+  chapterId: string;
   chapterLabel: string;
   items: Array<{ requirement: ChapterStateRequirement; state: StoryStateItem | null }>;
+  stateOptions: StoryStateItem[];
   onClose: () => void;
   onSelectState: (state: StoryStateItem) => void;
+  onChanged: () => void;
 };
 
 const requirementTypeLabel: Record<string, string> = {
@@ -516,11 +521,132 @@ export function StoryStateListDialog({
 }
 
 export function ChapterRequirementListDialog({
+  projectId,
+  chapterId,
   chapterLabel,
   items,
+  stateOptions,
   onClose,
   onSelectState,
+  onChanged,
 }: ChapterRequirementListDialogProps) {
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [newStateId, setNewStateId] = useState(stateOptions[0]?.id ?? "");
+  const [newType, setNewType] = useState<ChapterStateRequirementType>("must_remember");
+  const [newSummary, setNewSummary] = useState("");
+  const [newPriority, setNewPriority] = useState("80");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editType, setEditType] = useState<ChapterStateRequirementType>("must_remember");
+  const [editSummary, setEditSummary] = useState("");
+  const [editPriority, setEditPriority] = useState("80");
+
+  useEffect(() => {
+    if (!newStateId && stateOptions[0]?.id) {
+      setNewStateId(stateOptions[0].id);
+    }
+  }, [newStateId, stateOptions]);
+
+  const stateOptionById = useMemo(
+    () => new Map(stateOptions.map((item) => [item.id, item])),
+    [stateOptions],
+  );
+  const selectedNewState = newStateId ? stateOptionById.get(newStateId) : null;
+
+  const parsePriority = (value: string) => {
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed) || parsed < 0) {
+      toast.error("优先级必须是非负整数");
+      return null;
+    }
+    return parsed;
+  };
+
+  const resetAddForm = () => {
+    setNewType("must_remember");
+    setNewSummary("");
+    setNewPriority("80");
+    setShowAddForm(false);
+  };
+
+  const createRequirement = useMutation({
+    mutationFn: () => {
+      if (!newStateId) {
+        toast.error("请选择关键设定");
+        return Promise.reject(new Error("invalid_state"));
+      }
+      const priority = parsePriority(newPriority);
+      if (priority === null) return Promise.reject(new Error("invalid_priority"));
+      const summary = newSummary.trim() || selectedNewState?.summary?.trim() || "人工添加承接要求";
+      return storyStatesApi.createChapterRequirement(projectId, chapterId, {
+        state_item_id: newStateId,
+        requirement_type: newType,
+        summary,
+        priority,
+      });
+    },
+    onSuccess: () => {
+      toast.success("承接要求已添加");
+      resetAddForm();
+      onChanged();
+    },
+    onError: (error: unknown) => {
+      if (error instanceof Error && error.message.startsWith("invalid_")) return;
+      toast.error(error instanceof ApiError ? error.message : "添加失败");
+    },
+  });
+
+  const updateRequirement = useMutation({
+    mutationFn: (requirementId: string) => {
+      const priority = parsePriority(editPriority);
+      if (priority === null) return Promise.reject(new Error("invalid_priority"));
+      if (!editSummary.trim()) {
+        toast.error("承接要求摘要不能为空");
+        return Promise.reject(new Error("invalid_summary"));
+      }
+      return storyStatesApi.updateChapterRequirement(projectId, chapterId, requirementId, {
+        requirement_type: editType,
+        summary: editSummary.trim(),
+        priority,
+      });
+    },
+    onSuccess: () => {
+      toast.success("承接要求已更新");
+      setEditingId(null);
+      onChanged();
+    },
+    onError: (error: unknown) => {
+      if (error instanceof Error && error.message.startsWith("invalid_")) return;
+      toast.error(error instanceof ApiError ? error.message : "更新失败");
+    },
+  });
+
+  const deleteRequirement = useMutation({
+    mutationFn: (requirementId: string) =>
+      storyStatesApi.deleteChapterRequirement(projectId, chapterId, requirementId),
+    onSuccess: () => {
+      toast.success("承接要求已删除");
+      onChanged();
+    },
+    onError: (error: unknown) => {
+      toast.error(error instanceof ApiError ? error.message : "删除失败");
+    },
+  });
+
+  const startEdit = (requirement: ChapterStateRequirement) => {
+    setEditingId(requirement.id);
+    setEditType(requirement.requirement_type);
+    setEditSummary(requirement.summary);
+    setEditPriority(String(requirement.priority));
+  };
+
+  const handleNewStateChange = (stateId: string) => {
+    setNewStateId(stateId);
+    const state = stateOptionById.get(stateId);
+    if (state && !newSummary.trim()) {
+      setNewSummary(state.summary || "");
+    }
+  };
+
   return (
     <Modal title="本章承接要求" onClose={onClose}>
       <div className="space-y-4">
@@ -529,8 +655,88 @@ export function ChapterRequirementListDialog({
             <p className="text-sm font-black text-slate-950">{chapterLabel}</p>
             <p className="mt-0.5 text-xs text-slate-500">当前章节需要保持一致的状态项。</p>
           </div>
-          <Badge tone={items.length > 0 ? "amber" : "slate"}>{items.length} 条</Badge>
+          <div className="flex shrink-0 items-center gap-2">
+            <Badge tone={items.length > 0 ? "amber" : "slate"}>{items.length} 条</Badge>
+            <Button
+              size="sm"
+              variant={showAddForm ? "ghost" : "secondary"}
+              onClick={() => setShowAddForm((value) => !value)}
+            >
+              {showAddForm ? <X className="size-3.5" /> : <Plus className="size-3.5" />}
+              {showAddForm ? "收起" : "添加"}
+            </Button>
+          </div>
         </div>
+
+        {showAddForm ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50/60 p-4">
+            <div className="grid gap-3 md:grid-cols-[1.2fr_0.8fr_90px]">
+              <label className="block text-sm font-semibold text-slate-700">
+                关键设定
+                <select
+                  value={newStateId}
+                  onChange={(event) => handleNewStateChange(event.target.value)}
+                  className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-amber-500"
+                >
+                  {stateOptions.length === 0 ? <option value="">暂无可选关键设定</option> : null}
+                  {stateOptions.map((state) => (
+                    <option key={state.id} value={state.id}>
+                      {state.name} · P{state.priority}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-sm font-semibold text-slate-700">
+                类型
+                <select
+                  value={newType}
+                  onChange={(event) => setNewType(event.target.value as ChapterStateRequirementType)}
+                  className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-amber-500"
+                >
+                  {Object.entries(requirementTypeLabel).map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-sm font-semibold text-slate-700">
+                优先级
+                <input
+                  type="number"
+                  min={0}
+                  value={newPriority}
+                  onChange={(event) => setNewPriority(event.target.value)}
+                  className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-amber-500"
+                />
+              </label>
+            </div>
+            <label className="mt-3 block text-sm font-semibold text-slate-700">
+              承接要求摘要
+              <textarea
+                rows={3}
+                value={newSummary}
+                onChange={(event) => setNewSummary(event.target.value)}
+                placeholder="例如：本章必须承接旧铜钱禁制仍在，不能让主角随意弃钱离宗。"
+                className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-amber-500"
+              />
+            </label>
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-amber-800">
+                人工添加后会标记为“人工添加”，后续写作和审稿会优先读取这条纠偏要求。
+              </p>
+              <Button
+                size="sm"
+                onClick={() => createRequirement.mutate()}
+                disabled={createRequirement.isPending || stateOptions.length === 0}
+              >
+                <Plus className="size-3.5" />
+                {createRequirement.isPending ? "添加中…" : "添加承接要求"}
+              </Button>
+            </div>
+          </div>
+        ) : null}
+
         {items.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-10 text-center">
             <p className="text-sm font-semibold text-slate-700">本章暂无承接要求</p>
@@ -541,59 +747,139 @@ export function ChapterRequirementListDialog({
         ) : (
           <div className="max-h-[60vh] divide-y divide-slate-100 overflow-y-auto rounded-2xl border border-slate-200 bg-white">
             {items.map(({ requirement, state }) => {
-              const content = (
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge tone={requirementTone(requirement.requirement_type)}>
-                        {requirementTypeLabel[requirement.requirement_type] ??
-                          requirement.requirement_type}
-                      </Badge>
-                      <Badge tone={requirementOriginTone(requirement)}>
-                        {requirementOriginLabel(requirement)}
-                      </Badge>
-                      {state?.is_hard_constraint ? <Badge tone="rose">硬约束</Badge> : null}
-                      {state && state.status !== "active" ? (
-                        <Badge tone={statusTone(state.status)}>
-                          {statusLabel[state.status] ?? state.status}
-                        </Badge>
-                      ) : null}
-                    </div>
-                    <p className="mt-2 truncate text-sm font-bold text-slate-950">
-                      {state?.name ?? "关联关键设定不可用"}
-                    </p>
-                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">
-                      {requirement.summary || state?.summary || "—"}
-                    </p>
-                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-400">
-                      <span className="min-w-0 truncate">
-                        {state
-                          ? `${entityTypeLabel[state.entity_type] ?? state.entity_type} · ${
-                              stateTypeLabel[state.state_type] ?? state.state_type
-                            }`
-                          : `关联 ID：${requirement.state_item_id}`}
-                      </span>
-                      <span className="min-w-0 truncate">{requirementOriginDetail(requirement)}</span>
-                    </div>
-                  </div>
-                  <span className="shrink-0 text-[11px] font-semibold text-slate-400">
-                    P{requirement.priority}
-                  </span>
-                </div>
-              );
-
-              return state ? (
-                <button
-                  key={requirement.id}
-                  type="button"
-                  onClick={() => onSelectState(state)}
-                  className="block w-full px-4 py-3 text-left transition hover:bg-slate-50"
-                >
-                  {content}
-                </button>
-              ) : (
+              const isEditing = editingId === requirement.id;
+              return (
                 <div key={requirement.id} className="px-4 py-3">
-                  {content}
+                  {isEditing ? (
+                    <div className="space-y-3">
+                      <div className="grid gap-3 md:grid-cols-[1fr_90px]">
+                        <label className="block text-sm font-semibold text-slate-700">
+                          类型
+                          <select
+                            value={editType}
+                            onChange={(event) =>
+                              setEditType(event.target.value as ChapterStateRequirementType)
+                            }
+                            className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-indigo-500"
+                          >
+                            {Object.entries(requirementTypeLabel).map(([value, label]) => (
+                              <option key={value} value={value}>
+                                {label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="block text-sm font-semibold text-slate-700">
+                          优先级
+                          <input
+                            type="number"
+                            min={0}
+                            value={editPriority}
+                            onChange={(event) => setEditPriority(event.target.value)}
+                            className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-indigo-500"
+                          />
+                        </label>
+                      </div>
+                      <label className="block text-sm font-semibold text-slate-700">
+                        承接要求摘要
+                        <textarea
+                          rows={3}
+                          value={editSummary}
+                          onChange={(event) => setEditSummary(event.target.value)}
+                          className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-indigo-500"
+                        />
+                      </label>
+                      <div className="flex justify-end gap-2">
+                        <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>
+                          取消
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={() => updateRequirement.mutate(requirement.id)}
+                          disabled={updateRequirement.isPending}
+                        >
+                          <Save className="size-3.5" />
+                          {updateRequirement.isPending ? "保存中…" : "保存"}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge tone={requirementTone(requirement.requirement_type)}>
+                            {requirementTypeLabel[requirement.requirement_type] ??
+                              requirement.requirement_type}
+                          </Badge>
+                          <Badge tone={requirementOriginTone(requirement)}>
+                            {requirementOriginLabel(requirement)}
+                          </Badge>
+                          {state?.is_hard_constraint ? <Badge tone="rose">硬约束</Badge> : null}
+                          {state && state.status !== "active" ? (
+                            <Badge tone={statusTone(state.status)}>
+                              {statusLabel[state.status] ?? state.status}
+                            </Badge>
+                          ) : null}
+                        </div>
+                        <p className="mt-2 truncate text-sm font-bold text-slate-950">
+                          {state?.name ?? "关联关键设定不可用"}
+                        </p>
+                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">
+                          {requirement.summary || state?.summary || "—"}
+                        </p>
+                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-400">
+                          <span className="min-w-0 truncate">
+                            {state
+                              ? `${entityTypeLabel[state.entity_type] ?? state.entity_type} · ${
+                                  stateTypeLabel[state.state_type] ?? state.state_type
+                                }`
+                              : `关联 ID：${requirement.state_item_id}`}
+                          </span>
+                          <span className="min-w-0 truncate">{requirementOriginDetail(requirement)}</span>
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 flex-col items-end gap-2">
+                        <span className="text-[11px] font-semibold text-slate-400">
+                          P{requirement.priority}
+                        </span>
+                        <div className="flex items-center gap-1">
+                          {state ? (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 px-2 text-[11px]"
+                              onClick={() => onSelectState(state)}
+                            >
+                              查看
+                            </Button>
+                          ) : null}
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 px-2 text-[11px]"
+                            onClick={() => startEdit(requirement)}
+                          >
+                            <Pencil className="size-3" />
+                            编辑
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 px-2 text-[11px] text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                            onClick={() => {
+                              if (window.confirm("确认删除这条承接要求吗？")) {
+                                deleteRequirement.mutate(requirement.id);
+                              }
+                            }}
+                            disabled={deleteRequirement.isPending}
+                          >
+                            <Trash2 className="size-3" />
+                            删除
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}

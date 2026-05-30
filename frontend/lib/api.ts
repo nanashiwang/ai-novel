@@ -395,6 +395,19 @@ export type ChapterStateRequirement = {
   state_item?: StoryStateItem | null;
 };
 
+export type ChapterStateRequirementCreate = {
+  state_item_id: string;
+  requirement_type: ChapterStateRequirementType;
+  summary: string;
+  priority: number;
+};
+
+export type ChapterStateRequirementPatch = {
+  requirement_type?: ChapterStateRequirementType | null;
+  summary?: string | null;
+  priority?: number | null;
+};
+
 export type StoryStatePatch = {
   status?: StoryStateStatus | null;
   summary?: string | null;
@@ -464,6 +477,33 @@ export const storyStatesApi = {
   listChapterRequirements: (projectId: string, chapterId: string) =>
     http.get<ChapterStateRequirementListResponse>(
       `/projects/${projectId}/chapters/${chapterId}/state-requirements`,
+    ),
+  createChapterRequirement: (
+    projectId: string,
+    chapterId: string,
+    payload: ChapterStateRequirementCreate,
+  ) =>
+    http.post<ChapterStateRequirement>(
+      `/projects/${projectId}/chapters/${chapterId}/state-requirements`,
+      payload,
+    ),
+  updateChapterRequirement: (
+    projectId: string,
+    chapterId: string,
+    requirementId: string,
+    payload: ChapterStateRequirementPatch,
+  ) =>
+    http.patch<ChapterStateRequirement>(
+      `/projects/${projectId}/chapters/${chapterId}/state-requirements/${requirementId}`,
+      payload,
+    ),
+  deleteChapterRequirement: (
+    projectId: string,
+    chapterId: string,
+    requirementId: string,
+  ) =>
+    http.delete<void>(
+      `/projects/${projectId}/chapters/${chapterId}/state-requirements/${requirementId}`,
     ),
 };
 

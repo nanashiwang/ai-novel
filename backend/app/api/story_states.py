@@ -3,13 +3,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, status
 from sqlalchemy import select
 
 from app.api.deps import CurrentUserDep, DbDep, TenantDep
 from app.core.exceptions import NotFoundError
 from app.core.permissions import require_permission
 from app.models.chapter import Chapter
+from app.models.chapter_state_requirement import ChapterStateRequirement
 from app.models.story_state_item import StoryStateItem
 from app.repositories import (
     ChapterRepository,
@@ -19,7 +20,10 @@ from app.repositories import (
     StoryStateRepository,
 )
 from app.schemas.story_state import (
+    ChapterStateRequirementCreateRequest,
     ChapterStateRequirementListResponse,
+    ChapterStateRequirementPatchRequest,
+    ChapterStateRequirementResponse,
     StoryStateHistoryListResponse,
     StoryStateItemResponse,
     StoryStateListResponse,
@@ -53,6 +57,117 @@ async def _get_story_state_or_404(
     if not state or state.project_id != project_id:
         raise NotFoundError("story_state_not_found")
     return state
+
+
+async def _get_chapter_or_404(
+    project_id: str,
+    chapter_id: str,
+    tenant: TenantDep,
+    db: DbDep,
+) -> Chapter:
+    chapter = await ChapterRepository(db).get(
+        chapter_id,
+        organization_id=tenant.organization_id,
+    )
+    if not chapter or chapter.project_id != project_id:
+        raise NotFoundError("chapter_not_found")
+    return chapter
+
+
+async def _get_requirement_or_404(
+    project_id: str,
+    chapter_id: str,
+    requirement_id: str,
+    tenant: TenantDep,
+    db: DbDep,
+) -> ChapterStateRequirement:
+    requirement = await ChapterStateRequirementRepository(db).get(
+        requirement_id,
+        organization_id=tenant.organization_id,
+    )
+    if (
+        not requirement
+        or requirement.project_id != project_id
+        or requirement.chapter_id != chapter_id
+    ):
+        raise NotFoundError("chapter_state_requirement_not_found")
+    return requirement
+
+
+async def _build_requirement_responses(
+    *,
+    project_id: str,
+    tenant: TenantDep,
+    db: DbDep,
+    items: list[ChapterStateRequirement],
+) -> list[dict[str, Any]]:
+    state_ids = {item.state_item_id for item in items}
+    source_chapter_ids = {
+        item.source_chapter_id
+        for item in items
+        if item.source_chapter_id
+    }
+    state_by_id: dict[str, StoryStateItem] = {}
+    if state_ids:
+        result = await db.execute(
+            select(StoryStateItem).where(
+                StoryStateItem.organization_id == tenant.organization_id,
+                StoryStateItem.project_id == project_id,
+                StoryStateItem.id.in_(state_ids),
+            )
+        )
+        state_by_id = {state.id: state for state in result.scalars().all()}
+    source_chapter_by_id: dict[str, Chapter] = {}
+    if source_chapter_ids:
+        result = await db.execute(
+            select(Chapter).where(
+                Chapter.organization_id == tenant.organization_id,
+                Chapter.project_id == project_id,
+                Chapter.id.in_(source_chapter_ids),
+            )
+        )
+        source_chapter_by_id = {row.id: row for row in result.scalars().all()}
+    return [
+        {
+            "id": item.id,
+            "state_item_id": item.state_item_id,
+            "requirement_type": item.requirement_type,
+            "summary": item.summary,
+            "priority": item.priority,
+            "origin_type": item.origin_type or "current_chapter_extract",
+            "source_chapter_id": item.source_chapter_id,
+            "source_chapter_index": (
+                source_chapter_by_id[item.source_chapter_id].chapter_index
+                if item.source_chapter_id in source_chapter_by_id
+                else None
+            ),
+            "source_chapter_title": (
+                source_chapter_by_id[item.source_chapter_id].title
+                if item.source_chapter_id in source_chapter_by_id
+                else None
+            ),
+            "source_scene_id": item.source_scene_id,
+            "target_chapter_id": item.target_chapter_id or item.chapter_id,
+            "state_item": state_by_id.get(item.state_item_id),
+        }
+        for item in items
+    ]
+
+
+async def _build_requirement_response(
+    *,
+    project_id: str,
+    tenant: TenantDep,
+    db: DbDep,
+    item: ChapterStateRequirement,
+) -> dict[str, Any]:
+    responses = await _build_requirement_responses(
+        project_id=project_id,
+        tenant=tenant,
+        db=db,
+        items=[item],
+    )
+    return responses[0]
 
 
 def _state_snapshot(state: StoryStateItem) -> dict[str, Any]:
@@ -182,67 +297,130 @@ async def list_chapter_state_requirements(
 ):
     require_permission(user, "project:read", tenant)
     await _get_project_or_404(project_id, tenant, db)
-    chapter = await ChapterRepository(db).get(
-        chapter_id,
-        organization_id=tenant.organization_id,
-    )
-    if not chapter or chapter.project_id != project_id:
-        raise NotFoundError("chapter_not_found")
+    await _get_chapter_or_404(project_id, chapter_id, tenant, db)
     items = await ChapterStateRequirementRepository(db).list_for_chapter(
         organization_id=tenant.organization_id,
         project_id=project_id,
         chapter_id=chapter_id,
     )
-    state_ids = {item.state_item_id for item in items}
-    source_chapter_ids = {
-        item.source_chapter_id
-        for item in items
-        if item.source_chapter_id
-    }
-    state_by_id: dict[str, StoryStateItem] = {}
-    if state_ids:
-        result = await db.execute(
-            select(StoryStateItem).where(
-                StoryStateItem.organization_id == tenant.organization_id,
-                StoryStateItem.project_id == project_id,
-                StoryStateItem.id.in_(state_ids),
-            )
-        )
-        state_by_id = {state.id: state for state in result.scalars().all()}
-    source_chapter_by_id: dict[str, Chapter] = {}
-    if source_chapter_ids:
-        result = await db.execute(
-            select(Chapter).where(
-                Chapter.organization_id == tenant.organization_id,
-                Chapter.project_id == project_id,
-                Chapter.id.in_(source_chapter_ids),
-            )
-        )
-        source_chapter_by_id = {row.id: row for row in result.scalars().all()}
     return ChapterStateRequirementListResponse(
-        items=[
-            {
-                "id": item.id,
-                "state_item_id": item.state_item_id,
-                "requirement_type": item.requirement_type,
-                "summary": item.summary,
-                "priority": item.priority,
-                "origin_type": item.origin_type or "current_chapter_extract",
-                "source_chapter_id": item.source_chapter_id,
-                "source_chapter_index": (
-                    source_chapter_by_id[item.source_chapter_id].chapter_index
-                    if item.source_chapter_id in source_chapter_by_id
-                    else None
-                ),
-                "source_chapter_title": (
-                    source_chapter_by_id[item.source_chapter_id].title
-                    if item.source_chapter_id in source_chapter_by_id
-                    else None
-                ),
-                "source_scene_id": item.source_scene_id,
-                "target_chapter_id": item.target_chapter_id or item.chapter_id,
-                "state_item": state_by_id.get(item.state_item_id),
-            }
-            for item in items
-        ],
+        items=await _build_requirement_responses(
+            project_id=project_id,
+            tenant=tenant,
+            db=db,
+            items=list(items),
+        ),
     )
+
+
+@chapter_router.post(
+    "/{chapter_id}/state-requirements",
+    response_model=ChapterStateRequirementResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_chapter_state_requirement(
+    project_id: str,
+    chapter_id: str,
+    payload: ChapterStateRequirementCreateRequest,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    require_permission(user, "project:update", tenant)
+    await _get_project_or_404(project_id, tenant, db)
+    await _get_chapter_or_404(project_id, chapter_id, tenant, db)
+    state = await _get_story_state_or_404(project_id, payload.state_item_id, tenant, db)
+    requirement = await ChapterStateRequirementRepository(db).create(
+        organization_id=tenant.organization_id,
+        project_id=project_id,
+        chapter_id=chapter_id,
+        state_item_id=state.id,
+        requirement_type=payload.requirement_type,
+        summary=payload.summary.strip() or state.summary,
+        priority=max(0, int(payload.priority or 0)),
+        origin_type="manual",
+        source_chapter_id=None,
+        source_scene_id=None,
+        target_chapter_id=chapter_id,
+    )
+    await db.commit()
+    return await _build_requirement_response(
+        project_id=project_id,
+        tenant=tenant,
+        db=db,
+        item=requirement,
+    )
+
+
+@chapter_router.patch(
+    "/{chapter_id}/state-requirements/{requirement_id}",
+    response_model=ChapterStateRequirementResponse,
+)
+async def patch_chapter_state_requirement(
+    project_id: str,
+    chapter_id: str,
+    requirement_id: str,
+    payload: ChapterStateRequirementPatchRequest,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    require_permission(user, "project:update", tenant)
+    await _get_project_or_404(project_id, tenant, db)
+    await _get_chapter_or_404(project_id, chapter_id, tenant, db)
+    requirement = await _get_requirement_or_404(
+        project_id,
+        chapter_id,
+        requirement_id,
+        tenant,
+        db,
+    )
+    updates = payload.model_dump(exclude_none=True)
+    if "summary" in updates:
+        updates["summary"] = str(updates["summary"]).strip()
+    if "priority" in updates:
+        updates["priority"] = max(0, int(updates["priority"] or 0))
+    updates["origin_type"] = "manual"
+    updated = await ChapterStateRequirementRepository(db).update(
+        requirement.id,
+        updates,
+        organization_id=tenant.organization_id,
+    )
+    if not updated:
+        raise NotFoundError("chapter_state_requirement_not_found")
+    await db.commit()
+    return await _build_requirement_response(
+        project_id=project_id,
+        tenant=tenant,
+        db=db,
+        item=updated,
+    )
+
+
+@chapter_router.delete(
+    "/{chapter_id}/state-requirements/{requirement_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_chapter_state_requirement(
+    project_id: str,
+    chapter_id: str,
+    requirement_id: str,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    require_permission(user, "project:update", tenant)
+    await _get_project_or_404(project_id, tenant, db)
+    await _get_chapter_or_404(project_id, chapter_id, tenant, db)
+    requirement = await _get_requirement_or_404(
+        project_id,
+        chapter_id,
+        requirement_id,
+        tenant,
+        db,
+    )
+    await ChapterStateRequirementRepository(db).delete(
+        requirement.id,
+        organization_id=tenant.organization_id,
+    )
+    await db.commit()
