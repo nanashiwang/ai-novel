@@ -228,6 +228,7 @@ async def test_write_scene_happy_path(client, db_engine, db_session, monkeypatch
     ).scalars().all()
     assert {call.task_type for call in model_calls} >= {
         "write_scene_draft",
+        "postprocess_scene_draft",
         "update_character_states",
     }
 

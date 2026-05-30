@@ -12,6 +12,7 @@ from app.models import (
     ContinuityIssue,
     DraftVersion,
     GenerationJob,
+    ModelCall,
     NovelSpec,
     Organization,
     Project,
@@ -372,6 +373,14 @@ async def test_rewrite_scene_fixes_issues_and_chains_version(
 
     scene = await db_session.get(Scene, scene_id)
     assert scene.status == "drafted"
+
+    model_calls = (
+        await db_session.execute(select(ModelCall).where(ModelCall.job_id == job_id))
+    ).scalars().all()
+    assert {call.task_type for call in model_calls} >= {
+        "rewrite_scene",
+        "postprocess_rewrite_draft",
+    }
 
 
 @pytest.mark.asyncio

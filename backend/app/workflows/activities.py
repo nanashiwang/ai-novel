@@ -49,9 +49,10 @@ from app.repositories import (
     UsageEventRepository,
     WorldItemRepository,
 )
-from app.schemas.story_generation import StoryBibleContract
+from app.schemas.story_generation import SceneDraftContract, StoryBibleContract
 from app.services.auditor.service import auditor_service
 from app.services.context_builder.service import context_builder
+from app.services.draft_postprocessor import draft_postprocessor_service
 from app.services.event_bus import build_event, publish_event_fire_and_forget
 from app.services.ledger import ledger_service
 from app.services.memory import memory_service
@@ -463,6 +464,49 @@ async def _run_story_state_extract(
             extra={"scene_id": scene.id, "chapter_id": chapter.id, "source": source},
         )
         return {"upserted_count": 0, "requirement_count": 0, "error": "failed"}
+
+
+async def _postprocess_scene_draft_contract(
+    session: AsyncSession,
+    *,
+    organization_id: str,
+    project_id: str,
+    job_id: str,
+    project: Project,
+    spec: NovelSpec,
+    chapter: Chapter,
+    scene: Scene,
+    draft: SceneDraftContract,
+    target_words: int,
+    stage: str,
+    issues: list[ContinuityIssue] | None = None,
+) -> SceneDraftContract:
+    """生成/重修落库前自动自然化正文，失败由服务内部回退原文。"""
+    processed = await draft_postprocessor_service.postprocess_scene_content(
+        session,
+        organization_id=organization_id,
+        project_id=project_id,
+        job_id=job_id,
+        project=project,
+        spec=spec,
+        chapter=chapter,
+        scene=scene,
+        content=draft.content,
+        target_words=target_words,
+        stage="rewrite" if stage == "rewrite" else "write",
+        issues=issues,
+    )
+    if processed == draft.content:
+        return draft
+    notes = list(draft.continuity_notes or [])
+    notes.append("已自动执行正文自然化后处理，降低 AI 味。")
+    return draft.model_copy(
+        update={
+            "content": processed,
+            "word_count": len(processed),
+            "continuity_notes": notes,
+        }
+    )
 
 
 _summarize_tasks: set[Any] = set()
@@ -2107,6 +2151,19 @@ async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
                 previous_scene_excerpt=previous_excerpt,
                 target_words=target_words,
             )
+            draft = await _postprocess_scene_draft_contract(
+                session,
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                job_id=job_row.id,
+                project=project,
+                spec=spec,
+                chapter=chapter,
+                scene=scene,
+                draft=draft,
+                target_words=target_words,
+                stage="write",
+            )
             word_count = len(draft.content)
             saved = await draft_repo.create(
                 organization_id=job_row.organization_id,
@@ -2316,6 +2373,19 @@ async def run_scene_writing(job: dict[str, Any]) -> dict[str, Any]:
             scene=scene,
             previous_scene_excerpt=previous_excerpt,
             target_words=target_words,
+        )
+        draft = await _postprocess_scene_draft_contract(
+            session,
+            organization_id=job_row.organization_id,
+            project_id=job_row.project_id,
+            job_id=job_row.id,
+            project=project,
+            spec=spec,
+            chapter=chapter,
+            scene=scene,
+            draft=draft,
+            target_words=target_words,
+            stage="write",
         )
         word_count = len(draft.content)
 
@@ -3659,6 +3729,20 @@ async def rewrite_scene(job: dict[str, Any]) -> dict[str, Any]:
             current_content=latest_draft.content,
             issues=issues,
             target_words=target_words,
+        )
+        new_draft = await _postprocess_scene_draft_contract(
+            session,
+            organization_id=job_row.organization_id,
+            project_id=job_row.project_id,
+            job_id=job_row.id,
+            project=project,
+            spec=spec,
+            chapter=chapter,
+            scene=scene,
+            draft=new_draft,
+            target_words=target_words,
+            stage="rewrite",
+            issues=issues,
         )
         word_count = len(new_draft.content)
         saved = await draft_repo.create(

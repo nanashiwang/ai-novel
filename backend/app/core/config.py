@@ -94,6 +94,9 @@ class Settings(BaseSettings):
     # Sprint 17-C 方案 3：默认关；True 时章末所有 scene drafted 后自动触发
     # 整章润色 pass（24K tokens/章成本高）。手动 API 触发不受此开关限制。
     chapter_polish_enabled: bool = False
+    # 正文自动后处理：写作/重修保存前默认跑一轮轻量"去 AI 味"自然化。
+    # 失败时回退原文，不阻断主写作任务。
+    draft_postprocess_enabled: bool = True
 
     @property
     def cors_origin_list(self) -> list[str]:

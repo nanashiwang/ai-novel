@@ -471,6 +471,8 @@ class DeterministicModelProvider:
             return self._scene_draft_markdown()
         if "场景风格统一器" in system_prompt or "风格统一" in system_prompt:
             return self._scene_stylist_markdown(user_prompt)
+        if "正文后处理编辑" in system_prompt:
+            return self._postprocess_scene_text(user_prompt)
         return f"[TEST:{model}] 根据上下文生成 scene 级正文（提示约 {len(user_prompt)} 字）。"
 
     @staticmethod
@@ -504,3 +506,18 @@ class DeterministicModelProvider:
             if tail:
                 return tail
         return DeterministicModelProvider._scene_draft_markdown()
+
+    @staticmethod
+    def _postprocess_scene_text(user_prompt: str) -> str:
+        """后处理输出：抽取原文并移除 Markdown 强调，模拟去 AI 味收口。"""
+        marker = "## 待自然化正文\n"
+        if marker in user_prompt:
+            tail = user_prompt.split(marker, 1)[1]
+            tail = tail.split("\n\n## 任务指令", 1)[0].strip()
+        else:
+            tail = DeterministicModelProvider._scene_draft_markdown()
+        tail = re.sub(r"\*\*(.*?)\*\*", r"\1", tail, flags=re.DOTALL)
+        tail = re.sub(r"__(.*?)__", r"\1", tail, flags=re.DOTALL)
+        tail = re.sub(r"(?<!\*)\*(?!\*)([^*\n]{1,120}?)(?<!\*)\*(?!\*)", r"\1", tail)
+        tail = re.sub(r"(?<!_)_(?!_)([^_\n]{1,120}?)(?<!_)_(?!_)", r"\1", tail)
+        return tail
