@@ -29,6 +29,8 @@ import {
   projectsApi,
   scenesApi,
   storyStatesApi,
+  type ChapterStateRequirementType,
+  type ContinuityIssue,
   type Scene,
   type StoryStateItem,
 } from "@/lib/api";
@@ -85,6 +87,33 @@ function SceneBudgetHint({ scene }: { scene: Scene }) {
       </div>
     </div>
   );
+}
+
+function requirementTypeFromIssue(issueType: string): ChapterStateRequirementType {
+  if (
+    issueType === "state_conflict" ||
+    issueType === "premature_state_use" ||
+    issueType === "resolved_state_reused" ||
+    issueType === "hard_constraint_violation"
+  ) {
+    return "must_not_conflict";
+  }
+  if (issueType === "forgotten_state") return "must_remember";
+  return "should_reference";
+}
+
+function priorityFromSeverity(severity: string) {
+  if (severity === "critical") return 100;
+  if (severity === "high") return 92;
+  if (severity === "medium") return 82;
+  if (severity === "low") return 65;
+  return 80;
+}
+
+function requirementSummaryFromIssue(issue: ContinuityIssue) {
+  const fix = issue.suggested_fix?.trim();
+  if (fix) return `审稿建议：${fix}`;
+  return `审稿问题：${issue.description || "需要承接关键设定"}`;
 }
 
 export function WritingWorkspacePage({ projectId }: { projectId: string }) {
@@ -195,6 +224,32 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
     latestAuditJob,
     latestAuditIssueCount,
     onRewriteSuccess: () => setDisplayedVersionId(null),
+  });
+
+  const createRequirementFromIssue = useMutation({
+    mutationFn: ({
+      issue,
+      linkedState,
+    }: {
+      issue: ContinuityIssue;
+      linkedState: StoryStateItem;
+    }) => {
+      if (!activeChapter) return Promise.reject(new Error("no_active_chapter"));
+      return storyStatesApi.createChapterRequirement(projectId, activeChapter.id, {
+        state_item_id: linkedState.id,
+        requirement_type: requirementTypeFromIssue(issue.issue_type),
+        summary: requirementSummaryFromIssue(issue),
+        priority: priorityFromSeverity(issue.severity),
+      });
+    },
+    onSuccess: () => {
+      toast.success("已加入本章承接要求");
+      queryClient.invalidateQueries({ queryKey: antiForgettingPreviewKey });
+      queryClient.invalidateQueries({ queryKey: storyStatesKey });
+    },
+    onError: (e: unknown) => {
+      toast.error(e instanceof ApiError ? e.message : "添加承接要求失败");
+    },
   });
 
   // === write mutation：依赖太多本地 key，保留在 page 内 ===
@@ -655,6 +710,20 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
                               <Badge tone="slate">
                                 关联关键设定：{issue.story_state_item_id}
                               </Badge>
+                            ) : null}
+                            {linkedState && issue.status !== "fixed" ? (
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                className="h-7 px-2 text-[11px]"
+                                onClick={() =>
+                                  createRequirementFromIssue.mutate({ issue, linkedState })
+                                }
+                                disabled={createRequirementFromIssue.isPending || !activeChapter}
+                                title="把这条审稿建议固化为本章承接要求，后续写作/重写会进入防遗忘注入"
+                              >
+                                固化为承接要求
+                              </Button>
                             ) : null}
                           </div>
                           <p className="mt-2 font-semibold text-slate-950">
