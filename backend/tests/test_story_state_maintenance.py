@@ -473,6 +473,15 @@ async def test_story_state_maintainer_applies_logged_needs_review_action(
     assert state.summary == "因果灰线视野可常驻开启，但会持续消耗神魂。"
     assert state.value_json["cost"] == "soul_drain"
 
+    applied_again = await story_state_maintainer_service.apply_action(
+        db_session,
+        organization_id=project.organization_id,
+        project_id=project.id,
+        action_id=action.id,
+        created_by=user_id,
+    )
+    assert applied_again.status == "applied"
+
 
 @pytest.mark.asyncio
 async def test_story_state_maintainer_creates_requirement_from_issue(monkeypatch, db_session):

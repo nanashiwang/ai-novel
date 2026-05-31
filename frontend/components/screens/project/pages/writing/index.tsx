@@ -33,6 +33,8 @@ import {
   type ContinuityIssue,
   type Scene,
   type StoryStateItem,
+  type StoryStateMaintenanceAction,
+  type StoryStateMaintenanceActionListResponse,
 } from "@/lib/api";
 import { ApiError } from "@/lib/http";
 import { useScopedKey } from "@/lib/use-scoped-key";
@@ -232,6 +234,29 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
   });
   const maintenanceActions = maintenanceActionsResponse?.items ?? [];
 
+  const syncMaintenanceActionInCache = (
+    action: StoryStateMaintenanceAction,
+  ) => {
+    queryClient.setQueryData<StoryStateMaintenanceActionListResponse>(
+      maintenanceActionsKey,
+      (current) => {
+        if (!current) return current;
+        const exists = current.items.some((item) => item.id === action.id);
+        return {
+          ...current,
+          items: exists
+            ? current.items.map((item) => (item.id === action.id ? action : item))
+            : [action, ...current.items],
+        };
+      },
+    );
+  };
+
+  const showMaintenanceActionStateChanged = () => {
+    toast.error("这条 AI 维护建议状态已变化，已刷新列表，请按最新状态操作");
+    queryClient.invalidateQueries({ queryKey: maintenanceActionsKey });
+  };
+
   const {
     sceneIssues,
     sceneOpenIssues,
@@ -282,26 +307,42 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
   const rollbackMaintenanceAction = useMutation({
     mutationFn: (actionId: string) =>
       storyStatesApi.rollbackMaintenanceAction(projectId, actionId),
-    onSuccess: () => {
+    onSuccess: (action) => {
+      syncMaintenanceActionInCache(action);
       toast.success("已撤销 AI 维护动作");
       queryClient.invalidateQueries({ queryKey: maintenanceActionsKey });
       queryClient.invalidateQueries({ queryKey: storyStatesKey });
       queryClient.invalidateQueries({ queryKey: antiForgettingPreviewKey });
     },
     onError: (e: unknown) => {
+      if (
+        e instanceof ApiError &&
+        e.message === "story_state_maintenance_action_not_applied"
+      ) {
+        showMaintenanceActionStateChanged();
+        return;
+      }
       toast.error(e instanceof ApiError ? e.message : "撤销维护动作失败");
     },
   });
   const applyMaintenanceAction = useMutation({
     mutationFn: (actionId: string) =>
       storyStatesApi.applyMaintenanceAction(projectId, actionId),
-    onSuccess: () => {
+    onSuccess: (action) => {
+      syncMaintenanceActionInCache(action);
       toast.success("已应用 AI 维护建议");
       queryClient.invalidateQueries({ queryKey: maintenanceActionsKey });
       queryClient.invalidateQueries({ queryKey: storyStatesKey });
       queryClient.invalidateQueries({ queryKey: antiForgettingPreviewKey });
     },
     onError: (e: unknown) => {
+      if (
+        e instanceof ApiError &&
+        e.message === "story_state_maintenance_action_not_applicable"
+      ) {
+        showMaintenanceActionStateChanged();
+        return;
+      }
       toast.error(e instanceof ApiError ? e.message : "应用维护建议失败");
     },
   });

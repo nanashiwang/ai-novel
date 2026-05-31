@@ -406,6 +406,8 @@ class StoryStateMaintainerService:
         )
         if not action or action.project_id != project_id:
             raise NotFoundError("story_state_maintenance_action_not_found")
+        if action.status == "applied":
+            return action
         if action.status not in {"suggested", "needs_review"}:
             raise ConflictError("story_state_maintenance_action_not_applicable")
 
