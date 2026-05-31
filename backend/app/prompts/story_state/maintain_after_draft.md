@@ -61,7 +61,33 @@
 }
 ```
 
-### 3. resolve_requirement
+### 3. supersede_state
+
+用于“旧关键设定已被另一个新关键设定替代，后续不应再按旧设定执行”。
+
+要求：
+
+- `target_state_id` 填新设定/替代后的有效设定。
+- `source_state_ids` 填被替代的旧设定。
+- 只有新旧设定都真实存在于输入中时才能输出。
+- 不要把重复设定当作替代；重复表达仍使用 `merge_states`。
+
+```json
+{
+  "type": "supersede_state",
+  "target_state_id": "state_new",
+  "source_state_ids": ["state_old"],
+  "confidence": 0.89,
+  "risk_level": "low",
+  "reason": "正文明确写出青冥洗瞳露让旧的剧痛代价被短暂酸胀替代",
+  "patch": {
+    "status_reason": "旧代价已被青冥洗瞳露后的新代价替代",
+    "requirement_status_reason": "旧承接要求已被新关键设定替代"
+  }
+}
+```
+
+### 4. resolve_requirement
 
 用于“承接要求已被当前正文明确兑现”。
 
@@ -78,7 +104,7 @@
 }
 ```
 
-### 4. create_requirement
+### 5. create_requirement
 
 用于“审稿问题暴露出后续必须持续记住/避免冲突的点，但当前还没有对应承接要求”。
 
@@ -104,7 +130,7 @@
 }
 ```
 
-### 5. supersede_requirement
+### 6. supersede_requirement
 
 用于“旧承接要求已被正文中的新事实替代，后续不应再按旧要求执行”。
 

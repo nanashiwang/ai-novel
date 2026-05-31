@@ -354,6 +354,7 @@ export type ChapterStateRequirementStatus =
 export type StoryStateMaintenanceActionType =
   | "update_state"
   | "merge_states"
+  | "supersede_state"
   | "create_requirement"
   | "resolve_requirement"
   | "supersede_requirement";

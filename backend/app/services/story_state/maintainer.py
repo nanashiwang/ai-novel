@@ -40,6 +40,7 @@ _PROMPT_VERSION = "v1"
 _ALLOWED_ACTION_TYPES = {
     "update_state",
     "merge_states",
+    "supersede_state",
     "create_requirement",
     "resolve_requirement",
     "supersede_requirement",
@@ -375,6 +376,14 @@ class StoryStateMaintainerService:
                 action=action,
                 created_by=created_by,
             )
+        elif action.action_type == "supersede_state":
+            await self._rollback_supersede_state_action(
+                session,
+                organization_id=organization_id,
+                project_id=project_id,
+                action=action,
+                created_by=created_by,
+            )
         elif action.action_type in {"resolve_requirement", "supersede_requirement"}:
             await self._rollback_requirement_action(
                 session,
@@ -440,6 +449,17 @@ class StoryStateMaintainerService:
                 )
             elif parsed.action_type == "merge_states":
                 after_json = await self._apply_logged_merge_states_action(
+                    session,
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    chapter=chapter,
+                    scene=scene,
+                    action_row=action,
+                    parsed=parsed,
+                    created_by=created_by,
+                )
+            elif parsed.action_type == "supersede_state":
+                after_json = await self._apply_logged_supersede_state_action(
                     session,
                     organization_id=organization_id,
                     project_id=project_id,
@@ -727,6 +747,10 @@ class StoryStateMaintainerService:
                 "auto_apply": "仅 low 且 confidence >= 0.85 可自动应用",
                 "medium_high": "medium/high 只记录 needs_review，不自动改库",
                 "id_rule": "只能引用输入中真实存在的 state/requirement/issue id",
+                "supersede_state": (
+                    "旧关键设定被新关键设定替代时，target_state_id 填新设定，"
+                    "source_state_ids 填旧设定"
+                ),
                 "create_requirement": "审稿问题需要后续持续承接时，可基于已有 state 创建承接要求",
             },
         }
@@ -803,6 +827,48 @@ class StoryStateMaintainerService:
                         scene=scene,
                         target=target,
                         sources=sources,
+                        action=action,
+                        created_by=created_by,
+                    )
+                    applied_at = _now()
+                else:
+                    after_json = before_json
+            elif action.action_type == "supersede_state":
+                target = await self._get_state_or_error(
+                    session,
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    state_id=action.target_state_id,
+                )
+                target_state_id = target.id
+                sources = await self._get_source_states_or_error(
+                    session,
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    target_state_id=target.id,
+                    source_state_ids=action.source_state_ids,
+                )
+                requirements = await self._load_active_requirements_for_states(
+                    session,
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    state_ids=[source.id for source in sources],
+                )
+                before_json = {
+                    "target": _state_snapshot(target),
+                    "sources": [_state_snapshot(row) for row in sources],
+                    "requirements": [_requirement_snapshot(row) for row in requirements],
+                }
+                if status == "applied":
+                    after_json = await self._apply_supersede_states(
+                        session,
+                        organization_id=organization_id,
+                        project_id=project_id,
+                        chapter=chapter,
+                        scene=scene,
+                        target=target,
+                        sources=sources,
+                        requirements=requirements,
                         action=action,
                         created_by=created_by,
                     )
@@ -985,6 +1051,27 @@ class StoryStateMaintainerService:
                 )
             )
         return rows
+
+    async def _load_active_requirements_for_states(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        state_ids: list[str],
+    ) -> list[ChapterStateRequirement]:
+        state_ids = _dedupe_ids(state_ids)
+        if not state_ids:
+            return []
+        result = await session.execute(
+            select(ChapterStateRequirement).where(
+                ChapterStateRequirement.organization_id == organization_id,
+                ChapterStateRequirement.project_id == project_id,
+                ChapterStateRequirement.state_item_id.in_(state_ids),
+                ChapterStateRequirement.status == "active",
+            )
+        )
+        return list(result.scalars().all())
 
     async def _get_requirement_or_error(
         self,
@@ -1411,6 +1498,87 @@ class StoryStateMaintainerService:
             "updated_issue_count": int(issue_result.rowcount or 0),
         }
 
+    async def _apply_supersede_states(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        chapter: Chapter,
+        scene: Scene,
+        target: StoryStateItem,
+        sources: list[StoryStateItem],
+        requirements: list[ChapterStateRequirement],
+        action: _ParsedAction,
+        created_by: str | None,
+    ) -> dict[str, Any]:
+        if (target.status or "active") == "inactive":
+            raise ValueError("replacement_state_inactive")
+
+        history_repo = StoryStateHistoryRepository(session)
+        before_sources = {source.id: story_state_service.snapshot(source) for source in sources}
+        before_requirements = {
+            requirement.id: _requirement_snapshot(requirement) for requirement in requirements
+        }
+        state_reason = (
+            _clean_text(action.patch.get("status_reason"))
+            or action.reason
+            or "ai_story_state_supersede"
+        )
+        requirement_reason = (
+            _clean_text(action.patch.get("requirement_status_reason")) or state_reason
+        )
+
+        for source in sources:
+            source.status = "inactive"
+            source.superseded_by_state_id = target.id
+            source.status_reason = state_reason
+            source.updated_in_chapter_id = chapter.id
+
+        for requirement in requirements:
+            requirement.status = "superseded"
+            requirement.superseded_by_requirement_id = None
+            requirement.status_reason = requirement_reason
+
+        await session.flush()
+
+        for source in sources:
+            await history_repo.create(
+                organization_id=organization_id,
+                project_id=project_id,
+                state_item_id=source.id,
+                chapter_id=chapter.id,
+                scene_id=scene.id,
+                change_type="resolve",
+                before_json=before_sources[source.id],
+                after_json=story_state_service.snapshot(source),
+                reason=f"ai_story_state_maintenance:{action.reason}",
+                source_excerpt=source.source_excerpt,
+                created_by=created_by,
+            )
+
+        for requirement in requirements:
+            await history_repo.create(
+                organization_id=organization_id,
+                project_id=project_id,
+                state_item_id=requirement.state_item_id,
+                chapter_id=chapter.id,
+                scene_id=scene.id,
+                change_type="resolve",
+                before_json={"requirement": before_requirements[requirement.id]},
+                after_json={"requirement": _requirement_snapshot(requirement)},
+                reason=f"ai_story_state_maintenance:{action.reason}",
+                source_excerpt="",
+                created_by=created_by,
+            )
+
+        return {
+            "target": _state_snapshot(target),
+            "sources": [_state_snapshot(source) for source in sources],
+            "requirements": [_requirement_snapshot(requirement) for requirement in requirements],
+            "superseded_requirement_count": len(requirements),
+        }
+
     async def _apply_requirement_status(
         self,
         session: AsyncSession,
@@ -1516,6 +1684,51 @@ class StoryStateMaintainerService:
             scene=scene,
             target=target,
             sources=sources,
+            action=parsed,
+            created_by=created_by,
+        )
+
+    async def _apply_logged_supersede_state_action(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        chapter: Chapter,
+        scene: Scene,
+        action_row: StoryStateMaintenanceAction,
+        parsed: _ParsedAction,
+        created_by: str | None,
+    ) -> dict[str, Any]:
+        target = await self._get_state_for_logged_action(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            action=action_row,
+        )
+        sources = await self._get_source_states_for_logged_action(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            target_state_id=target.id,
+            action=action_row,
+            parsed=parsed,
+        )
+        requirements = await self._get_requirements_for_logged_supersede_action(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            action=action_row,
+        )
+        return await self._apply_supersede_states(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            chapter=chapter,
+            scene=scene,
+            target=target,
+            sources=sources,
+            requirements=requirements,
             action=parsed,
             created_by=created_by,
         )
@@ -1685,6 +1898,42 @@ class StoryStateMaintainerService:
                 raise ConflictError("story_state_maintenance_action_target_changed")
         return sources
 
+    async def _get_requirements_for_logged_supersede_action(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        action: StoryStateMaintenanceAction,
+    ) -> list[ChapterStateRequirement]:
+        snapshots = [
+            snapshot
+            for snapshot in _json_list(_json_dict(action.before_json).get("requirements"))
+            if isinstance(snapshot, dict)
+        ]
+        requirements: list[ChapterStateRequirement] = []
+        for snapshot in snapshots:
+            requirement_id = _clean_id(snapshot.get("id"))
+            if not requirement_id:
+                raise ConflictError("story_state_maintenance_action_snapshot_missing")
+            try:
+                requirement = await self._get_requirement_or_error(
+                    session,
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    requirement_id=requirement_id,
+                )
+            except ValueError as exc:
+                raise ConflictError(str(exc)) from exc
+            if not _snapshot_matches_model(
+                requirement,
+                snapshot,
+                _REQUIREMENT_RESTORE_FIELDS,
+            ):
+                raise ConflictError("story_state_maintenance_action_target_changed")
+            requirements.append(requirement)
+        return requirements
+
     async def _get_requirement_for_logged_action(
         self,
         session: AsyncSession,
@@ -1761,6 +2010,128 @@ class StoryStateMaintainerService:
             source_excerpt=state.source_excerpt,
             created_by=created_by,
         )
+
+    async def _rollback_supersede_state_action(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        action: StoryStateMaintenanceAction,
+        created_by: str | None,
+    ) -> None:
+        before_source_snapshots = [
+            snapshot
+            for snapshot in _json_list(_json_dict(action.before_json).get("sources"))
+            if isinstance(snapshot, dict)
+        ]
+        after_source_snapshots = {
+            _clean_id(snapshot.get("id")): snapshot
+            for snapshot in _json_list(_json_dict(action.after_json).get("sources"))
+            if isinstance(snapshot, dict)
+        }
+        before_requirement_snapshots = [
+            snapshot
+            for snapshot in _json_list(_json_dict(action.before_json).get("requirements"))
+            if isinstance(snapshot, dict)
+        ]
+        after_requirement_snapshots = {
+            _clean_id(snapshot.get("id")): snapshot
+            for snapshot in _json_list(_json_dict(action.after_json).get("requirements"))
+            if isinstance(snapshot, dict)
+        }
+        if not before_source_snapshots:
+            raise ConflictError("story_state_maintenance_action_snapshot_missing")
+
+        states: list[tuple[StoryStateItem, dict[str, Any], dict[str, Any]]] = []
+        for before_snapshot in before_source_snapshots:
+            state_id = _clean_id(before_snapshot.get("id"))
+            if not state_id:
+                raise ConflictError("story_state_maintenance_action_snapshot_missing")
+            try:
+                state = await self._get_state_or_error(
+                    session,
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    state_id=state_id,
+                )
+            except ValueError as exc:
+                raise ConflictError(str(exc)) from exc
+            after_snapshot = after_source_snapshots.get(state.id)
+            if after_snapshot and not _snapshot_matches_model(
+                state,
+                after_snapshot,
+                _STATE_RESTORE_FIELDS,
+            ):
+                raise ConflictError("story_state_maintenance_action_target_changed")
+            states.append((state, story_state_service.snapshot(state), before_snapshot))
+
+        requirements: list[
+            tuple[ChapterStateRequirement, dict[str, Any], dict[str, Any]]
+        ] = []
+        for before_snapshot in before_requirement_snapshots:
+            requirement_id = _clean_id(before_snapshot.get("id"))
+            if not requirement_id:
+                raise ConflictError("story_state_maintenance_action_snapshot_missing")
+            try:
+                requirement = await self._get_requirement_or_error(
+                    session,
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    requirement_id=requirement_id,
+                )
+            except ValueError as exc:
+                raise ConflictError(str(exc)) from exc
+            after_snapshot = after_requirement_snapshots.get(requirement.id)
+            if after_snapshot and not _snapshot_matches_model(
+                requirement,
+                after_snapshot,
+                _REQUIREMENT_RESTORE_FIELDS,
+            ):
+                raise ConflictError("story_state_maintenance_action_target_changed")
+            requirements.append(
+                (requirement, _requirement_snapshot(requirement), before_snapshot)
+            )
+
+        for state, _, before_snapshot in states:
+            _restore_model_snapshot(state, before_snapshot, _STATE_RESTORE_FIELDS)
+        for requirement, _, before_snapshot in requirements:
+            _restore_model_snapshot(
+                requirement,
+                before_snapshot,
+                _REQUIREMENT_RESTORE_FIELDS,
+            )
+        await session.flush()
+
+        history_repo = StoryStateHistoryRepository(session)
+        for state, current_snapshot, _ in states:
+            await history_repo.create(
+                organization_id=organization_id,
+                project_id=project_id,
+                state_item_id=state.id,
+                chapter_id=action.chapter_id or state.updated_in_chapter_id,
+                scene_id=action.scene_id or state.source_scene_id,
+                change_type="update",
+                before_json=current_snapshot,
+                after_json=story_state_service.snapshot(state),
+                reason=f"rollback_ai_story_state_maintenance:{action.id}",
+                source_excerpt=state.source_excerpt,
+                created_by=created_by,
+            )
+        for requirement, current_snapshot, _ in requirements:
+            await history_repo.create(
+                organization_id=organization_id,
+                project_id=project_id,
+                state_item_id=requirement.state_item_id,
+                chapter_id=action.chapter_id or requirement.chapter_id,
+                scene_id=action.scene_id,
+                change_type="update",
+                before_json={"requirement": current_snapshot},
+                after_json={"requirement": _requirement_snapshot(requirement)},
+                reason=f"rollback_ai_story_state_maintenance:{action.id}",
+                source_excerpt="",
+                created_by=created_by,
+            )
 
     async def _rollback_create_requirement_action(
         self,

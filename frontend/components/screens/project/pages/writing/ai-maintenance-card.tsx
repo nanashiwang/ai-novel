@@ -14,6 +14,7 @@ import type {
 const actionLabel: Record<StoryStateMaintenanceAction["action_type"], string> = {
   update_state: "更新设定",
   merge_states: "合并设定",
+  supersede_state: "替代设定",
   create_requirement: "新增承接",
   resolve_requirement: "解决承接",
   supersede_requirement: "替代承接",
@@ -149,8 +150,14 @@ function AIMaintenanceActionItem({
   const targetState = action.target_state_id
     ? storyStateById[action.target_state_id]
     : null;
-  const beforeSummary = findSummary(action.before_json);
-  const afterSummary = findSummary(action.after_json);
+  const beforeSummary =
+    action.action_type === "supersede_state"
+      ? findSourceSummary(action.before_json) || findSummary(action.before_json)
+      : findSummary(action.before_json);
+  const afterSummary =
+    action.action_type === "supersede_state"
+      ? findSourceSummary(action.after_json) || findSummary(action.after_json)
+      : findSummary(action.after_json);
   const impactText = buildImpactText(action);
   const canApply = action.status === "needs_review" || action.status === "suggested";
   const isApplying = applyingActionId === action.id;
@@ -274,9 +281,20 @@ function findSummary(value: Record<string, unknown>) {
   return "";
 }
 
+function findSourceSummary(value: Record<string, unknown>) {
+  const firstSource = readPath(value, ["sources", "0", "summary"]);
+  if (!firstSource) return "";
+  const status = readPath(value, ["sources", "0", "status"]);
+  return status ? `${firstSource}（${status}）` : firstSource;
+}
+
 function buildImpactText(action: StoryStateMaintenanceAction) {
   const requirementCount = readNumber(action.after_json, "updated_requirement_count");
   const issueCount = readNumber(action.after_json, "updated_issue_count");
+  const supersededRequirementCount = readNumber(
+    action.after_json,
+    "superseded_requirement_count",
+  );
   const parts = [];
   if (action.source_state_ids.length > 0) {
     parts.push(`来源设定 ${action.source_state_ids.length} 条`);
@@ -286,6 +304,9 @@ function buildImpactText(action: StoryStateMaintenanceAction) {
   }
   if (issueCount) {
     parts.push(`回连审稿问题 ${issueCount} 条`);
+  }
+  if (supersededRequirementCount) {
+    parts.push(`同步替代承接 ${supersededRequirementCount} 条`);
   }
   if (action.target_requirement_id && action.action_type !== "merge_states") {
     parts.push(`承接要求 ${action.target_requirement_id.slice(0, 12)}…`);

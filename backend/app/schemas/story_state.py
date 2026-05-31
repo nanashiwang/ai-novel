@@ -37,6 +37,7 @@ RequirementStatus = Literal["active", "superseded", "resolved", "disabled"]
 StoryStateMaintenanceActionType = Literal[
     "update_state",
     "merge_states",
+    "supersede_state",
     "create_requirement",
     "resolve_requirement",
     "supersede_requirement",

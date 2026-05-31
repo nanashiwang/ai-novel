@@ -313,6 +313,96 @@ async def test_story_state_maintainer_merges_states_and_rewires_links(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_story_state_maintainer_supersedes_state_and_requirements(
+    monkeypatch,
+    db_session,
+):
+    user_id, project, chapter, scene, draft = _base_scene()
+    replacement = _state(
+        org_id=project.organization_id,
+        project_id=project.id,
+        chapter_id=chapter.id,
+        scene_id=scene.id,
+        name="因果灰线新代价",
+        summary="青冥洗瞳露后，因果灰线视野使用代价变为短暂酸胀。",
+        priority=96,
+    )
+    old_state = _state(
+        org_id=project.organization_id,
+        project_id=project.id,
+        chapter_id=chapter.id,
+        scene_id=scene.id,
+        name="因果灰线旧代价",
+        summary="因果灰线视野使用后左眼会剧痛。",
+        priority=90,
+    )
+    requirement = ChapterStateRequirement(
+        id=new_id("state_req"),
+        organization_id=project.organization_id,
+        project_id=project.id,
+        chapter_id=chapter.id,
+        target_chapter_id=chapter.id,
+        state_item_id=old_state.id,
+        requirement_type="must_remember",
+        summary="本章必须承接因果灰线的旧剧痛代价。",
+        priority=92,
+        origin_type="manual",
+        status="active",
+    )
+    db_session.add_all([project, chapter, scene, draft, replacement, old_state, requirement])
+    await db_session.commit()
+
+    result = await _run_with_response(
+        monkeypatch,
+        db_session,
+        response={
+            "actions": [
+                {
+                    "type": "supersede_state",
+                    "target_state_id": replacement.id,
+                    "source_state_ids": [old_state.id],
+                    "confidence": 0.9,
+                    "risk_level": "low",
+                    "reason": "正文明确写出青冥洗瞳露让旧剧痛代价被酸胀替代",
+                    "patch": {
+                        "status_reason": "旧代价已被青冥洗瞳露后的新代价替代",
+                        "requirement_status_reason": "旧承接要求已被新关键设定替代",
+                    },
+                }
+            ]
+        },
+        user_id=user_id,
+        project=project,
+        chapter=chapter,
+        scene=scene,
+        draft=draft,
+    )
+    await db_session.commit()
+
+    assert result["applied_count"] == 1
+    await db_session.refresh(old_state)
+    await db_session.refresh(replacement)
+    await db_session.refresh(requirement)
+    assert replacement.status == "active"
+    assert old_state.status == "inactive"
+    assert old_state.superseded_by_state_id == replacement.id
+    assert old_state.status_reason == "旧代价已被青冥洗瞳露后的新代价替代"
+    assert requirement.status == "superseded"
+    assert requirement.status_reason == "旧承接要求已被新关键设定替代"
+
+    action = (await db_session.execute(select(StoryStateMaintenanceAction))).scalar_one()
+    assert action.action_type == "supersede_state"
+    assert action.target_state_id == replacement.id
+    assert action.source_state_ids == [old_state.id]
+    assert action.after_json["superseded_requirement_count"] == 1
+    assert action.after_json["sources"][0]["status"] == "inactive"
+
+    history = (await db_session.execute(select(StoryStateHistory))).scalars().all()
+    assert len(history) == 2
+    assert {item.state_item_id for item in history} == {old_state.id, requirement.state_item_id}
+
+
+@pytest.mark.asyncio
 async def test_story_state_maintainer_resolves_requirement(monkeypatch, db_session):
     user_id, project, chapter, scene, draft = _base_scene()
     state = _state(
@@ -605,6 +695,114 @@ async def test_story_state_maintainer_rolls_back_applied_update(monkeypatch, db_
     history = (await db_session.execute(select(StoryStateHistory))).scalars().all()
     assert len(history) == 2
     assert any(item.reason.startswith("rollback_ai_story_state_maintenance") for item in history)
+
+
+@pytest.mark.asyncio
+async def test_story_state_maintainer_applies_and_rolls_back_logged_supersede_state(
+    monkeypatch,
+    db_session,
+):
+    user_id, project, chapter, scene, draft = _base_scene()
+    replacement = _state(
+        org_id=project.organization_id,
+        project_id=project.id,
+        chapter_id=chapter.id,
+        scene_id=scene.id,
+        name="因果灰线新代价",
+        summary="青冥洗瞳露后，因果灰线视野使用代价变为短暂酸胀。",
+        priority=96,
+    )
+    old_state = _state(
+        org_id=project.organization_id,
+        project_id=project.id,
+        chapter_id=chapter.id,
+        scene_id=scene.id,
+        name="因果灰线旧代价",
+        summary="因果灰线视野使用后左眼会剧痛。",
+        priority=90,
+    )
+    requirement = ChapterStateRequirement(
+        id=new_id("state_req"),
+        organization_id=project.organization_id,
+        project_id=project.id,
+        chapter_id=chapter.id,
+        target_chapter_id=chapter.id,
+        state_item_id=old_state.id,
+        requirement_type="must_remember",
+        summary="本章必须承接因果灰线的旧剧痛代价。",
+        priority=92,
+        origin_type="manual",
+        status="active",
+    )
+    db_session.add_all([project, chapter, scene, draft, replacement, old_state, requirement])
+    await db_session.commit()
+
+    result = await _run_with_response(
+        monkeypatch,
+        db_session,
+        response={
+            "actions": [
+                {
+                    "type": "supersede_state",
+                    "target_state_id": replacement.id,
+                    "source_state_ids": [old_state.id],
+                    "confidence": 0.95,
+                    "risk_level": "high",
+                    "reason": "核心能力代价变化，需要人工确认",
+                    "patch": {
+                        "status_reason": "旧代价已被新代价替代",
+                        "requirement_status_reason": "旧承接要求已过期",
+                    },
+                }
+            ]
+        },
+        user_id=user_id,
+        project=project,
+        chapter=chapter,
+        scene=scene,
+        draft=draft,
+    )
+    await db_session.commit()
+
+    assert result["needs_review_count"] == 1
+    await db_session.refresh(old_state)
+    await db_session.refresh(requirement)
+    assert old_state.status == "active"
+    assert requirement.status == "active"
+
+    action = (await db_session.execute(select(StoryStateMaintenanceAction))).scalar_one()
+    applied = await story_state_maintainer_service.apply_action(
+        db_session,
+        organization_id=project.organization_id,
+        project_id=project.id,
+        action_id=action.id,
+        created_by=user_id,
+    )
+    await db_session.commit()
+
+    assert applied.status == "applied"
+    await db_session.refresh(old_state)
+    await db_session.refresh(requirement)
+    assert old_state.status == "inactive"
+    assert old_state.superseded_by_state_id == replacement.id
+    assert requirement.status == "superseded"
+
+    rolled_back = await story_state_maintainer_service.rollback_action(
+        db_session,
+        organization_id=project.organization_id,
+        project_id=project.id,
+        action_id=action.id,
+        created_by=user_id,
+    )
+    await db_session.commit()
+
+    assert rolled_back.status == "rolled_back"
+    await db_session.refresh(old_state)
+    await db_session.refresh(requirement)
+    assert old_state.status == "active"
+    assert old_state.superseded_by_state_id is None
+    assert requirement.status == "active"
+    assert requirement.status_reason == ""
 
 
 @pytest.mark.asyncio
