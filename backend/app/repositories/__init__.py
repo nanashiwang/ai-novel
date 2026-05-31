@@ -239,6 +239,7 @@ class ChapterStateRequirementRepository(BaseRepository[ChapterStateRequirement])
         organization_id: str,
         project_id: str,
         chapter_id: str,
+        status: str | None = None,
         order_by=None,
     ):
         stmt = select(ChapterStateRequirement).where(
@@ -246,6 +247,8 @@ class ChapterStateRequirementRepository(BaseRepository[ChapterStateRequirement])
             ChapterStateRequirement.project_id == project_id,
             ChapterStateRequirement.chapter_id == chapter_id,
         )
+        if status:
+            stmt = stmt.where(ChapterStateRequirement.status == status)
         if order_by is not None:
             stmt = stmt.order_by(order_by)
         else:

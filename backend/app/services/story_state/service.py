@@ -344,6 +344,7 @@ class StoryStateService:
                 source_scene_id=source_scene_id,
                 target_chapter_id=target_chapter_id or chapter_id,
                 origin_type=origin_type,
+                status="active",
                 state_item_id=state.id,
                 requirement_type=requirement_type,
                 summary=summary,
@@ -401,6 +402,8 @@ def _is_next_chapter_requirement(summary: str) -> bool:
 
 
 def _is_preserved_requirement(row: ChapterStateRequirement) -> bool:
+    if (row.status or "active") != "active":
+        return True
     origin_type = (row.origin_type or "").strip()
     if origin_type in {"previous_chapter_carryover", "manual"}:
         return True

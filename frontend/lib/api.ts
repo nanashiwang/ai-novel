@@ -346,6 +346,11 @@ export type ChapterStateRequirementOriginType =
   | "previous_chapter_carryover"
   | "manual"
   | "backfill";
+export type ChapterStateRequirementStatus =
+  | "active"
+  | "superseded"
+  | "resolved"
+  | "disabled";
 
 export type StoryStateItem = {
   id: string;
@@ -387,6 +392,10 @@ export type ChapterStateRequirement = {
   summary: string;
   priority: number;
   origin_type: ChapterStateRequirementOriginType;
+  status: ChapterStateRequirementStatus;
+  superseded_by_requirement_id: string | null;
+  source_issue_id: string | null;
+  status_reason: string;
   source_chapter_id: string | null;
   source_chapter_index: number | null;
   source_chapter_title: string | null;
@@ -400,12 +409,16 @@ export type ChapterStateRequirementCreate = {
   requirement_type: ChapterStateRequirementType;
   summary: string;
   priority: number;
+  source_issue_id?: string | null;
 };
 
 export type ChapterStateRequirementPatch = {
   requirement_type?: ChapterStateRequirementType | null;
   summary?: string | null;
   priority?: number | null;
+  status?: ChapterStateRequirementStatus | null;
+  superseded_by_requirement_id?: string | null;
+  status_reason?: string | null;
 };
 
 export type StoryStatePatch = {

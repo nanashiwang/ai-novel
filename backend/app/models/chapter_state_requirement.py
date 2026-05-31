@@ -37,6 +37,25 @@ class ChapterStateRequirement(Base, TenantMixin, TimestampMixin):
         server_default=text("'current_chapter_extract'"),
         index=True,
     )
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default="active",
+        server_default=text("'active'"),
+        index=True,
+    )
+    superseded_by_requirement_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("chapter_state_requirements.id"),
+        nullable=True,
+        index=True,
+    )
+    source_issue_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("continuity_issues.id"),
+        nullable=True,
+        index=True,
+    )
+    status_reason: Mapped[str] = mapped_column(Text, default="", server_default="")
     state_item_id: Mapped[str] = mapped_column(
         String(64),
         ForeignKey("story_state_items.id"),

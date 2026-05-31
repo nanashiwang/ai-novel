@@ -583,6 +583,10 @@ _POSTGRES_SCHEMA_FIXES = [
       source_scene_id VARCHAR(64) REFERENCES scenes(id),
       target_chapter_id VARCHAR(64) REFERENCES chapters(id),
       origin_type VARCHAR(32) NOT NULL DEFAULT 'current_chapter_extract',
+      status VARCHAR(32) NOT NULL DEFAULT 'active',
+      superseded_by_requirement_id VARCHAR(64) REFERENCES chapter_state_requirements(id),
+      source_issue_id VARCHAR(64),
+      status_reason TEXT NOT NULL DEFAULT '',
       state_item_id VARCHAR(64) NOT NULL REFERENCES story_state_items(id),
       requirement_type VARCHAR(32) NOT NULL,
       summary TEXT NOT NULL DEFAULT '',
@@ -629,6 +633,50 @@ _POSTGRES_SCHEMA_FIXES = [
         "CREATE INDEX IF NOT EXISTS ix_chapter_state_requirements_project_source_chapter "
         "ON chapter_state_requirements(project_id, source_chapter_id)"
     ),
+    (
+        "ALTER TABLE chapter_state_requirements "
+        "ADD COLUMN IF NOT EXISTS status VARCHAR(32) NOT NULL DEFAULT 'active'"
+    ),
+    (
+        "ALTER TABLE chapter_state_requirements "
+        "ADD COLUMN IF NOT EXISTS superseded_by_requirement_id VARCHAR(64)"
+    ),
+    (
+        "ALTER TABLE chapter_state_requirements "
+        "ADD COLUMN IF NOT EXISTS source_issue_id VARCHAR(64)"
+    ),
+    (
+        "ALTER TABLE chapter_state_requirements "
+        "ADD COLUMN IF NOT EXISTS status_reason TEXT NOT NULL DEFAULT ''"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_chapter_state_requirements_project_status "
+        "ON chapter_state_requirements(project_id, status)"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_chapter_state_requirements_source_issue "
+        "ON chapter_state_requirements(source_issue_id)"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_chapter_state_requirements_superseded_by "
+        "ON chapter_state_requirements(superseded_by_requirement_id)"
+    ),
+    """
+    DO $$ BEGIN
+      ALTER TABLE chapter_state_requirements
+      ADD CONSTRAINT fk_chapter_state_requirements_superseded_by
+      FOREIGN KEY (superseded_by_requirement_id) REFERENCES chapter_state_requirements(id);
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$;
+    """,
+    """
+    DO $$ BEGIN
+      ALTER TABLE chapter_state_requirements
+      ADD CONSTRAINT fk_chapter_state_requirements_source_issue
+      FOREIGN KEY (source_issue_id) REFERENCES continuity_issues(id);
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$;
+    """,
     # Sprint 18-B1：审稿问题关联关键状态项；旧数据卷需要运行时补列。
     "ALTER TABLE continuity_issues ADD COLUMN IF NOT EXISTS story_state_item_id VARCHAR(64)",
     (

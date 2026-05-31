@@ -94,6 +94,20 @@ const REQUIREMENT_TYPE_LABEL: Record<string, string> = {
   candidate_payoff: "可回收",
 };
 
+const REQUIREMENT_STATUS_LABEL: Record<string, string> = {
+  active: "当前有效",
+  superseded: "已替代",
+  resolved: "已解决",
+  disabled: "已停用",
+};
+
+function getRequirementStatusTone(status: string): BadgeTone {
+  if (status === "active") return "green";
+  if (status === "superseded") return "blue";
+  if (status === "resolved") return "violet";
+  return "slate";
+}
+
 function getRequirementTone(type: string): BadgeTone {
   if (type === "must_not_conflict") return "rose";
   if (type === "must_remember") return "amber";
@@ -151,6 +165,9 @@ function ChapterRequirementPanel({
   onSelectState: (state: StoryStateItem) => void;
   onOpenList: () => void;
 }) {
+  const activeCount = items.filter(
+    ({ requirement }) => (requirement.status ?? "active") === "active",
+  ).length;
   return (
     <div className="rounded-2xl border border-slate-200 bg-white">
       <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-3 py-2.5">
@@ -160,10 +177,10 @@ function ChapterRequirementPanel({
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <Badge
-            tone={items.length > 0 ? "amber" : "slate"}
+            tone={activeCount > 0 ? "amber" : "slate"}
             className="whitespace-nowrap rounded-md !px-1.5 !py-0.5 !text-[10px]"
           >
-            {items.length} 条
+            {activeCount}/{items.length} 有效
           </Badge>
           <button
             type="button"
@@ -192,6 +209,10 @@ function ChapterRequirementPanel({
                     <Badge tone={getRequirementOriginTone(requirement)}>
                       {formatRequirementOriginLabel(requirement)}
                     </Badge>
+                    <Badge tone={getRequirementStatusTone(requirement.status ?? "active")}>
+                      {REQUIREMENT_STATUS_LABEL[requirement.status ?? "active"] ?? requirement.status}
+                    </Badge>
+                    {requirement.source_issue_id ? <Badge tone="rose">来自审稿</Badge> : null}
                     {state?.is_hard_constraint ? (
                       <Badge tone="rose">硬约束</Badge>
                     ) : null}
@@ -212,6 +233,11 @@ function ChapterRequirementPanel({
               <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-600">
                 {requirement.summary || state?.summary || "—"}
               </p>
+              {requirement.status_reason ? (
+                <p className="mt-1 line-clamp-1 text-[11px] text-slate-400">
+                  状态说明：{requirement.status_reason}
+                </p>
+              ) : null}
               <div className="mt-2 flex items-center justify-between gap-2">
                 <p className="min-w-0 truncate text-[11px] text-slate-400">
                   {state ? storyStateMeta(state) : `关联 ID：${requirement.state_item_id}`}

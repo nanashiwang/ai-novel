@@ -6,6 +6,7 @@ from sqlalchemy import select
 from app.models import (
     Chapter,
     ChapterStateRequirement,
+    ContinuityIssue,
     Project,
     Scene,
     StoryStateItem,
@@ -379,8 +380,32 @@ async def test_scene_anti_forgetting_preview_returns_injected_rows(client, db_se
         priority=98,
         origin_type="manual",
     )
-    db_session.add_all([chapter, scene, state, requirement])
+    disabled_requirement = ChapterStateRequirement(
+        id=new_id("state_req"),
+        organization_id=org_id,
+        project_id=project_id,
+        chapter_id=chapter.id,
+        target_chapter_id=chapter.id,
+        state_item_id=state.id,
+        requirement_type="must_not_conflict",
+        summary="旧要求：因果灰线必须剧烈刺痛。",
+        priority=99,
+        origin_type="manual",
+        status="superseded",
+        status_reason="青冥洗瞳露已缓解旧代价。",
+    )
+    db_session.add_all([chapter, scene, state, requirement, disabled_requirement])
     await db_session.commit()
+
+    list_res = await client.get(
+        f"/api/v1/projects/{project_id}/chapters/{chapter.id}/state-requirements",
+        headers=headers,
+    )
+    assert list_res.status_code == 200, list_res.text
+    assert {item["id"] for item in list_res.json()["items"]} == {
+        requirement.id,
+        disabled_requirement.id,
+    }
 
     res = await client.get(
         f"/api/v1/projects/{project_id}/scenes/{scene.id}/anti-forgetting-preview",
@@ -393,11 +418,14 @@ async def test_scene_anti_forgetting_preview_returns_injected_rows(client, db_se
     assert data["chapter_id"] == chapter.id
     assert data["meta"]["anti_forgetting_state_count"] >= 1
     assert data["meta"]["anti_forgetting_requirement_count"] == 1
+    assert [item["id"] for item in data["requirements"]] == [requirement.id]
     assert data["requirements"][0]["id"] == requirement.id
+    assert data["requirements"][0]["status"] == "active"
     assert data["requirements"][0]["origin_type"] == "manual"
     assert data["requirements"][0]["state_item"]["id"] == state.id
     assert data["story_states"][0]["id"] == state.id
     assert f"requirement_id={requirement.id}" in data["prompt_block"]
+    assert f"requirement_id={disabled_requirement.id}" not in data["prompt_block"]
     assert f"story_state_item_id={state.id}" in data["prompt_block"]
 
 
@@ -444,7 +472,20 @@ async def test_state_requirements_api_supports_manual_correction(client, db_sess
         priority=92,
         is_hard_constraint=True,
     )
-    db_session.add_all([chapter, state])
+    issue = ContinuityIssue(
+        id=new_id("issue"),
+        organization_id=org_id,
+        project_id=project_id,
+        chapter_id=chapter.id,
+        scene_id=None,
+        story_state_item_id=state.id,
+        issue_type="state_contradiction",
+        severity="high",
+        description="因果灰线代价被写丢。",
+        suggested_fix="固化为后续章节承接要求。",
+        status="open",
+    )
+    db_session.add_all([chapter, state, issue])
     await db_session.commit()
 
     create_res = await client.post(
@@ -455,11 +496,13 @@ async def test_state_requirements_api_supports_manual_correction(client, db_sess
             "requirement_type": "must_remember",
             "summary": "本章必须承接因果灰线视野的左眼代价。",
             "priority": 88,
+            "source_issue_id": issue.id,
         },
     )
     assert create_res.status_code == 201, create_res.text
     created = create_res.json()
     assert created["origin_type"] == "manual"
+    assert created["source_issue_id"] == issue.id
     assert created["state_item"]["id"] == state.id
     assert created["summary"] == "本章必须承接因果灰线视野的左眼代价。"
 
@@ -481,6 +524,22 @@ async def test_state_requirements_api_supports_manual_correction(client, db_sess
     assert patched["requirement_type"] == "must_not_conflict"
     assert patched["summary"] == "不能把因果灰线写成无限制常驻能力。"
     assert patched["priority"] == 96
+
+    disable_res = await client.patch(
+        (
+            f"/api/v1/projects/{project_id}/chapters/{chapter.id}/state-requirements/"
+            f"{created['id']}"
+        ),
+        headers=headers,
+        json={
+            "status": "superseded",
+            "status_reason": "主角获得异宝后，左眼代价已被新设定替代。",
+        },
+    )
+    assert disable_res.status_code == 200, disable_res.text
+    disabled = disable_res.json()
+    assert disabled["status"] == "superseded"
+    assert disabled["status_reason"] == "主角获得异宝后，左眼代价已被新设定替代。"
 
     delete_res = await client.delete(
         (
@@ -528,7 +587,21 @@ async def test_rebuild_preserves_manual_requirements(db_session):
         priority=50,
         origin_type="current_chapter_extract",
     )
-    db_session.add_all([manual, rebuildable])
+    inactive = ChapterStateRequirement(
+        id=new_id("state_req"),
+        organization_id=project.organization_id,
+        project_id=project.id,
+        chapter_id=current.id,
+        target_chapter_id=current.id,
+        state_item_id=state.id,
+        requirement_type="must_not_conflict",
+        summary="已替代旧要求：旧铜钱禁制会持续灼痛。",
+        priority=70,
+        origin_type="current_chapter_extract",
+        status="superseded",
+        status_reason="后续已改成寒意提醒。",
+    )
+    db_session.add_all([manual, rebuildable, inactive])
     await db_session.commit()
 
     result = await story_state_service.rebuild_chapter_requirements(
@@ -550,6 +623,7 @@ async def test_rebuild_preserves_manual_requirements(db_session):
         )
     ).scalars().all()
     assert result["deleted"] == 1
-    assert len(rows) == 1
-    assert rows[0].id == manual.id
-    assert rows[0].origin_type == "manual"
+    assert {row.id for row in rows} == {manual.id, inactive.id}
+    by_id = {row.id: row for row in rows}
+    assert by_id[manual.id].origin_type == "manual"
+    assert by_id[inactive.id].status == "superseded"

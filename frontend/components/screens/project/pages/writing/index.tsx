@@ -240,6 +240,7 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
         requirement_type: requirementTypeFromIssue(issue.issue_type),
         summary: requirementSummaryFromIssue(issue),
         priority: priorityFromSeverity(issue.severity),
+        source_issue_id: issue.id,
       });
     },
     onSuccess: () => {

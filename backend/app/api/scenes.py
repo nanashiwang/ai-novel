@@ -93,6 +93,10 @@ async def _build_requirement_responses(
             "summary": item.summary,
             "priority": item.priority,
             "origin_type": item.origin_type or "current_chapter_extract",
+            "status": item.status or "active",
+            "superseded_by_requirement_id": item.superseded_by_requirement_id,
+            "source_issue_id": item.source_issue_id,
+            "status_reason": item.status_reason or "",
             "source_chapter_id": item.source_chapter_id,
             "source_chapter_index": (
                 source_chapter_by_id[item.source_chapter_id].chapter_index

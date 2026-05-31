@@ -119,6 +119,9 @@ export function AntiForgettingPreviewCard({
                           <Badge tone={requirement.origin_type === "manual" ? "orange" : "slate"}>
                             {requirementOriginLabel(requirement)}
                           </Badge>
+                          {requirement.source_issue_id ? (
+                            <Badge tone="rose">来自审稿</Badge>
+                          ) : null}
                           <span className="text-[11px] font-semibold text-slate-400">
                             P{requirement.priority}
                           </span>

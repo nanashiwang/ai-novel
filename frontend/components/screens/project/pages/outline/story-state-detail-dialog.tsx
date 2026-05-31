@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import {
   type ChapterStateRequirement,
+  type ChapterStateRequirementStatus,
   type ChapterStateRequirementType,
   type StoryStateHistory,
   type StoryStateItem,
@@ -94,6 +95,27 @@ const requirementTypeLabel: Record<string, string> = {
   should_reference: "建议呼应",
   candidate_payoff: "可回收",
 };
+
+const requirementStatusOptions: ChapterStateRequirementStatus[] = [
+  "active",
+  "superseded",
+  "resolved",
+  "disabled",
+];
+
+const requirementStatusLabel: Record<ChapterStateRequirementStatus, string> = {
+  active: "当前有效",
+  superseded: "已替代",
+  resolved: "已解决",
+  disabled: "已停用",
+};
+
+function requirementStatusTone(status: ChapterStateRequirementStatus) {
+  if (status === "active") return "green" as const;
+  if (status === "superseded") return "blue" as const;
+  if (status === "resolved") return "violet" as const;
+  return "slate" as const;
+}
 
 function requirementTone(type: string) {
   if (type === "must_not_conflict") return "rose" as const;
@@ -539,6 +561,11 @@ export function ChapterRequirementListDialog({
   const [editType, setEditType] = useState<ChapterStateRequirementType>("must_remember");
   const [editSummary, setEditSummary] = useState("");
   const [editPriority, setEditPriority] = useState("80");
+  const [editStatus, setEditStatus] = useState<ChapterStateRequirementStatus>("active");
+  const [editStatusReason, setEditStatusReason] = useState("");
+  const activeCount = items.filter(
+    ({ requirement }) => (requirement.status ?? "active") === "active",
+  ).length;
 
   useEffect(() => {
     if (!newStateId && stateOptions[0]?.id) {
@@ -607,6 +634,8 @@ export function ChapterRequirementListDialog({
         requirement_type: editType,
         summary: editSummary.trim(),
         priority,
+        status: editStatus,
+        status_reason: editStatusReason.trim(),
       });
     },
     onSuccess: () => {
@@ -637,6 +666,8 @@ export function ChapterRequirementListDialog({
     setEditType(requirement.requirement_type);
     setEditSummary(requirement.summary);
     setEditPriority(String(requirement.priority));
+    setEditStatus(requirement.status ?? "active");
+    setEditStatusReason(requirement.status_reason ?? "");
   };
 
   const handleNewStateChange = (stateId: string) => {
@@ -656,7 +687,9 @@ export function ChapterRequirementListDialog({
             <p className="mt-0.5 text-xs text-slate-500">当前章节需要保持一致的状态项。</p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <Badge tone={items.length > 0 ? "amber" : "slate"}>{items.length} 条</Badge>
+            <Badge tone={activeCount > 0 ? "amber" : "slate"}>
+              有效 {activeCount} / 共 {items.length}
+            </Badge>
             <Button
               size="sm"
               variant={showAddForm ? "ghost" : "secondary"}
@@ -752,7 +785,7 @@ export function ChapterRequirementListDialog({
                 <div key={requirement.id} className="px-4 py-3">
                   {isEditing ? (
                     <div className="space-y-3">
-                      <div className="grid gap-3 md:grid-cols-[1fr_90px]">
+                      <div className="grid gap-3 md:grid-cols-[1fr_140px_90px]">
                         <label className="block text-sm font-semibold text-slate-700">
                           类型
                           <select
@@ -765,6 +798,22 @@ export function ChapterRequirementListDialog({
                             {Object.entries(requirementTypeLabel).map(([value, label]) => (
                               <option key={value} value={value}>
                                 {label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="block text-sm font-semibold text-slate-700">
+                          状态
+                          <select
+                            value={editStatus}
+                            onChange={(event) =>
+                              setEditStatus(event.target.value as ChapterStateRequirementStatus)
+                            }
+                            className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-indigo-500"
+                          >
+                            {requirementStatusOptions.map((value) => (
+                              <option key={value} value={value}>
+                                {requirementStatusLabel[value]}
                               </option>
                             ))}
                           </select>
@@ -787,6 +836,15 @@ export function ChapterRequirementListDialog({
                           value={editSummary}
                           onChange={(event) => setEditSummary(event.target.value)}
                           className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-indigo-500"
+                        />
+                      </label>
+                      <label className="block text-sm font-semibold text-slate-700">
+                        状态说明
+                        <input
+                          value={editStatusReason}
+                          onChange={(event) => setEditStatusReason(event.target.value)}
+                          placeholder="例如：第 48 章获得异宝后，旧代价已被替代。"
+                          className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-indigo-500"
                         />
                       </label>
                       <div className="flex justify-end gap-2">
@@ -814,6 +872,10 @@ export function ChapterRequirementListDialog({
                           <Badge tone={requirementOriginTone(requirement)}>
                             {requirementOriginLabel(requirement)}
                           </Badge>
+                          <Badge tone={requirementStatusTone(requirement.status ?? "active")}>
+                            {requirementStatusLabel[requirement.status ?? "active"]}
+                          </Badge>
+                          {requirement.source_issue_id ? <Badge tone="rose">来自审稿</Badge> : null}
                           {state?.is_hard_constraint ? <Badge tone="rose">硬约束</Badge> : null}
                           {state && state.status !== "active" ? (
                             <Badge tone={statusTone(state.status)}>
@@ -836,6 +898,11 @@ export function ChapterRequirementListDialog({
                               : `关联 ID：${requirement.state_item_id}`}
                           </span>
                           <span className="min-w-0 truncate">{requirementOriginDetail(requirement)}</span>
+                          {requirement.status_reason ? (
+                            <span className="min-w-0 truncate">
+                              状态说明：{requirement.status_reason}
+                            </span>
+                          ) : null}
                         </div>
                       </div>
                       <div className="flex shrink-0 flex-col items-end gap-2">

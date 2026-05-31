@@ -1626,6 +1626,7 @@ class ContextBuilder:
                     organization_id=organization_id,
                     project_id=project_id,
                     chapter_id=chapter_id,
+                    status="active",
                 )
             )[:8]
 

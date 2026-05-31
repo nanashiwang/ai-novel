@@ -33,6 +33,7 @@ RequirementOriginType = Literal[
     "manual",
     "backfill",
 ]
+RequirementStatus = Literal["active", "superseded", "resolved", "disabled"]
 
 
 class StoryStateItemResponse(APIModel):
@@ -83,6 +84,10 @@ class ChapterStateRequirementResponse(APIModel):
     summary: str = ""
     priority: int
     origin_type: RequirementOriginType = "current_chapter_extract"
+    status: RequirementStatus = "active"
+    superseded_by_requirement_id: str | None = None
+    source_issue_id: str | None = None
+    status_reason: str = ""
     source_chapter_id: str | None = None
     source_chapter_index: int | None = None
     source_chapter_title: str | None = None
@@ -111,12 +116,16 @@ class ChapterStateRequirementCreateRequest(APIModel):
     requirement_type: RequirementType = "must_remember"
     summary: str = ""
     priority: int = Field(default=80, ge=0)
+    source_issue_id: str | None = None
 
 
 class ChapterStateRequirementPatchRequest(APIModel):
     requirement_type: RequirementType | None = None
     summary: str | None = None
     priority: int | None = Field(default=None, ge=0)
+    status: RequirementStatus | None = None
+    superseded_by_requirement_id: str | None = None
+    status_reason: str | None = None
 
     @model_validator(mode="after")
     def validate_non_empty(self) -> ChapterStateRequirementPatchRequest:
@@ -126,6 +135,9 @@ class ChapterStateRequirementPatchRequest(APIModel):
                 self.requirement_type,
                 self.summary,
                 self.priority,
+                self.status,
+                self.superseded_by_requirement_id,
+                self.status_reason,
             )
         ):
             raise ValueError("At least one updatable field is required")

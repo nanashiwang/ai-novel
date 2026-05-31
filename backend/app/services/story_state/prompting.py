@@ -90,6 +90,7 @@ async def build_anti_forgetting_preview(
                 organization_id=organization_id,
                 project_id=project_id,
                 chapter_id=chapter.id,
+                status="active",
             )
         )[:requirement_limit]
         required_state_ids = {req.state_item_id for req in requirement_rows if req.state_item_id}

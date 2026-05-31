@@ -11,6 +11,7 @@ from app.core.exceptions import NotFoundError
 from app.core.permissions import require_permission
 from app.models.chapter import Chapter
 from app.models.chapter_state_requirement import ChapterStateRequirement
+from app.models.continuity_issue import ContinuityIssue
 from app.models.story_state_item import StoryStateItem
 from app.repositories import (
     ChapterRepository,
@@ -94,6 +95,25 @@ async def _get_requirement_or_404(
     return requirement
 
 
+async def _get_source_issue_or_404(
+    project_id: str,
+    issue_id: str,
+    tenant: TenantDep,
+    db: DbDep,
+) -> ContinuityIssue:
+    result = await db.execute(
+        select(ContinuityIssue).where(
+            ContinuityIssue.organization_id == tenant.organization_id,
+            ContinuityIssue.project_id == project_id,
+            ContinuityIssue.id == issue_id,
+        )
+    )
+    issue = result.scalar_one_or_none()
+    if not issue:
+        raise NotFoundError("continuity_issue_not_found")
+    return issue
+
+
 async def _build_requirement_responses(
     *,
     project_id: str,
@@ -135,6 +155,10 @@ async def _build_requirement_responses(
             "summary": item.summary,
             "priority": item.priority,
             "origin_type": item.origin_type or "current_chapter_extract",
+            "status": item.status or "active",
+            "superseded_by_requirement_id": item.superseded_by_requirement_id,
+            "source_issue_id": item.source_issue_id,
+            "status_reason": item.status_reason or "",
             "source_chapter_id": item.source_chapter_id,
             "source_chapter_index": (
                 source_chapter_by_id[item.source_chapter_id].chapter_index
@@ -330,6 +354,9 @@ async def create_chapter_state_requirement(
     await _get_project_or_404(project_id, tenant, db)
     await _get_chapter_or_404(project_id, chapter_id, tenant, db)
     state = await _get_story_state_or_404(project_id, payload.state_item_id, tenant, db)
+    source_issue_id = (payload.source_issue_id or "").strip() or None
+    if source_issue_id:
+        await _get_source_issue_or_404(project_id, source_issue_id, tenant, db)
     requirement = await ChapterStateRequirementRepository(db).create(
         organization_id=tenant.organization_id,
         project_id=project_id,
@@ -339,6 +366,8 @@ async def create_chapter_state_requirement(
         summary=payload.summary.strip() or state.summary,
         priority=max(0, int(payload.priority or 0)),
         origin_type="manual",
+        status="active",
+        source_issue_id=source_issue_id,
         source_chapter_id=None,
         source_scene_id=None,
         target_chapter_id=chapter_id,
@@ -378,6 +407,10 @@ async def patch_chapter_state_requirement(
     updates = payload.model_dump(exclude_none=True)
     if "summary" in updates:
         updates["summary"] = str(updates["summary"]).strip()
+    if "status_reason" in updates:
+        updates["status_reason"] = str(updates["status_reason"]).strip()
+    if "superseded_by_requirement_id" in updates and not updates["superseded_by_requirement_id"]:
+        updates["superseded_by_requirement_id"] = None
     if "priority" in updates:
         updates["priority"] = max(0, int(updates["priority"] or 0))
     updates["origin_type"] = "manual"

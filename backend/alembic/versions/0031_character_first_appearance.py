@@ -23,15 +23,32 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "characters",
-        sa.Column("first_appearance_chapter", sa.Integer(), nullable=True),
-    )
-    op.create_index(
-        "ix_characters_first_appearance",
-        "characters",
-        ["first_appearance_chapter"],
-    )
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        op.execute(
+            "ALTER TABLE characters ADD COLUMN IF NOT EXISTS "
+            "first_appearance_chapter INTEGER"
+        )
+        op.execute(
+            "CREATE INDEX IF NOT EXISTS ix_characters_first_appearance "
+            "ON characters(first_appearance_chapter)"
+        )
+        return
+
+    inspector = sa.inspect(bind)
+    existing_columns = {col["name"] for col in inspector.get_columns("characters")}
+    if "first_appearance_chapter" not in existing_columns:
+        op.add_column(
+            "characters",
+            sa.Column("first_appearance_chapter", sa.Integer(), nullable=True),
+        )
+    existing_indexes = {idx["name"] for idx in inspector.get_indexes("characters")}
+    if "ix_characters_first_appearance" not in existing_indexes:
+        op.create_index(
+            "ix_characters_first_appearance",
+            "characters",
+            ["first_appearance_chapter"],
+        )
 
 
 def downgrade() -> None:
