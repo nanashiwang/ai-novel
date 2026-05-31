@@ -37,6 +37,7 @@ RequirementStatus = Literal["active", "superseded", "resolved", "disabled"]
 StoryStateMaintenanceActionType = Literal[
     "update_state",
     "merge_states",
+    "create_requirement",
     "resolve_requirement",
     "supersede_requirement",
 ]
@@ -121,6 +122,7 @@ class StoryStateMaintenanceActionResponse(APIModel):
     confidence: float = 0.0
     status: StoryStateMaintenanceStatus = "suggested"
     reason: str = ""
+    patch_json: dict[str, Any] = Field(default_factory=dict)
     before_json: dict[str, Any] = Field(default_factory=dict)
     after_json: dict[str, Any] = Field(default_factory=dict)
     created_by: str | None = None

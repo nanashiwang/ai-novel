@@ -78,7 +78,33 @@
 }
 ```
 
-### 4. supersede_requirement
+### 4. create_requirement
+
+用于“审稿问题暴露出后续必须持续记住/避免冲突的点，但当前还没有对应承接要求”。
+
+要求：
+
+- 必须引用已有 `target_state_id`。
+- 如果来自审稿问题，必须把真实存在的 `source_issue_id` 放进 `patch`。
+- 不要为一次性的正文错误创建承接要求；只有需要后续章节继续记住时才创建。
+
+```json
+{
+  "type": "create_requirement",
+  "target_state_id": "state_xxx",
+  "confidence": 0.9,
+  "risk_level": "low",
+  "reason": "审稿问题指出因果灰线代价被写丢，后续章节需要持续承接",
+  "patch": {
+    "requirement_type": "must_remember",
+    "summary": "后续写作必须承接因果灰线视野使用后的眼部代价。",
+    "priority": 92,
+    "source_issue_id": "issue_xxx"
+  }
+}
+```
+
+### 5. supersede_requirement
 
 用于“旧承接要求已被正文中的新事实替代，后续不应再按旧要求执行”。
 

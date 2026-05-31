@@ -413,6 +413,131 @@ async def test_story_state_maintainer_logs_high_risk_without_applying(monkeypatc
     action = (await db_session.execute(select(StoryStateMaintenanceAction))).scalar_one()
     assert action.status == "needs_review"
     assert action.before_json == action.after_json
+    assert action.patch_json["summary"] == "因果灰线成为无代价常驻能力。"
+
+
+@pytest.mark.asyncio
+async def test_story_state_maintainer_applies_logged_needs_review_action(
+    monkeypatch,
+    db_session,
+):
+    user_id, project, chapter, scene, draft = _base_scene()
+    state = _state(
+        org_id=project.organization_id,
+        project_id=project.id,
+        chapter_id=chapter.id,
+        scene_id=scene.id,
+    )
+    db_session.add_all([project, chapter, scene, draft, state])
+    await db_session.commit()
+
+    result = await _run_with_response(
+        monkeypatch,
+        db_session,
+        response={
+            "actions": [
+                {
+                    "type": "update_state",
+                    "target_state_id": state.id,
+                    "confidence": 0.96,
+                    "risk_level": "high",
+                    "reason": "人工确认后才允许更新核心能力代价",
+                    "patch": {
+                        "summary": "因果灰线视野可常驻开启，但会持续消耗神魂。",
+                        "value_json": {"cost": "soul_drain"},
+                    },
+                }
+            ]
+        },
+        user_id=user_id,
+        project=project,
+        chapter=chapter,
+        scene=scene,
+        draft=draft,
+    )
+    await db_session.commit()
+
+    assert result["needs_review_count"] == 1
+    action = (await db_session.execute(select(StoryStateMaintenanceAction))).scalar_one()
+    applied = await story_state_maintainer_service.apply_action(
+        db_session,
+        organization_id=project.organization_id,
+        project_id=project.id,
+        action_id=action.id,
+        created_by=user_id,
+    )
+    await db_session.commit()
+
+    assert applied.status == "applied"
+    await db_session.refresh(state)
+    assert state.summary == "因果灰线视野可常驻开启，但会持续消耗神魂。"
+    assert state.value_json["cost"] == "soul_drain"
+
+
+@pytest.mark.asyncio
+async def test_story_state_maintainer_creates_requirement_from_issue(monkeypatch, db_session):
+    user_id, project, chapter, scene, draft = _base_scene()
+    state = _state(
+        org_id=project.organization_id,
+        project_id=project.id,
+        chapter_id=chapter.id,
+        scene_id=scene.id,
+    )
+    issue = ContinuityIssue(
+        id=new_id("issue"),
+        organization_id=project.organization_id,
+        project_id=project.id,
+        chapter_id=chapter.id,
+        scene_id=scene.id,
+        story_state_item_id=state.id,
+        issue_type="state_conflict",
+        severity="medium",
+        description="因果灰线代价被写丢。",
+        suggested_fix="后续写作必须承接因果灰线视野的眼部代价。",
+        status="open",
+    )
+    db_session.add_all([project, chapter, scene, draft, state, issue])
+    await db_session.commit()
+
+    result = await _run_with_response(
+        monkeypatch,
+        db_session,
+        response={
+            "actions": [
+                {
+                    "type": "create_requirement",
+                    "target_state_id": state.id,
+                    "confidence": 0.9,
+                    "risk_level": "low",
+                    "reason": "审稿问题指出后续章节必须持续承接眼部代价",
+                    "patch": {
+                        "requirement_type": "must_remember",
+                        "summary": "后续写作必须承接因果灰线视野的眼部代价。",
+                        "priority": 92,
+                        "source_issue_id": issue.id,
+                    },
+                }
+            ]
+        },
+        user_id=user_id,
+        project=project,
+        chapter=chapter,
+        scene=scene,
+        draft=draft,
+    )
+    await db_session.commit()
+
+    assert result["applied_count"] == 1
+    requirement = (await db_session.execute(select(ChapterStateRequirement))).scalar_one()
+    assert requirement.state_item_id == state.id
+    assert requirement.source_issue_id == issue.id
+    assert requirement.summary == "后续写作必须承接因果灰线视野的眼部代价。"
+    assert requirement.priority == 92
+
+    action = (await db_session.execute(select(StoryStateMaintenanceAction))).scalar_one()
+    assert action.action_type == "create_requirement"
+    assert action.status == "applied"
+    assert action.target_requirement_id == requirement.id
 
 
 @pytest.mark.asyncio

@@ -354,6 +354,7 @@ export type ChapterStateRequirementStatus =
 export type StoryStateMaintenanceActionType =
   | "update_state"
   | "merge_states"
+  | "create_requirement"
   | "resolve_requirement"
   | "supersede_requirement";
 export type StoryStateMaintenanceRiskLevel = "low" | "medium" | "high";
@@ -412,6 +413,7 @@ export type StoryStateMaintenanceAction = {
   confidence: number;
   status: StoryStateMaintenanceStatus;
   reason: string;
+  patch_json: Record<string, unknown>;
   before_json: Record<string, unknown>;
   after_json: Record<string, unknown>;
   created_by: string | null;
@@ -591,6 +593,10 @@ export const storyStatesApi = {
   rollbackMaintenanceAction: (projectId: string, actionId: string) =>
     http.post<StoryStateMaintenanceAction>(
       `/projects/${projectId}/story-states/maintenance-actions/${actionId}/rollback`,
+    ),
+  applyMaintenanceAction: (projectId: string, actionId: string) =>
+    http.post<StoryStateMaintenanceAction>(
+      `/projects/${projectId}/story-states/maintenance-actions/${actionId}/apply`,
     ),
   get: (projectId: string, stateId: string) =>
     http.get<StoryStateItem>(`/projects/${projectId}/story-states/${stateId}`),

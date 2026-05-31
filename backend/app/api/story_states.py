@@ -410,6 +410,30 @@ async def list_story_state_maintenance_actions(
 
 
 @router.post(
+    "/maintenance-actions/{action_id}/apply",
+    response_model=StoryStateMaintenanceActionResponse,
+)
+async def apply_story_state_maintenance_action(
+    project_id: str,
+    action_id: str,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    require_permission(user, "project:update", tenant)
+    await _get_project_or_404(project_id, tenant, db)
+    action = await story_state_maintainer_service.apply_action(
+        db,
+        organization_id=tenant.organization_id,
+        project_id=project_id,
+        action_id=action_id,
+        created_by=user.id,
+    )
+    await db.commit()
+    return action
+
+
+@router.post(
     "/maintenance-actions/{action_id}/rollback",
     response_model=StoryStateMaintenanceActionResponse,
 )

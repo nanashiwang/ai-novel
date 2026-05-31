@@ -62,6 +62,11 @@ class StoryStateMaintenanceAction(Base, TenantMixin, TimestampMixin):
         index=True,
     )
     reason: Mapped[str] = mapped_column(Text, default="", server_default="")
+    patch_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"),
+        default=dict,
+        server_default=text("'{}'"),
+    )
     before_json: Mapped[dict[str, Any]] = mapped_column(
         JSONB().with_variant(JSON(), "sqlite"),
         default=dict,

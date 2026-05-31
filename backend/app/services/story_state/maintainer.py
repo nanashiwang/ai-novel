@@ -40,10 +40,17 @@ _PROMPT_VERSION = "v1"
 _ALLOWED_ACTION_TYPES = {
     "update_state",
     "merge_states",
+    "create_requirement",
     "resolve_requirement",
     "supersede_requirement",
 }
 _ALLOWED_RISK_LEVELS = {"low", "medium", "high"}
+_ALLOWED_REQUIREMENT_TYPES = {
+    "must_remember",
+    "must_not_conflict",
+    "should_reference",
+    "candidate_payoff",
+}
 _AUTO_APPLY_CONFIDENCE = 0.85
 _SUGGEST_ONLY_CONFIDENCE = 0.75
 _MAX_ACTIONS_PER_RUN = 20
@@ -125,6 +132,13 @@ def _float_between_zero_and_one(value: Any) -> float:
     except (TypeError, ValueError):
         return 0.0
     return max(0.0, min(1.0, number))
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _dedupe_ids(values: list[Any]) -> list[str]:
@@ -209,6 +223,29 @@ def _restore_model_snapshot(row: Any, snapshot: dict[str, Any], fields: set[str]
         if field not in snapshot:
             continue
         setattr(row, field, _normalize_snapshot_value(field, snapshot.get(field)))
+
+
+def _patch_json_for_action(action: _ParsedAction) -> dict[str, Any]:
+    patch = dict(action.patch or {})
+    if action.superseded_by_requirement_id:
+        patch["superseded_by_requirement_id"] = action.superseded_by_requirement_id
+    return patch
+
+
+def _clean_requirement_type(value: Any) -> str:
+    requirement_type = _clean_text(value)
+    return requirement_type if requirement_type in _ALLOWED_REQUIREMENT_TYPES else "must_remember"
+
+
+def _priority_from_issue(issue: ContinuityIssue | None) -> int:
+    severity = _clean_text(issue.severity if issue else "").lower()
+    if severity == "high":
+        return 96
+    if severity == "medium":
+        return 88
+    if severity == "low":
+        return 80
+    return 85
 
 
 def _action_schema() -> dict[str, Any]:
@@ -330,6 +367,14 @@ class StoryStateMaintainerService:
                 action=action,
                 created_by=created_by,
             )
+        elif action.action_type == "create_requirement":
+            await self._rollback_create_requirement_action(
+                session,
+                organization_id=organization_id,
+                project_id=project_id,
+                action=action,
+                created_by=created_by,
+            )
         elif action.action_type in {"resolve_requirement", "supersede_requirement"}:
             await self._rollback_requirement_action(
                 session,
@@ -342,6 +387,96 @@ class StoryStateMaintainerService:
             raise ConflictError("story_state_maintenance_action_rollback_unsupported")
 
         action.status = "rolled_back"
+        await session.flush()
+        return action
+
+    async def apply_action(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        action_id: str,
+        created_by: str | None,
+    ) -> StoryStateMaintenanceAction:
+        """人工确认并应用一条 AI 建议/待确认动作。"""
+        action = await StoryStateMaintenanceActionRepository(session).get(
+            action_id,
+            organization_id=organization_id,
+        )
+        if not action or action.project_id != project_id:
+            raise NotFoundError("story_state_maintenance_action_not_found")
+        if action.status not in {"suggested", "needs_review"}:
+            raise ConflictError("story_state_maintenance_action_not_applicable")
+
+        parsed = self._parsed_action_from_row(action)
+        chapter = await self._load_action_chapter(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            chapter_id=action.chapter_id,
+        )
+        scene = await self._load_action_scene(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            scene_id=action.scene_id,
+        )
+
+        try:
+            after_json: dict[str, Any]
+            if parsed.action_type == "update_state":
+                after_json = await self._apply_logged_update_state_action(
+                    session,
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    chapter=chapter,
+                    scene=scene,
+                    action_row=action,
+                    parsed=parsed,
+                    created_by=created_by,
+                )
+            elif parsed.action_type == "merge_states":
+                after_json = await self._apply_logged_merge_states_action(
+                    session,
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    chapter=chapter,
+                    scene=scene,
+                    action_row=action,
+                    parsed=parsed,
+                    created_by=created_by,
+                )
+            elif parsed.action_type == "create_requirement":
+                after_json = await self._apply_logged_create_requirement_action(
+                    session,
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    chapter=chapter,
+                    scene=scene,
+                    action_row=action,
+                    parsed=parsed,
+                    created_by=created_by,
+                )
+            elif parsed.action_type in {"resolve_requirement", "supersede_requirement"}:
+                after_json = await self._apply_logged_requirement_action(
+                    session,
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    chapter=chapter,
+                    scene=scene,
+                    action_row=action,
+                    parsed=parsed,
+                    created_by=created_by,
+                )
+            else:
+                raise ConflictError("story_state_maintenance_action_apply_unsupported")
+        except ValueError as exc:
+            raise ConflictError(str(exc)) from exc
+
+        action.after_json = after_json
+        action.status = "applied"
+        action.applied_at = _now()
         await session.flush()
         return action
 
@@ -589,7 +724,8 @@ class StoryStateMaintainerService:
             "policy": {
                 "auto_apply": "仅 low 且 confidence >= 0.85 可自动应用",
                 "medium_high": "medium/high 只记录 needs_review，不自动改库",
-                "id_rule": "只能引用输入中真实存在的 id，不能创造 id",
+                "id_rule": "只能引用输入中真实存在的 state/requirement/issue id",
+                "create_requirement": "审稿问题需要后续持续承接时，可基于已有 state 创建承接要求",
             },
         }
 
@@ -671,6 +807,48 @@ class StoryStateMaintainerService:
                     applied_at = _now()
                 else:
                     after_json = before_json
+            elif action.action_type == "create_requirement":
+                issue = await self._get_issue_from_patch_or_none(
+                    session,
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    action=action,
+                )
+                state_id = action.target_state_id or (issue.story_state_item_id if issue else None)
+                target = await self._get_state_or_error(
+                    session,
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    state_id=state_id,
+                )
+                target_state_id = target.id
+                before_json = {}
+                if status == "applied":
+                    after_json = await self._apply_create_requirement(
+                        session,
+                        organization_id=organization_id,
+                        project_id=project_id,
+                        chapter=chapter,
+                        scene=scene,
+                        state=target,
+                        action=action,
+                        issue=issue,
+                        created_by=created_by,
+                    )
+                    target_requirement_id = _clean_id(
+                        _json_dict(after_json.get("requirement")).get("id")
+                    )
+                    applied_at = _now()
+                else:
+                    after_json = {
+                        "proposed_requirement": self._proposed_requirement_payload(
+                            chapter=chapter,
+                            scene=scene,
+                            state=target,
+                            action=action,
+                            issue=issue,
+                        )
+                    }
             elif action.action_type == "resolve_requirement":
                 requirement = await self._get_requirement_or_error(
                     session,
@@ -755,6 +933,7 @@ class StoryStateMaintainerService:
             confidence=action.confidence,
             status=status,
             reason=reason,
+            patch_json=_patch_json_for_action(action),
             before_json=before_json,
             after_json=after_json,
             created_by=created_by,
@@ -843,6 +1022,223 @@ class StoryStateMaintainerService:
             requirement_id=replacement_requirement_id,
         )
         return replacement.id
+
+    def _parsed_action_from_row(
+        self,
+        action: StoryStateMaintenanceAction,
+    ) -> _ParsedAction:
+        patch = _json_dict(action.patch_json)
+        return _ParsedAction(
+            action_type=action.action_type,
+            target_state_id=action.target_state_id,
+            source_state_ids=_dedupe_ids(_json_list(action.source_state_ids)),
+            target_requirement_id=action.target_requirement_id,
+            superseded_by_requirement_id=_clean_id(patch.get("superseded_by_requirement_id")),
+            risk_level=action.risk_level or "low",
+            confidence=_float_between_zero_and_one(action.confidence),
+            reason=action.reason or "manual_apply_ai_story_state_maintenance",
+            patch=patch,
+        )
+
+    async def _load_action_chapter(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        chapter_id: str | None,
+    ) -> Chapter:
+        if not chapter_id:
+            raise ConflictError("story_state_maintenance_action_chapter_missing")
+        result = await session.execute(
+            select(Chapter).where(
+                Chapter.organization_id == organization_id,
+                Chapter.project_id == project_id,
+                Chapter.id == chapter_id,
+            )
+        )
+        chapter = result.scalar_one_or_none()
+        if not chapter:
+            raise ConflictError("story_state_maintenance_action_chapter_not_found")
+        return chapter
+
+    async def _load_action_scene(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        scene_id: str | None,
+    ) -> Scene:
+        if not scene_id:
+            raise ConflictError("story_state_maintenance_action_scene_missing")
+        result = await session.execute(
+            select(Scene).where(
+                Scene.organization_id == organization_id,
+                Scene.project_id == project_id,
+                Scene.id == scene_id,
+            )
+        )
+        scene = result.scalar_one_or_none()
+        if not scene:
+            raise ConflictError("story_state_maintenance_action_scene_not_found")
+        return scene
+
+    async def _get_issue_from_patch_or_none(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        action: _ParsedAction,
+    ) -> ContinuityIssue | None:
+        source_issue_id = _clean_id(action.patch.get("source_issue_id"))
+        if not source_issue_id:
+            return None
+        result = await session.execute(
+            select(ContinuityIssue).where(
+                ContinuityIssue.organization_id == organization_id,
+                ContinuityIssue.project_id == project_id,
+                ContinuityIssue.id == source_issue_id,
+            )
+        )
+        issue = result.scalar_one_or_none()
+        if not issue:
+            raise ValueError("source_issue_not_found")
+        return issue
+
+    def _proposed_requirement_payload(
+        self,
+        *,
+        chapter: Chapter,
+        scene: Scene,
+        state: StoryStateItem,
+        action: _ParsedAction,
+        issue: ContinuityIssue | None,
+    ) -> dict[str, Any]:
+        patch = action.patch
+        summary = (
+            _clean_text(patch.get("summary"))
+            or _clean_text(issue.suggested_fix if issue else "")
+            or _clean_text(action.reason)
+        )
+        return {
+            "chapter_id": chapter.id,
+            "source_chapter_id": chapter.id,
+            "source_scene_id": scene.id,
+            "target_chapter_id": chapter.id,
+            "origin_type": "current_chapter_extract",
+            "status": "active",
+            "source_issue_id": issue.id if issue else _clean_id(patch.get("source_issue_id")),
+            "state_item_id": state.id,
+            "requirement_type": _clean_requirement_type(patch.get("requirement_type")),
+            "summary": summary,
+            "priority": max(0, _safe_int(patch.get("priority"), _priority_from_issue(issue))),
+        }
+
+    async def _find_existing_requirement(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        chapter_id: str,
+        state_item_id: str,
+        requirement_type: str,
+        summary: str,
+    ) -> ChapterStateRequirement | None:
+        result = await session.execute(
+            select(ChapterStateRequirement).where(
+                ChapterStateRequirement.organization_id == organization_id,
+                ChapterStateRequirement.project_id == project_id,
+                ChapterStateRequirement.chapter_id == chapter_id,
+                ChapterStateRequirement.state_item_id == state_item_id,
+                ChapterStateRequirement.requirement_type == requirement_type,
+                ChapterStateRequirement.summary == summary,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def _apply_create_requirement(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        chapter: Chapter,
+        scene: Scene,
+        state: StoryStateItem,
+        action: _ParsedAction,
+        issue: ContinuityIssue | None,
+        created_by: str | None,
+    ) -> dict[str, Any]:
+        proposed = self._proposed_requirement_payload(
+            chapter=chapter,
+            scene=scene,
+            state=state,
+            action=action,
+            issue=issue,
+        )
+        summary = _clean_text(proposed.get("summary"))
+        if not summary:
+            raise ValueError("requirement_summary_required")
+        existing = await self._find_existing_requirement(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            chapter_id=chapter.id,
+            state_item_id=state.id,
+            requirement_type=str(proposed["requirement_type"]),
+            summary=summary,
+        )
+        if existing:
+            before = _requirement_snapshot(existing)
+            if (existing.status or "active") != "active":
+                existing.status = "active"
+                existing.status_reason = ""
+            existing.priority = max(int(existing.priority or 0), int(proposed["priority"]))
+            if proposed.get("source_issue_id") and not existing.source_issue_id:
+                existing.source_issue_id = str(proposed["source_issue_id"])
+            await session.flush()
+            after = _requirement_snapshot(existing)
+            deduped = True
+            requirement = existing
+        else:
+            before = {}
+            requirement = await ChapterStateRequirementRepository(session).create(
+                organization_id=organization_id,
+                project_id=project_id,
+                chapter_id=chapter.id,
+                source_chapter_id=chapter.id,
+                source_scene_id=scene.id,
+                target_chapter_id=chapter.id,
+                origin_type="current_chapter_extract",
+                status="active",
+                superseded_by_requirement_id=None,
+                source_issue_id=proposed.get("source_issue_id"),
+                status_reason="",
+                state_item_id=state.id,
+                requirement_type=str(proposed["requirement_type"]),
+                summary=summary,
+                priority=int(proposed["priority"]),
+            )
+            after = _requirement_snapshot(requirement)
+            deduped = False
+
+        await StoryStateHistoryRepository(session).create(
+            organization_id=organization_id,
+            project_id=project_id,
+            state_item_id=state.id,
+            chapter_id=chapter.id,
+            scene_id=scene.id,
+            change_type="create" if not deduped else "update",
+            before_json={"requirement": before} if before else {},
+            after_json={"requirement": after},
+            reason=f"ai_story_state_maintenance:{action.reason}",
+            source_excerpt="",
+            created_by=created_by,
+        )
+        return {"requirement": after, "deduped": deduped}
 
     async def _apply_update_state(
         self,
@@ -1053,6 +1449,269 @@ class StoryStateMaintainerService:
         )
         return {"requirement": after}
 
+    async def _apply_logged_update_state_action(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        chapter: Chapter,
+        scene: Scene,
+        action_row: StoryStateMaintenanceAction,
+        parsed: _ParsedAction,
+        created_by: str | None,
+    ) -> dict[str, Any]:
+        if not parsed.patch:
+            raise ConflictError("story_state_maintenance_action_patch_missing")
+        target = await self._get_state_for_logged_action(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            action=action_row,
+        )
+        return await self._apply_update_state(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            chapter=chapter,
+            scene=scene,
+            state=target,
+            action=parsed,
+            created_by=created_by,
+        )
+
+    async def _apply_logged_merge_states_action(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        chapter: Chapter,
+        scene: Scene,
+        action_row: StoryStateMaintenanceAction,
+        parsed: _ParsedAction,
+        created_by: str | None,
+    ) -> dict[str, Any]:
+        target = await self._get_state_for_logged_action(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            action=action_row,
+        )
+        sources = await self._get_source_states_for_logged_action(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            target_state_id=target.id,
+            action=action_row,
+            parsed=parsed,
+        )
+        return await self._apply_merge_states(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            chapter=chapter,
+            scene=scene,
+            target=target,
+            sources=sources,
+            action=parsed,
+            created_by=created_by,
+        )
+
+    async def _apply_logged_create_requirement_action(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        chapter: Chapter,
+        scene: Scene,
+        action_row: StoryStateMaintenanceAction,
+        parsed: _ParsedAction,
+        created_by: str | None,
+    ) -> dict[str, Any]:
+        issue = await self._get_issue_from_patch_or_none(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            action=parsed,
+        )
+        state_id = parsed.target_state_id or (issue.story_state_item_id if issue else None)
+        parsed.target_state_id = state_id
+        state = await self._get_state_for_logged_action(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            action=action_row,
+            fallback_state_id=state_id,
+            require_before_snapshot=False,
+        )
+        result = await self._apply_create_requirement(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            chapter=chapter,
+            scene=scene,
+            state=state,
+            action=parsed,
+            issue=issue,
+            created_by=created_by,
+        )
+        action_row.target_state_id = state.id
+        action_row.target_requirement_id = _clean_id(
+            _json_dict(result.get("requirement")).get("id")
+        )
+        return result
+
+    async def _apply_logged_requirement_action(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        chapter: Chapter,
+        scene: Scene,
+        action_row: StoryStateMaintenanceAction,
+        parsed: _ParsedAction,
+        created_by: str | None,
+    ) -> dict[str, Any]:
+        requirement = await self._get_requirement_for_logged_action(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            action=action_row,
+        )
+        if parsed.action_type == "resolve_requirement":
+            return await self._apply_requirement_status(
+                session,
+                organization_id=organization_id,
+                project_id=project_id,
+                chapter=chapter,
+                scene=scene,
+                requirement=requirement,
+                action=parsed,
+                status="resolved",
+                superseded_by_requirement_id=None,
+                created_by=created_by,
+            )
+        replacement_id = await self._validate_replacement_requirement(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            target_requirement_id=requirement.id,
+            replacement_requirement_id=parsed.superseded_by_requirement_id,
+        )
+        return await self._apply_requirement_status(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            chapter=chapter,
+            scene=scene,
+            requirement=requirement,
+            action=parsed,
+            status="superseded",
+            superseded_by_requirement_id=replacement_id,
+            created_by=created_by,
+        )
+
+    async def _get_state_for_logged_action(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        action: StoryStateMaintenanceAction,
+        fallback_state_id: str | None = None,
+        require_before_snapshot: bool = True,
+    ) -> StoryStateItem:
+        before_snapshot = _json_dict(_json_dict(action.before_json).get("target"))
+        state_id = _clean_id(before_snapshot.get("id")) or action.target_state_id
+        state_id = state_id or fallback_state_id
+        if not state_id:
+            raise ConflictError("story_state_maintenance_action_snapshot_missing")
+        try:
+            state = await self._get_state_or_error(
+                session,
+                organization_id=organization_id,
+                project_id=project_id,
+                state_id=state_id,
+            )
+        except ValueError as exc:
+            raise ConflictError(str(exc)) from exc
+        if require_before_snapshot and not before_snapshot:
+            raise ConflictError("story_state_maintenance_action_snapshot_missing")
+        if before_snapshot and not _snapshot_matches_model(
+            state,
+            before_snapshot,
+            _STATE_RESTORE_FIELDS,
+        ):
+            raise ConflictError("story_state_maintenance_action_target_changed")
+        return state
+
+    async def _get_source_states_for_logged_action(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        target_state_id: str,
+        action: StoryStateMaintenanceAction,
+        parsed: _ParsedAction,
+    ) -> list[StoryStateItem]:
+        source_snapshots = {
+            _clean_id(snapshot.get("id")): snapshot
+            for snapshot in _json_list(_json_dict(action.before_json).get("sources"))
+            if isinstance(snapshot, dict)
+        }
+        try:
+            sources = await self._get_source_states_or_error(
+                session,
+                organization_id=organization_id,
+                project_id=project_id,
+                target_state_id=target_state_id,
+                source_state_ids=parsed.source_state_ids,
+            )
+        except ValueError as exc:
+            raise ConflictError(str(exc)) from exc
+        for source in sources:
+            snapshot = source_snapshots.get(source.id)
+            if snapshot and not _snapshot_matches_model(
+                source,
+                snapshot,
+                _STATE_RESTORE_FIELDS,
+            ):
+                raise ConflictError("story_state_maintenance_action_target_changed")
+        return sources
+
+    async def _get_requirement_for_logged_action(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        action: StoryStateMaintenanceAction,
+    ) -> ChapterStateRequirement:
+        before_snapshot = _json_dict(_json_dict(action.before_json).get("requirement"))
+        requirement_id = _clean_id(before_snapshot.get("id")) or action.target_requirement_id
+        if not requirement_id or not before_snapshot:
+            raise ConflictError("story_state_maintenance_action_snapshot_missing")
+        try:
+            requirement = await self._get_requirement_or_error(
+                session,
+                organization_id=organization_id,
+                project_id=project_id,
+                requirement_id=requirement_id,
+            )
+        except ValueError as exc:
+            raise ConflictError(str(exc)) from exc
+        if not _snapshot_matches_model(
+            requirement,
+            before_snapshot,
+            _REQUIREMENT_RESTORE_FIELDS,
+        ):
+            raise ConflictError("story_state_maintenance_action_target_changed")
+        return requirement
+
     async def _rollback_update_state_action(
         self,
         session: AsyncSession,
@@ -1098,6 +1757,54 @@ class StoryStateMaintainerService:
             after_json=restored_snapshot,
             reason=f"rollback_ai_story_state_maintenance:{action.id}",
             source_excerpt=state.source_excerpt,
+            created_by=created_by,
+        )
+
+    async def _rollback_create_requirement_action(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        action: StoryStateMaintenanceAction,
+        created_by: str | None,
+    ) -> None:
+        after_snapshot = _json_dict(_json_dict(action.after_json).get("requirement"))
+        requirement_id = _clean_id(after_snapshot.get("id")) or action.target_requirement_id
+        if not requirement_id:
+            raise ConflictError("story_state_maintenance_action_snapshot_missing")
+        try:
+            requirement = await self._get_requirement_or_error(
+                session,
+                organization_id=organization_id,
+                project_id=project_id,
+                requirement_id=requirement_id,
+            )
+        except ValueError as exc:
+            raise ConflictError(str(exc)) from exc
+        if after_snapshot and not _snapshot_matches_model(
+            requirement,
+            after_snapshot,
+            _REQUIREMENT_RESTORE_FIELDS,
+        ):
+            raise ConflictError("story_state_maintenance_action_target_changed")
+
+        current_snapshot = _requirement_snapshot(requirement)
+        requirement.status = "disabled"
+        requirement.status_reason = f"rollback_ai_story_state_maintenance:{action.id}"
+        await session.flush()
+        restored_snapshot = _requirement_snapshot(requirement)
+        await StoryStateHistoryRepository(session).create(
+            organization_id=organization_id,
+            project_id=project_id,
+            state_item_id=requirement.state_item_id,
+            chapter_id=action.chapter_id or requirement.chapter_id,
+            scene_id=action.scene_id,
+            change_type="remove",
+            before_json={"requirement": current_snapshot},
+            after_json={"requirement": restored_snapshot},
+            reason=f"rollback_ai_story_state_maintenance:{action.id}",
+            source_excerpt="",
             created_by=created_by,
         )
 

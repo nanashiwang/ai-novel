@@ -731,6 +731,7 @@ _POSTGRES_SCHEMA_FIXES = [
       confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
       status VARCHAR(32) NOT NULL DEFAULT 'suggested',
       reason TEXT NOT NULL DEFAULT '',
+      patch_json JSONB NOT NULL DEFAULT '{}'::jsonb,
       before_json JSONB NOT NULL DEFAULT '{}'::jsonb,
       after_json JSONB NOT NULL DEFAULT '{}'::jsonb,
       created_by VARCHAR(64),
@@ -739,6 +740,10 @@ _POSTGRES_SCHEMA_FIXES = [
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
     """,
+    (
+        "ALTER TABLE story_state_maintenance_actions "
+        "ADD COLUMN IF NOT EXISTS patch_json JSONB NOT NULL DEFAULT '{}'::jsonb"
+    ),
     (
         "CREATE INDEX IF NOT EXISTS ix_story_state_maintenance_actions_org_project "
         "ON story_state_maintenance_actions(organization_id, project_id)"

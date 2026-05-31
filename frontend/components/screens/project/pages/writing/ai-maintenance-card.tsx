@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, GitMerge, ShieldAlert, Undo2, WandSparkles } from "lucide-react";
+import { Bot, CheckCircle2, GitMerge, ShieldAlert, Undo2, WandSparkles } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import type {
 const actionLabel: Record<StoryStateMaintenanceAction["action_type"], string> = {
   update_state: "更新设定",
   merge_states: "合并设定",
+  create_requirement: "新增承接",
   resolve_requirement: "解决承接",
   supersede_requirement: "替代承接",
 };
@@ -43,18 +44,22 @@ const riskTone: Record<StoryStateMaintenanceRiskLevel, "green" | "amber" | "rose
 type AIMaintenanceCardProps = {
   actions: StoryStateMaintenanceAction[];
   isPending?: boolean;
+  applyingActionId?: string | null;
   rollingBackActionId?: string | null;
   storyStateById: Record<string, StoryStateItem>;
   onSelectState: (state: StoryStateItem) => void;
+  onApplyAction?: (actionId: string) => void;
   onRollbackAction?: (actionId: string) => void;
 };
 
 export function AIMaintenanceCard({
   actions,
   isPending,
+  applyingActionId,
   rollingBackActionId,
   storyStateById,
   onSelectState,
+  onApplyAction,
   onRollbackAction,
 }: AIMaintenanceCardProps) {
   const applied = actions.filter((item) => item.status === "applied").length;
@@ -104,9 +109,11 @@ export function AIMaintenanceCard({
             <AIMaintenanceActionItem
               key={action.id}
               action={action}
+              applyingActionId={applyingActionId}
               rollingBackActionId={rollingBackActionId}
               storyStateById={storyStateById}
               onSelectState={onSelectState}
+              onApplyAction={onApplyAction}
               onRollbackAction={onRollbackAction}
             />
           ))}
@@ -124,15 +131,19 @@ export function AIMaintenanceCard({
 
 function AIMaintenanceActionItem({
   action,
+  applyingActionId,
   rollingBackActionId,
   storyStateById,
   onSelectState,
+  onApplyAction,
   onRollbackAction,
 }: {
   action: StoryStateMaintenanceAction;
+  applyingActionId?: string | null;
   rollingBackActionId?: string | null;
   storyStateById: Record<string, StoryStateItem>;
   onSelectState: (state: StoryStateItem) => void;
+  onApplyAction?: (actionId: string) => void;
   onRollbackAction?: (actionId: string) => void;
 }) {
   const targetState = action.target_state_id
@@ -141,6 +152,8 @@ function AIMaintenanceActionItem({
   const beforeSummary = findSummary(action.before_json);
   const afterSummary = findSummary(action.after_json);
   const impactText = buildImpactText(action);
+  const canApply = action.status === "needs_review" || action.status === "suggested";
+  const isApplying = applyingActionId === action.id;
   const canRollback = action.status === "applied" && action.action_type !== "merge_states";
   const isRollingBack = rollingBackActionId === action.id;
 
@@ -176,6 +189,26 @@ function AIMaintenanceActionItem({
                 onClick={() => onSelectState(targetState)}
               >
                 查看关键设定：{targetState.name}
+              </Button>
+            ) : null}
+            {canApply && onApplyAction ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2 text-[11px] text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800"
+                disabled={isApplying}
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "确定应用这条 AI 维护建议吗？系统会按记录的 patch 修改关键设定/承接要求。",
+                    )
+                  ) {
+                    onApplyAction(action.id);
+                  }
+                }}
+              >
+                <CheckCircle2 className="size-3.5" />
+                {isApplying ? "应用中" : "确认应用"}
               </Button>
             ) : null}
             {canRollback && onRollbackAction ? (
@@ -234,6 +267,8 @@ function findSummary(value: Record<string, unknown>) {
     const status = readPath(value, ["requirement", "status"]);
     return status ? `${requirementSummary}（${status}）` : requirementSummary;
   }
+  const proposedSummary = readPath(value, ["proposed_requirement", "summary"]);
+  if (proposedSummary) return proposedSummary;
   const firstSource = readPath(value, ["sources", "0", "summary"]);
   if (firstSource) return firstSource;
   return "";
