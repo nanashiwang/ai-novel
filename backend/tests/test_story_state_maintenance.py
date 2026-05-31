@@ -20,6 +20,20 @@ from app.models.common import new_id
 from app.services.story_state.maintainer import story_state_maintainer_service
 
 
+async def _register(client, email: str) -> tuple[str, str, str]:
+    res = await client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": email,
+            "password": "password123",
+            "display_name": email.split("@")[0],
+        },
+    )
+    assert res.status_code == 201, res.text
+    data = res.json()
+    return data["access_token"], data["user"]["organization_id"], data["user"]["id"]
+
+
 def _base_scene() -> tuple[str, Project, Chapter, Scene, DraftVersion]:
     org_id = new_id("org")
     user_id = new_id("user")
@@ -398,3 +412,94 @@ async def test_story_state_maintainer_logs_high_risk_without_applying(monkeypatc
     action = (await db_session.execute(select(StoryStateMaintenanceAction))).scalar_one()
     assert action.status == "needs_review"
     assert action.before_json == action.after_json
+
+
+@pytest.mark.asyncio
+async def test_story_state_maintenance_actions_api_filters_by_scene(client, db_session):
+    token, org_id, user_id = await _register(client, "state-maintenance-api@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    project_res = await client.post(
+        "/api/v1/projects",
+        headers=headers,
+        json={"title": "维护记录 API 测试", "target_word_count": 100_000},
+    )
+    assert project_res.status_code == 201, project_res.text
+    project_id = project_res.json()["id"]
+
+    chapter = Chapter(
+        id=new_id("chapter"),
+        organization_id=org_id,
+        project_id=project_id,
+        volume_id=None,
+        chapter_index=7,
+        title="灰线再现",
+        summary="",
+        goal="",
+        conflict="",
+        ending_hook="",
+        status="planned",
+    )
+    scene = Scene(
+        id=new_id("scene"),
+        organization_id=org_id,
+        project_id=project_id,
+        chapter_id=chapter.id,
+        scene_index=1,
+        title="眼痛缓解",
+        time_marker="夜",
+        location="丹房",
+        characters=["林照夜"],
+        scene_purpose="测试维护记录",
+        entry_state="",
+        exit_state="",
+        goal="",
+        conflict="",
+        must_include=[],
+        must_avoid=[],
+        emotion_start="",
+        emotion_end="",
+        reveal="",
+        hook="",
+        status="planned",
+    )
+    state = _state(
+        org_id=org_id,
+        project_id=project_id,
+        chapter_id=chapter.id,
+        scene_id=scene.id,
+    )
+    action = StoryStateMaintenanceAction(
+        id=new_id("state_action"),
+        organization_id=org_id,
+        project_id=project_id,
+        chapter_id=chapter.id,
+        scene_id=scene.id,
+        draft_id=None,
+        action_type="update_state",
+        target_state_id=state.id,
+        source_state_ids=[],
+        target_requirement_id=None,
+        risk_level="low",
+        confidence=0.91,
+        status="applied",
+        reason="正文明确更新了关键设定",
+        before_json={"target": {"summary": "旧设定"}},
+        after_json={"target": {"summary": "新设定"}},
+        created_by=user_id,
+        applied_at=None,
+    )
+    db_session.add_all([chapter, scene, state, action])
+    await db_session.commit()
+
+    res = await client.get(
+        f"/api/v1/projects/{project_id}/story-states/maintenance-actions",
+        headers=headers,
+        params={"scene_id": scene.id, "status": "applied"},
+    )
+
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert [item["id"] for item in data["items"]] == [action.id]
+    assert data["items"][0]["action_type"] == "update_state"
+    assert data["items"][0]["target_state_id"] == state.id
+    assert data["items"][0]["before_json"]["target"]["summary"] == "旧设定"

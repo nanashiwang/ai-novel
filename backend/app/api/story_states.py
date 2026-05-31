@@ -13,6 +13,7 @@ from app.models.chapter import Chapter
 from app.models.chapter_state_requirement import ChapterStateRequirement
 from app.models.continuity_issue import ContinuityIssue
 from app.models.story_state_item import StoryStateItem
+from app.models.story_state_maintenance_action import StoryStateMaintenanceAction
 from app.repositories import (
     ChapterRepository,
     ChapterStateRequirementRepository,
@@ -29,6 +30,7 @@ from app.schemas.story_state import (
     StoryStateHistoryListResponse,
     StoryStateItemResponse,
     StoryStateListResponse,
+    StoryStateMaintenanceActionListResponse,
     StoryStateMergeRequest,
     StoryStateMergeResponse,
     StoryStatePatchRequest,
@@ -366,6 +368,43 @@ async def list_story_state_duplicate_candidates(
         if len(groups) >= limit:
             break
     return StoryStateDuplicateListResponse(groups=groups)
+
+
+@router.get(
+    "/maintenance-actions",
+    response_model=StoryStateMaintenanceActionListResponse,
+)
+async def list_story_state_maintenance_actions(
+    project_id: str,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+    chapter_id: str | None = Query(default=None),
+    scene_id: str | None = Query(default=None),
+    draft_id: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    action_type: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    require_permission(user, "project:read", tenant)
+    await _get_project_or_404(project_id, tenant, db)
+    stmt = select(StoryStateMaintenanceAction).where(
+        StoryStateMaintenanceAction.organization_id == tenant.organization_id,
+        StoryStateMaintenanceAction.project_id == project_id,
+    )
+    if chapter_id:
+        stmt = stmt.where(StoryStateMaintenanceAction.chapter_id == chapter_id)
+    if scene_id:
+        stmt = stmt.where(StoryStateMaintenanceAction.scene_id == scene_id)
+    if draft_id:
+        stmt = stmt.where(StoryStateMaintenanceAction.draft_id == draft_id)
+    if status:
+        stmt = stmt.where(StoryStateMaintenanceAction.status == status)
+    if action_type:
+        stmt = stmt.where(StoryStateMaintenanceAction.action_type == action_type)
+    stmt = stmt.order_by(StoryStateMaintenanceAction.created_at.desc()).limit(limit)
+    result = await db.execute(stmt)
+    return StoryStateMaintenanceActionListResponse(items=list(result.scalars().all()))
 
 
 @router.get("/{state_id}", response_model=StoryStateItemResponse)

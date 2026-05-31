@@ -39,6 +39,7 @@ import { useScopedKey } from "@/lib/use-scoped-key";
 
 import { ContextInspector, type ContextSummaryEntry } from "./context-inspector";
 import { StoryStateDetailDialog } from "../outline/story-state-detail-dialog";
+import { AIMaintenanceCard } from "./ai-maintenance-card";
 import { AntiForgettingPreviewCard } from "./anti-forgetting-preview-card";
 import { SceneEditorCard } from "./scene-editor-card";
 import { useAuditRewrite } from "./use-audit-rewrite";
@@ -120,6 +121,7 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
   const activeWriteJobIds = useRef<Set<string>>(new Set());
   const notifiedWriteJobIds = useRef<Set<string>>(new Set());
+  const refreshedRewriteMaintenanceJobIds = useRef<Set<string>>(new Set());
   const chaptersKey = useScopedKey("project", projectId, "chapters");
   const preflightKey = useScopedKey("project", projectId, "preflight", "write_scene");
   const storyStatesKey = useScopedKey("project", projectId, "story-states", "issue-links");
@@ -179,6 +181,13 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
     queryFn: () => scenesApi.antiForgettingPreview(projectId, activeScene!.id),
     enabled: !!activeScene,
   });
+  const maintenanceActionsKey = useScopedKey(
+    "project",
+    projectId,
+    "scene",
+    activeScene?.id,
+    "story-state-maintenance-actions",
+  );
 
   // === 三个组合 hook ===
   const {
@@ -209,6 +218,21 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
   } = useSceneJobs({ projectId, activeScene });
 
   const {
+    data: maintenanceActionsResponse,
+    isPending: isMaintenanceActionsPending,
+  } = useQuery({
+    queryKey: maintenanceActionsKey,
+    queryFn: () =>
+      storyStatesApi.maintenanceActions(projectId, {
+        scene_id: activeScene!.id,
+        limit: 20,
+      }),
+    enabled: !!activeScene,
+    refetchInterval: isWriting || isRewriting ? 3000 : false,
+  });
+  const maintenanceActions = maintenanceActionsResponse?.items ?? [];
+
+  const {
     sceneIssues,
     sceneOpenIssues,
     openIssueCountByScene,
@@ -223,7 +247,10 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
     scenesKey,
     latestAuditJob,
     latestAuditIssueCount,
-    onRewriteSuccess: () => setDisplayedVersionId(null),
+    onRewriteSuccess: () => {
+      setDisplayedVersionId(null);
+      queryClient.invalidateQueries({ queryKey: maintenanceActionsKey });
+    },
   });
 
   const createRequirementFromIssue = useMutation({
@@ -271,6 +298,7 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
       queryClient.invalidateQueries({ queryKey: versionsKey });
       queryClient.invalidateQueries({ queryKey: preflightKey });
       queryClient.invalidateQueries({ queryKey: antiForgettingPreviewKey });
+      queryClient.invalidateQueries({ queryKey: maintenanceActionsKey });
       setDisplayedVersionId(null);
     },
     onError: (e: unknown) => {
@@ -327,6 +355,7 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
       queryClient.invalidateQueries({ queryKey: scenesKey });
       queryClient.invalidateQueries({ queryKey: preflightKey });
       queryClient.invalidateQueries({ queryKey: antiForgettingPreviewKey });
+      queryClient.invalidateQueries({ queryKey: maintenanceActionsKey });
       setDisplayedVersionId(null);
       toast.success("场景生成完成");
     } else if (latestSceneJob.status === "failed") {
@@ -338,12 +367,29 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
     }
   }, [
     latestSceneJob,
+    maintenanceActionsKey,
     preflightKey,
     queryClient,
     antiForgettingPreviewKey,
     scenesKey,
     setDisplayedVersionId,
     versionsKey,
+  ]);
+
+  useEffect(() => {
+    if (latestRewriteJob?.status !== "succeeded") return;
+    if (refreshedRewriteMaintenanceJobIds.current.has(latestRewriteJob.id)) return;
+    refreshedRewriteMaintenanceJobIds.current.add(latestRewriteJob.id);
+    queryClient.invalidateQueries({ queryKey: maintenanceActionsKey });
+    queryClient.invalidateQueries({ queryKey: antiForgettingPreviewKey });
+    queryClient.invalidateQueries({ queryKey: storyStatesKey });
+  }, [
+    antiForgettingPreviewKey,
+    latestRewriteJob?.id,
+    latestRewriteJob?.status,
+    maintenanceActionsKey,
+    queryClient,
+    storyStatesKey,
   ]);
 
   return (
@@ -846,6 +892,12 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
                   | null
                   | undefined)
               }
+            />
+            <AIMaintenanceCard
+              actions={maintenanceActions}
+              isPending={isMaintenanceActionsPending}
+              storyStateById={storyStateById}
+              onSelectState={setSelectedStoryState}
             />
           </CardContent>
         </Card>

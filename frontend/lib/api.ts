@@ -351,6 +351,18 @@ export type ChapterStateRequirementStatus =
   | "superseded"
   | "resolved"
   | "disabled";
+export type StoryStateMaintenanceActionType =
+  | "update_state"
+  | "merge_states"
+  | "resolve_requirement"
+  | "supersede_requirement";
+export type StoryStateMaintenanceRiskLevel = "low" | "medium" | "high";
+export type StoryStateMaintenanceStatus =
+  | "suggested"
+  | "applied"
+  | "skipped"
+  | "needs_review"
+  | "rolled_back";
 
 export type StoryStateItem = {
   id: string;
@@ -385,6 +397,27 @@ export type StoryStateHistory = {
   source_excerpt: string;
   created_by: string | null;
   created_at?: string | null;
+};
+
+export type StoryStateMaintenanceAction = {
+  id: string;
+  chapter_id: string | null;
+  scene_id: string | null;
+  draft_id: string | null;
+  action_type: StoryStateMaintenanceActionType;
+  target_state_id: string | null;
+  source_state_ids: string[];
+  target_requirement_id: string | null;
+  risk_level: StoryStateMaintenanceRiskLevel;
+  confidence: number;
+  status: StoryStateMaintenanceStatus;
+  reason: string;
+  before_json: Record<string, unknown>;
+  after_json: Record<string, unknown>;
+  created_by: string | null;
+  applied_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 };
 
 export type ChapterStateRequirement = {
@@ -473,6 +506,10 @@ export type StoryStateHistoryListResponse = {
   items: StoryStateHistory[];
 };
 
+export type StoryStateMaintenanceActionListResponse = {
+  items: StoryStateMaintenanceAction[];
+};
+
 export type ChapterStateRequirementListResponse = {
   items: ChapterStateRequirement[];
 };
@@ -534,6 +571,21 @@ export const storyStatesApi = {
   ) =>
     http.get<StoryStateDuplicateListResponse>(
       `/projects/${projectId}/story-states/duplicate-candidates`,
+      params,
+    ),
+  maintenanceActions: (
+    projectId: string,
+    params?: {
+      chapter_id?: string;
+      scene_id?: string;
+      draft_id?: string;
+      status?: StoryStateMaintenanceStatus;
+      action_type?: StoryStateMaintenanceActionType;
+      limit?: number;
+    },
+  ) =>
+    http.get<StoryStateMaintenanceActionListResponse>(
+      `/projects/${projectId}/story-states/maintenance-actions`,
       params,
     ),
   get: (projectId: string, stateId: string) =>
