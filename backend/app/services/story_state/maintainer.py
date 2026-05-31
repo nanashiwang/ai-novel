@@ -1,7 +1,7 @@
 """AI 关键设定维护器。
 
 正文生成/重写后，基于最新 draft 自动判断哪些长期设定需要轻量维护。
-MVP 只自动应用“低风险 + 高置信”的动作，其余写入动作日志，避免打断主流程。
+低风险高置信自动应用；中风险高置信且支持撤销的动作也可自动应用。
 """
 from __future__ import annotations
 
@@ -53,6 +53,7 @@ _ALLOWED_REQUIREMENT_TYPES = {
     "candidate_payoff",
 }
 _AUTO_APPLY_CONFIDENCE = 0.85
+_MEDIUM_AUTO_APPLY_CONFIDENCE = 0.88
 _SUGGEST_ONLY_CONFIDENCE = 0.75
 _MAX_ACTIONS_PER_RUN = 20
 _ALLOWED_STATE_STATUSES = {"active", "hidden", "damaged", "resolved", "consumed"}
@@ -226,10 +227,85 @@ def _restore_model_snapshot(row: Any, snapshot: dict[str, Any], fields: set[str]
         setattr(row, field, _normalize_snapshot_value(field, snapshot.get(field)))
 
 
-def _patch_json_for_action(action: _ParsedAction) -> dict[str, Any]:
+def _is_rollback_supported(action: _ParsedAction) -> bool:
+    return action.action_type not in _ROLLBACK_UNSUPPORTED_ACTIONS
+
+
+def _policy_decision_for_action(action: _ParsedAction) -> dict[str, Any]:
+    rollback_supported = _is_rollback_supported(action)
+    if action.risk_level == "high":
+        return {
+            "status": "needs_review",
+            "policy": "high_risk_needs_review",
+            "auto_applied": False,
+            "rollback_supported": rollback_supported,
+            "threshold": None,
+            "reason": "高风险动作必须人工确认",
+        }
+    if action.confidence < _SUGGEST_ONLY_CONFIDENCE:
+        return {
+            "status": "suggested",
+            "policy": "low_confidence_suggested",
+            "auto_applied": False,
+            "rollback_supported": rollback_supported,
+            "threshold": _SUGGEST_ONLY_CONFIDENCE,
+            "reason": "置信度低于建议阈值，仅记录建议",
+        }
+    if action.risk_level == "medium":
+        if rollback_supported and action.confidence >= _MEDIUM_AUTO_APPLY_CONFIDENCE:
+            return {
+                "status": "applied",
+                "policy": "medium_confident_rollbackable",
+                "auto_applied": True,
+                "rollback_supported": True,
+                "threshold": _MEDIUM_AUTO_APPLY_CONFIDENCE,
+                "reason": "中风险高置信且支持撤销，自动应用并保留撤销兜底",
+            }
+        return {
+            "status": "needs_review",
+            "policy": (
+                "medium_rollback_unsupported"
+                if not rollback_supported
+                else "medium_confidence_below_auto_apply"
+            ),
+            "auto_applied": False,
+            "rollback_supported": rollback_supported,
+            "threshold": _MEDIUM_AUTO_APPLY_CONFIDENCE,
+            "reason": (
+                "该中风险动作暂不支持撤销，需人工确认"
+                if not rollback_supported
+                else "中风险动作置信度未达到自动应用阈值，需人工确认"
+            ),
+        }
+    if action.confidence >= _AUTO_APPLY_CONFIDENCE:
+        return {
+            "status": "applied",
+            "policy": "low_confident_auto_apply",
+            "auto_applied": True,
+            "rollback_supported": rollback_supported,
+            "threshold": _AUTO_APPLY_CONFIDENCE,
+            "reason": "低风险高置信，自动应用",
+        }
+    return {
+        "status": "suggested",
+        "policy": "low_confidence_below_auto_apply",
+        "auto_applied": False,
+        "rollback_supported": rollback_supported,
+        "threshold": _AUTO_APPLY_CONFIDENCE,
+        "reason": "低风险动作置信度未达到自动应用阈值，仅记录建议",
+    }
+
+
+def _patch_json_for_action(
+    action: _ParsedAction,
+    *,
+    auto_decision: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     patch = dict(action.patch or {})
     if action.superseded_by_requirement_id:
         patch["superseded_by_requirement_id"] = action.superseded_by_requirement_id
+    if auto_decision:
+        patch["auto_decision"] = auto_decision
     return patch
 
 
@@ -315,13 +391,7 @@ def _parse_action(entry: Any) -> _ParsedAction | None:
 
 
 def _status_for_policy(action: _ParsedAction) -> str:
-    if action.risk_level != "low":
-        return "needs_review"
-    if action.confidence >= _AUTO_APPLY_CONFIDENCE:
-        return "applied"
-    if action.confidence < _SUGGEST_ONLY_CONFIDENCE:
-        return "suggested"
-    return "suggested"
+    return str(_policy_decision_for_action(action)["status"])
 
 
 def _merge_value_json(
@@ -744,8 +814,12 @@ class StoryStateMaintainerService:
             "chapter_requirements": [_requirement_snapshot(row) for row in requirements],
             "continuity_issues": [_issue_payload(row) for row in issues],
             "policy": {
-                "auto_apply": "仅 low 且 confidence >= 0.85 可自动应用",
-                "medium_high": "medium/high 只记录 needs_review，不自动改库",
+                "auto_apply": "low 且 confidence >= 0.85 可自动应用",
+                "medium_auto_apply": (
+                    "medium 且 confidence >= 0.88 且支持撤销时可自动应用；"
+                    "merge_states 暂不支持中风险自动应用"
+                ),
+                "high": "high 永远进入 needs_review，不自动改库",
                 "id_rule": "只能引用输入中真实存在的 state/requirement/issue id",
                 "supersede_state": (
                     "旧关键设定被新关键设定替代时，target_state_id 填新设定，"
@@ -767,7 +841,8 @@ class StoryStateMaintainerService:
         created_by: str | None,
         action: _ParsedAction,
     ) -> dict[str, Any]:
-        status = _status_for_policy(action)
+        auto_decision = _policy_decision_for_action(action)
+        status = str(auto_decision["status"])
         before_json: dict[str, Any] = {}
         after_json: dict[str, Any] = {}
         validation_error: str | None = None
@@ -1001,7 +1076,7 @@ class StoryStateMaintainerService:
             confidence=action.confidence,
             status=status,
             reason=reason,
-            patch_json=_patch_json_for_action(action),
+            patch_json=_patch_json_for_action(action, auto_decision=auto_decision),
             before_json=before_json,
             after_json=after_json,
             created_by=created_by,

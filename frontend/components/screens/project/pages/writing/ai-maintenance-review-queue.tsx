@@ -10,6 +10,10 @@ import type {
   StoryStateItem,
   StoryStateMaintenanceAction,
 } from "@/lib/api";
+import {
+  getMaintenanceDecisionBadge,
+  getMaintenanceDecisionHint,
+} from "./ai-maintenance-policy";
 
 const actionLabel: Record<StoryStateMaintenanceAction["action_type"], string> = {
   update_state: "更新设定",
@@ -97,7 +101,7 @@ export function AIMaintenanceReviewQueue({
           <div className="rounded-xl border border-dashed border-amber-200 bg-white/70 px-3 py-3 text-xs leading-5 text-slate-500">
             {isPending
               ? "正在读取 AI 维护待确认队列。"
-              : "当前没有待确认的 AI 维护建议。低风险动作会自动应用，高风险/低置信动作会出现在这里。"}
+              : "当前没有待确认的 AI 维护建议。低风险动作会自动应用，中风险高置信且可撤销的动作也会自动应用。"}
           </div>
         ) : (
           <ul className="space-y-2">
@@ -109,6 +113,8 @@ export function AIMaintenanceReviewQueue({
                 ? chapters.find((item) => item.id === action.chapter_id)
                 : null;
               const isApplying = applyingActionId === action.id;
+              const decisionBadge = getMaintenanceDecisionBadge(action);
+              const decisionHint = getMaintenanceDecisionHint(action);
               return (
                 <li
                   key={action.id}
@@ -119,6 +125,9 @@ export function AIMaintenanceReviewQueue({
                     <Badge tone="slate">{actionLabel[action.action_type]}</Badge>
                     <Badge tone={riskTone[action.risk_level]}>风险 {action.risk_level}</Badge>
                     <Badge tone="blue">置信 {Math.round(action.confidence * 100)}%</Badge>
+                    {decisionBadge ? (
+                      <Badge tone={decisionBadge.tone}>{decisionBadge.label}</Badge>
+                    ) : null}
                   </div>
                   <div className="mt-2 flex items-start gap-2">
                     <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" />
@@ -133,6 +142,11 @@ export function AIMaintenanceReviewQueue({
                             ? `章节 ${action.chapter_id.slice(0, 12)}…`
                             : "项目级维护建议"}
                       </p>
+                      {decisionHint ? (
+                        <p className="mt-1 text-[11px] leading-5 text-amber-700">
+                          {decisionHint}
+                        </p>
+                      ) : null}
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         {targetState ? (
                           <Button

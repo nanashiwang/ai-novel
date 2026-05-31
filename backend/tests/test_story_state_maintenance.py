@@ -220,6 +220,70 @@ async def test_story_state_maintainer_applies_low_risk_update(monkeypatch, db_se
 
 
 @pytest.mark.asyncio
+async def test_story_state_maintainer_auto_applies_medium_update_with_rollback(
+    monkeypatch,
+    db_session,
+):
+    user_id, project, chapter, scene, draft = _base_scene()
+    state = _state(
+        org_id=project.organization_id,
+        project_id=project.id,
+        chapter_id=chapter.id,
+        scene_id=scene.id,
+    )
+    db_session.add_all([project, chapter, scene, draft, state])
+    await db_session.commit()
+
+    result = await _run_with_response(
+        monkeypatch,
+        db_session,
+        response={
+            "actions": [
+                {
+                    "type": "update_state",
+                    "target_state_id": state.id,
+                    "confidence": 0.9,
+                    "risk_level": "medium",
+                    "reason": "正文明确写出技能代价从剧痛变成酸胀",
+                    "patch": {
+                        "summary": "因果灰线视野使用后左眼只会短暂酸胀。",
+                        "value_json": {"cost": "short_eye_soreness"},
+                    },
+                }
+            ]
+        },
+        user_id=user_id,
+        project=project,
+        chapter=chapter,
+        scene=scene,
+        draft=draft,
+    )
+    await db_session.commit()
+
+    assert result["applied_count"] == 1
+    await db_session.refresh(state)
+    assert state.summary == "因果灰线视野使用后左眼只会短暂酸胀。"
+
+    action = (await db_session.execute(select(StoryStateMaintenanceAction))).scalar_one()
+    assert action.status == "applied"
+    assert action.patch_json["auto_decision"]["policy"] == "medium_confident_rollbackable"
+    assert action.patch_json["auto_decision"]["rollback_supported"] is True
+
+    rolled_back = await story_state_maintainer_service.rollback_action(
+        db_session,
+        organization_id=project.organization_id,
+        project_id=project.id,
+        action_id=action.id,
+        created_by=user_id,
+    )
+    await db_session.commit()
+
+    assert rolled_back.status == "rolled_back"
+    await db_session.refresh(state)
+    assert state.summary == "林照夜能短暂看见因果灰线，代价是左眼剧痛。"
+
+
+@pytest.mark.asyncio
 async def test_story_state_maintainer_merges_states_and_rewires_links(monkeypatch, db_session):
     user_id, project, chapter, scene, draft = _base_scene()
     target = _state(
@@ -362,7 +426,7 @@ async def test_story_state_maintainer_supersedes_state_and_requirements(
                     "target_state_id": replacement.id,
                     "source_state_ids": [old_state.id],
                     "confidence": 0.9,
-                    "risk_level": "low",
+                    "risk_level": "medium",
                     "reason": "正文明确写出青冥洗瞳露让旧剧痛代价被酸胀替代",
                     "patch": {
                         "status_reason": "旧代价已被青冥洗瞳露后的新代价替代",
@@ -394,6 +458,7 @@ async def test_story_state_maintainer_supersedes_state_and_requirements(
     assert action.action_type == "supersede_state"
     assert action.target_state_id == replacement.id
     assert action.source_state_ids == [old_state.id]
+    assert action.patch_json["auto_decision"]["policy"] == "medium_confident_rollbackable"
     assert action.after_json["superseded_requirement_count"] == 1
     assert action.after_json["sources"][0]["status"] == "inactive"
 
@@ -504,6 +569,91 @@ async def test_story_state_maintainer_logs_high_risk_without_applying(monkeypatc
     assert action.status == "needs_review"
     assert action.before_json == action.after_json
     assert action.patch_json["summary"] == "因果灰线成为无代价常驻能力。"
+    assert action.patch_json["auto_decision"]["policy"] == "high_risk_needs_review"
+
+
+@pytest.mark.asyncio
+async def test_story_state_maintainer_keeps_medium_merge_and_low_confidence_unapplied(
+    monkeypatch,
+    db_session,
+):
+    user_id, project, chapter, scene, draft = _base_scene()
+    target = _state(
+        org_id=project.organization_id,
+        project_id=project.id,
+        chapter_id=chapter.id,
+        scene_id=scene.id,
+        name="因果灰线视野",
+    )
+    duplicate = _state(
+        org_id=project.organization_id,
+        project_id=project.id,
+        chapter_id=chapter.id,
+        scene_id=scene.id,
+        name="因果灰线旧记录",
+    )
+    db_session.add_all([project, chapter, scene, draft, target, duplicate])
+    await db_session.commit()
+
+    result = await _run_with_response(
+        monkeypatch,
+        db_session,
+        response={
+            "actions": [
+                {
+                    "type": "merge_states",
+                    "target_state_id": target.id,
+                    "source_state_ids": [duplicate.id],
+                    "confidence": 0.9,
+                    "risk_level": "medium",
+                    "reason": "中风险合并暂不支持撤销",
+                    "patch": {"summary": "合并后的因果灰线设定。"},
+                },
+                {
+                    "type": "update_state",
+                    "target_state_id": target.id,
+                    "confidence": 0.7,
+                    "risk_level": "medium",
+                    "reason": "证据不足的中风险更新",
+                    "patch": {"summary": "低置信中风险更新。"},
+                },
+                {
+                    "type": "update_state",
+                    "target_state_id": target.id,
+                    "confidence": 0.99,
+                    "risk_level": "high",
+                    "reason": "高风险核心能力更新",
+                    "patch": {"summary": "高风险改写核心能力。"},
+                },
+            ]
+        },
+        user_id=user_id,
+        project=project,
+        chapter=chapter,
+        scene=scene,
+        draft=draft,
+    )
+    await db_session.commit()
+
+    assert result["applied_count"] == 0
+    assert result["needs_review_count"] == 2
+    assert result["suggested_count"] == 1
+    await db_session.refresh(target)
+    await db_session.refresh(duplicate)
+    assert target.summary == "林照夜能短暂看见因果灰线，代价是左眼剧痛。"
+    assert duplicate.status == "active"
+
+    actions = (await db_session.execute(select(StoryStateMaintenanceAction))).scalars().all()
+    by_reason = {action.reason: action for action in actions}
+    merge_action = by_reason["中风险合并暂不支持撤销"]
+    low_confidence_action = by_reason["证据不足的中风险更新"]
+    high_risk_action = by_reason["高风险核心能力更新"]
+    assert merge_action.status == "needs_review"
+    assert merge_action.patch_json["auto_decision"]["policy"] == "medium_rollback_unsupported"
+    assert low_confidence_action.status == "suggested"
+    assert low_confidence_action.patch_json["auto_decision"]["policy"] == "low_confidence_suggested"
+    assert high_risk_action.status == "needs_review"
+    assert high_risk_action.patch_json["auto_decision"]["policy"] == "high_risk_needs_review"
 
 
 @pytest.mark.asyncio

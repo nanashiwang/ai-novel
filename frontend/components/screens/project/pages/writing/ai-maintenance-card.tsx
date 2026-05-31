@@ -10,6 +10,10 @@ import type {
   StoryStateMaintenanceRiskLevel,
   StoryStateMaintenanceStatus,
 } from "@/lib/api";
+import {
+  getMaintenanceDecisionBadge,
+  getMaintenanceDecisionHint,
+} from "./ai-maintenance-policy";
 
 const actionLabel: Record<StoryStateMaintenanceAction["action_type"], string> = {
   update_state: "更新设定",
@@ -163,6 +167,8 @@ function AIMaintenanceActionItem({
   const isApplying = applyingActionId === action.id;
   const canRollback = action.status === "applied" && action.action_type !== "merge_states";
   const isRollingBack = rollingBackActionId === action.id;
+  const decisionBadge = getMaintenanceDecisionBadge(action);
+  const decisionHint = getMaintenanceDecisionHint(action);
 
   return (
     <li className="rounded-xl border border-white/80 bg-white/85 p-3 text-xs shadow-sm">
@@ -171,6 +177,7 @@ function AIMaintenanceActionItem({
         <Badge tone="slate">{actionLabel[action.action_type]}</Badge>
         <Badge tone={riskTone[action.risk_level]}>风险 {action.risk_level}</Badge>
         <Badge tone="blue">置信 {Math.round(action.confidence * 100)}%</Badge>
+        {decisionBadge ? <Badge tone={decisionBadge.tone}>{decisionBadge.label}</Badge> : null}
       </div>
       <div className="mt-2 flex items-start gap-2">
         {action.action_type === "merge_states" ? (
@@ -186,6 +193,9 @@ function AIMaintenanceActionItem({
           </p>
           {impactText ? (
             <p className="mt-1 text-[11px] text-slate-500">{impactText}</p>
+          ) : null}
+          {decisionHint ? (
+            <p className="mt-1 text-[11px] leading-5 text-cyan-700">{decisionHint}</p>
           ) : null}
           <div className="mt-2 flex flex-wrap gap-1.5">
             {targetState ? (
