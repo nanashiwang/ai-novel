@@ -59,6 +59,10 @@ _AUTO_APPLY_CONFIDENCE = 0.85
 _MEDIUM_AUTO_APPLY_CONFIDENCE = 0.88
 _SUGGEST_ONLY_CONFIDENCE = 0.75
 _MAX_ACTIONS_PER_RUN = 20
+_FUTURE_REQUIREMENT_DEFAULT_CHAPTER_COUNT = 3
+_FUTURE_REQUIREMENT_MAX_CHAPTER_COUNT = 8
+_FUTURE_REQUIREMENT_REASON_PREFIX = "ai_maintenance_action:"
+_FUTURE_REQUIREMENT_ACTION_TYPES = {"create_state", "update_state", "supersede_state"}
 _ALLOWED_STATE_STATUSES = {"active", "hidden", "damaged", "resolved", "consumed"}
 _ROLLBACK_UNSUPPORTED_ACTIONS = {"merge_states"}
 _STATE_RESTORE_FIELDS = {
@@ -335,6 +339,11 @@ def _compact_match_text(value: Any) -> str:
     )
 
 
+def _bounded_future_chapter_count(value: Any, *, default: int | None = None) -> int:
+    count = _safe_int(value, default or _FUTURE_REQUIREMENT_DEFAULT_CHAPTER_COUNT)
+    return max(1, min(_FUTURE_REQUIREMENT_MAX_CHAPTER_COUNT, count))
+
+
 def _priority_from_issue(issue: ContinuityIssue | None) -> int:
     severity = _clean_text(issue.severity if issue else "").lower()
     if severity == "high":
@@ -494,6 +503,13 @@ class StoryStateMaintainerService:
         else:
             raise ConflictError("story_state_maintenance_action_rollback_unsupported")
 
+        await self._rollback_future_requirements_for_action(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            action=action,
+            created_by=created_by,
+        )
         action.status = "rolled_back"
         await session.flush()
         return action
@@ -606,9 +622,22 @@ class StoryStateMaintainerService:
         except ValueError as exc:
             raise ConflictError(str(exc)) from exc
 
-        action.after_json = after_json
         action.status = "applied"
         action.applied_at = _now()
+        action.after_json = after_json
+        await session.flush()
+        future_result = await self._apply_future_requirements_for_action(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            chapter=chapter,
+            scene=scene,
+            action_row=action,
+            parsed=parsed,
+            created_by=created_by,
+        )
+        if future_result:
+            action.after_json = {**dict(action.after_json or {}), **future_result}
         await session.flush()
         return action
 
@@ -1163,6 +1192,20 @@ class StoryStateMaintainerService:
             created_by=created_by,
             applied_at=applied_at,
         )
+        if status == "applied":
+            future_result = await self._apply_future_requirements_for_action(
+                session,
+                organization_id=organization_id,
+                project_id=project_id,
+                chapter=chapter,
+                scene=scene,
+                action_row=row,
+                parsed=action,
+                created_by=created_by,
+            )
+            if future_result:
+                row.after_json = {**dict(row.after_json or {}), **future_result}
+                await session.flush()
         return {"action_id": row.id, "status": status}
 
     async def _get_state_or_error(
@@ -1506,6 +1549,217 @@ class StoryStateMaintainerService:
             created_by=created_by,
         )
         return {"target": after}
+
+    def _future_requirement_payload(
+        self,
+        *,
+        action: _ParsedAction,
+        state: StoryStateItem,
+    ) -> dict[str, Any] | None:
+        raw = action.patch.get("future_requirement")
+        config = dict(raw) if isinstance(raw, dict) else {}
+        if config.get("enabled") is False:
+            return None
+
+        summary = (
+            _clean_text(config.get("summary"))
+            or _clean_text(action.patch.get("future_requirement_summary"))
+        )
+        if not summary:
+            return None
+
+        scope = _clean_text(config.get("scope") or action.patch.get("future_requirement_scope"))
+        scope_default = {
+            "next_chapter": 1,
+            "next_3_chapters": 3,
+            "short_term": 3,
+            "long_term": _FUTURE_REQUIREMENT_MAX_CHAPTER_COUNT,
+            "until_payoff": _FUTURE_REQUIREMENT_MAX_CHAPTER_COUNT,
+        }.get(scope, _FUTURE_REQUIREMENT_DEFAULT_CHAPTER_COUNT)
+        chapter_count = _bounded_future_chapter_count(
+            config.get("chapter_count")
+            or config.get("target_chapter_count")
+            or action.patch.get("future_chapter_count"),
+            default=scope_default,
+        )
+        priority = max(
+            0,
+            min(
+                100,
+                _safe_int(
+                    config.get("priority") or action.patch.get("future_requirement_priority"),
+                    max(85, int(state.priority or 0)),
+                ),
+            ),
+        )
+        return {
+            "requirement_type": _clean_requirement_type(
+                config.get("requirement_type")
+                or action.patch.get("future_requirement_type")
+                or "must_remember"
+            ),
+            "summary": summary[:1000],
+            "priority": priority,
+            "chapter_count": chapter_count,
+            "scope": scope or "auto",
+        }
+
+    async def _load_future_unwritten_chapters(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        chapter: Chapter,
+        limit: int,
+    ) -> list[Chapter]:
+        generated_draft_exists = (
+            select(DraftVersion.id)
+            .where(
+                DraftVersion.organization_id == organization_id,
+                DraftVersion.project_id == project_id,
+                DraftVersion.chapter_id == Chapter.id,
+                DraftVersion.content != "",
+            )
+            .exists()
+        )
+        result = await session.execute(
+            select(Chapter)
+            .where(
+                Chapter.organization_id == organization_id,
+                Chapter.project_id == project_id,
+                Chapter.chapter_index > int(chapter.chapter_index or 0),
+                Chapter.status.notin_(["drafted", "completed", "exported"]),
+                ~generated_draft_exists,
+            )
+            .order_by(Chapter.chapter_index.asc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def _find_existing_future_requirement(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        chapter_id: str,
+        state_item_id: str,
+        requirement_type: str,
+        summary: str,
+    ) -> ChapterStateRequirement | None:
+        result = await session.execute(
+            select(ChapterStateRequirement).where(
+                ChapterStateRequirement.organization_id == organization_id,
+                ChapterStateRequirement.project_id == project_id,
+                ChapterStateRequirement.chapter_id == chapter_id,
+                ChapterStateRequirement.state_item_id == state_item_id,
+                ChapterStateRequirement.requirement_type == requirement_type,
+                ChapterStateRequirement.summary == summary,
+                ChapterStateRequirement.status == "active",
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def _apply_future_requirements_for_action(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        chapter: Chapter,
+        scene: Scene,
+        action_row: StoryStateMaintenanceAction,
+        parsed: _ParsedAction,
+        created_by: str | None,
+    ) -> dict[str, Any]:
+        if parsed.action_type not in _FUTURE_REQUIREMENT_ACTION_TYPES:
+            return {}
+        state_id = action_row.target_state_id or parsed.target_state_id
+        if not state_id:
+            return {}
+        try:
+            state = await self._get_state_or_error(
+                session,
+                organization_id=organization_id,
+                project_id=project_id,
+                state_id=state_id,
+            )
+        except ValueError:
+            return {}
+        payload = self._future_requirement_payload(action=parsed, state=state)
+        if not payload:
+            return {}
+
+        future_chapters = await self._load_future_unwritten_chapters(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            chapter=chapter,
+            limit=int(payload["chapter_count"]),
+        )
+        if not future_chapters:
+            return {}
+
+        reason = f"{_FUTURE_REQUIREMENT_REASON_PREFIX}{action_row.id}"
+        created: list[ChapterStateRequirement] = []
+        deduped = 0
+        repo = ChapterStateRequirementRepository(session)
+        history_repo = StoryStateHistoryRepository(session)
+        for target_chapter in future_chapters:
+            existing = await self._find_existing_future_requirement(
+                session,
+                organization_id=organization_id,
+                project_id=project_id,
+                chapter_id=target_chapter.id,
+                state_item_id=state.id,
+                requirement_type=str(payload["requirement_type"]),
+                summary=str(payload["summary"]),
+            )
+            if existing:
+                deduped += 1
+                continue
+            requirement = await repo.create(
+                organization_id=organization_id,
+                project_id=project_id,
+                chapter_id=target_chapter.id,
+                source_chapter_id=chapter.id,
+                source_scene_id=scene.id,
+                target_chapter_id=target_chapter.id,
+                origin_type="previous_chapter_carryover",
+                status="active",
+                superseded_by_requirement_id=None,
+                source_issue_id=None,
+                status_reason=reason,
+                state_item_id=state.id,
+                requirement_type=str(payload["requirement_type"]),
+                summary=str(payload["summary"]),
+                priority=int(payload["priority"]),
+            )
+            created.append(requirement)
+            snapshot = _requirement_snapshot(requirement)
+            await history_repo.create(
+                organization_id=organization_id,
+                project_id=project_id,
+                state_item_id=state.id,
+                chapter_id=target_chapter.id,
+                scene_id=scene.id,
+                change_type="create",
+                before_json={},
+                after_json={"requirement": snapshot},
+                reason=reason,
+                source_excerpt=state.source_excerpt,
+                created_by=created_by,
+            )
+
+        if not created and not deduped:
+            return {}
+        return {
+            "future_requirement_count": len(created),
+            "future_requirement_deduped_count": deduped,
+            "future_requirement_scope": payload["scope"],
+            "future_requirements": [_requirement_snapshot(row) for row in created],
+        }
 
     def _proposed_requirement_payload(
         self,
@@ -2298,6 +2552,58 @@ class StoryStateMaintainerService:
         ):
             raise ConflictError("story_state_maintenance_action_target_changed")
         return requirement
+
+    async def _rollback_future_requirements_for_action(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        action: StoryStateMaintenanceAction,
+        created_by: str | None,
+    ) -> None:
+        snapshots = [
+            snapshot
+            for snapshot in _json_list(_json_dict(action.after_json).get("future_requirements"))
+            if isinstance(snapshot, dict)
+        ]
+        if not snapshots:
+            return
+
+        reason = f"{_FUTURE_REQUIREMENT_REASON_PREFIX}{action.id}"
+        history_repo = StoryStateHistoryRepository(session)
+        for snapshot in snapshots:
+            requirement_id = _clean_id(snapshot.get("id"))
+            if not requirement_id:
+                continue
+            try:
+                requirement = await self._get_requirement_or_error(
+                    session,
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    requirement_id=requirement_id,
+                )
+            except ValueError:
+                continue
+            if requirement.status != "active" or requirement.status_reason != reason:
+                continue
+            before = _requirement_snapshot(requirement)
+            requirement.status = "disabled"
+            requirement.status_reason = f"rollback_ai_story_state_maintenance:{action.id}"
+            await session.flush()
+            await history_repo.create(
+                organization_id=organization_id,
+                project_id=project_id,
+                state_item_id=requirement.state_item_id,
+                chapter_id=requirement.chapter_id,
+                scene_id=action.scene_id,
+                change_type="remove",
+                before_json={"requirement": before},
+                after_json={"requirement": _requirement_snapshot(requirement)},
+                reason=f"rollback_ai_story_state_maintenance:{action.id}",
+                source_excerpt="",
+                created_by=created_by,
+            )
 
     async def _rollback_create_state_action(
         self,

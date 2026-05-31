@@ -32,6 +32,7 @@
 - `state_type` 只能是：`skill`、`artifact`、`identity`、`grudge`、`foreshadow`、`oath`。
 - 如果已有近义关键设定，优先使用 `update_state` 或 `merge_states`，不要创建重复设定。
 - 只记录会影响后续章节的一贯事实；一次性动作、氛围描写、普通战斗过程不要创建。
+- 如果该设定需要后续未生成章节持续承接，在 `patch.future_requirement` 中给出承接要求，由系统自动写入未来章节。
 
 ```json
 {
@@ -51,7 +52,15 @@
     },
     "source_excerpt": "青冥洗瞳露化作凉意入眼，旧日针扎般的剧痛只剩短暂酸胀。",
     "priority": 90,
-    "is_hard_constraint": true
+    "is_hard_constraint": true,
+    "future_requirement": {
+      "enabled": true,
+      "scope": "next_3_chapters",
+      "chapter_count": 3,
+      "requirement_type": "must_remember",
+      "summary": "后续章节必须承接青冥洗瞳露已缓解因果灰线眼部代价，不能再写成旧日剧痛。",
+      "priority": 92
+    }
   }
 }
 ```
@@ -78,6 +87,8 @@
   }
 }
 ```
+
+`update_state`、`supersede_state` 如果会影响后续未生成章节，也可以在 `patch.future_requirement` 中加入同样结构的未来承接要求。
 
 ### 3. merge_states
 
@@ -202,6 +213,28 @@
 - `high`
 - `merge_states` 的 `medium` 风险动作
 - 非高风险动作 `confidence < 0.75` 时只记录为 `suggested`
+
+## 未来章节承接要求
+
+当新设定或设定变化会影响后续章节时，输出：
+
+```json
+"future_requirement": {
+  "enabled": true,
+  "scope": "next_chapter | next_3_chapters | short_term | long_term | until_payoff",
+  "chapter_count": 3,
+  "requirement_type": "must_remember",
+  "summary": "写给后续章节的明确承接要求",
+  "priority": 90
+}
+```
+
+要求：
+
+- 只有会影响未来写作的一贯事实才生成 `future_requirement`。
+- `summary` 要写成可直接注入写作上下文的要求，不要写分析过程。
+- 如果只是本章已解决的一次性事项，`future_requirement.enabled=false` 或省略该字段。
+- 系统只会写入未生成章节，并会自动去重。
 
 ## 输出格式
 

@@ -289,9 +289,74 @@ async def test_story_state_maintainer_creates_new_state_and_rolls_back(
     db_session,
 ):
     user_id, project, chapter, scene, draft = _base_scene()
-    db_session.add_all([project, chapter, scene, draft])
+    next_chapter = Chapter(
+        id=new_id("chapter"),
+        organization_id=project.organization_id,
+        project_id=project.id,
+        volume_id=None,
+        chapter_index=13,
+        title="灰线初稳",
+        summary="继续承接青冥洗瞳露。",
+        goal="稳定新代价",
+        conflict="旧伤反复",
+        ending_hook="因果灰线更清晰",
+        status="planned",
+    )
+    generated_chapter = Chapter(
+        id=new_id("chapter"),
+        organization_id=project.organization_id,
+        project_id=project.id,
+        volume_id=None,
+        chapter_index=14,
+        title="已生成章节",
+        summary="这一章已有正文，不应被追加未来承接。",
+        goal="",
+        conflict="",
+        ending_hook="",
+        status="drafted",
+    )
+    later_chapter = Chapter(
+        id=new_id("chapter"),
+        organization_id=project.organization_id,
+        project_id=project.id,
+        volume_id=None,
+        chapter_index=15,
+        title="丹房余波",
+        summary="未来仍需承接眼部代价变化。",
+        goal="",
+        conflict="",
+        ending_hook="",
+        status="planned",
+    )
+    generated_draft = DraftVersion(
+        id=new_id("draft"),
+        organization_id=project.organization_id,
+        project_id=project.id,
+        chapter_id=generated_chapter.id,
+        scene_id=None,
+        version_type="draft",
+        content="这一章已经生成正文。",
+        content_format="markdown",
+        word_count=10,
+        status="draft",
+        parent_version_id=None,
+        created_by=user_id,
+    )
+    db_session.add_all(
+        [
+            project,
+            chapter,
+            scene,
+            draft,
+            next_chapter,
+            generated_chapter,
+            later_chapter,
+            generated_draft,
+        ]
+    )
     await db_session.commit()
 
+    future_summary = "后续章节必须承接青冥洗瞳露已缓解因果灰线眼部代价。"
     result = await _run_with_response(
         monkeypatch,
         db_session,
@@ -312,6 +377,14 @@ async def test_story_state_maintainer_creates_new_state_and_rolls_back(
                         "source_excerpt": "青冥洗瞳露化作凉意入眼。",
                         "priority": 91,
                         "is_hard_constraint": True,
+                        "future_requirement": {
+                            "enabled": True,
+                            "scope": "next_3_chapters",
+                            "chapter_count": 3,
+                            "requirement_type": "must_remember",
+                            "summary": future_summary,
+                            "priority": 92,
+                        },
                     },
                 }
             ]
@@ -336,11 +409,26 @@ async def test_story_state_maintainer_creates_new_state_and_rolls_back(
     assert action.status == "applied"
     assert action.target_state_id == state.id
     assert action.after_json["target"]["name"] == "青冥洗瞳露"
+    assert action.after_json["future_requirement_count"] == 2
+    assert action.after_json["future_requirement_scope"] == "next_3_chapters"
     assert action.patch_json["auto_decision"]["policy"] == "low_confident_auto_apply"
 
+    requirements = (
+        await db_session.execute(
+            select(ChapterStateRequirement).where(
+                ChapterStateRequirement.project_id == project.id,
+                ChapterStateRequirement.state_item_id == state.id,
+            )
+        )
+    ).scalars().all()
+    assert {item.chapter_id for item in requirements} == {next_chapter.id, later_chapter.id}
+    assert all(item.summary == future_summary for item in requirements)
+    assert all(item.origin_type == "previous_chapter_carryover" for item in requirements)
+    assert all(item.status_reason == f"ai_maintenance_action:{action.id}" for item in requirements)
+
     history = (await db_session.execute(select(StoryStateHistory))).scalars().all()
-    assert len(history) == 1
-    assert history[0].change_type == "create"
+    assert len(history) == 3
+    assert [item.change_type for item in history].count("create") == 3
 
     rolled_back = await story_state_maintainer_service.rollback_action(
         db_session,
@@ -355,6 +443,10 @@ async def test_story_state_maintainer_creates_new_state_and_rolls_back(
     await db_session.refresh(state)
     assert state.status == "inactive"
     assert state.status_reason.startswith("rollback_ai_story_state_maintenance:")
+    for requirement in requirements:
+        await db_session.refresh(requirement)
+        assert requirement.status == "disabled"
+        assert requirement.status_reason.startswith("rollback_ai_story_state_maintenance:")
 
 
 @pytest.mark.asyncio

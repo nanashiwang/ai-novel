@@ -308,6 +308,7 @@ function buildImpactText(action: StoryStateMaintenanceAction) {
     action.after_json,
     "superseded_requirement_count",
   );
+  const futureRequirementCount = readNumber(action.after_json, "future_requirement_count");
   const parts = [];
   if (action.source_state_ids.length > 0) {
     parts.push(`来源设定 ${action.source_state_ids.length} 条`);
@@ -320,6 +321,9 @@ function buildImpactText(action: StoryStateMaintenanceAction) {
   }
   if (supersededRequirementCount) {
     parts.push(`同步替代承接 ${supersededRequirementCount} 条`);
+  }
+  if (futureRequirementCount) {
+    parts.push(`生成未来承接 ${futureRequirementCount} 条`);
   }
   if (action.target_requirement_id && action.action_type !== "merge_states") {
     parts.push(`承接要求 ${action.target_requirement_id.slice(0, 12)}…`);
