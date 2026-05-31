@@ -279,6 +279,19 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
       toast.error(e instanceof ApiError ? e.message : "添加承接要求失败");
     },
   });
+  const rollbackMaintenanceAction = useMutation({
+    mutationFn: (actionId: string) =>
+      storyStatesApi.rollbackMaintenanceAction(projectId, actionId),
+    onSuccess: () => {
+      toast.success("已撤销 AI 维护动作");
+      queryClient.invalidateQueries({ queryKey: maintenanceActionsKey });
+      queryClient.invalidateQueries({ queryKey: storyStatesKey });
+      queryClient.invalidateQueries({ queryKey: antiForgettingPreviewKey });
+    },
+    onError: (e: unknown) => {
+      toast.error(e instanceof ApiError ? e.message : "撤销维护动作失败");
+    },
+  });
 
   // === write mutation：依赖太多本地 key，保留在 page 内 ===
   const write = useMutation({
@@ -896,8 +909,14 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
             <AIMaintenanceCard
               actions={maintenanceActions}
               isPending={isMaintenanceActionsPending}
+              rollingBackActionId={
+                rollbackMaintenanceAction.isPending
+                  ? (rollbackMaintenanceAction.variables ?? null)
+                  : null
+              }
               storyStateById={storyStateById}
               onSelectState={setSelectedStoryState}
+              onRollbackAction={(actionId) => rollbackMaintenanceAction.mutate(actionId)}
             />
           </CardContent>
         </Card>

@@ -588,6 +588,10 @@ export const storyStatesApi = {
       `/projects/${projectId}/story-states/maintenance-actions`,
       params,
     ),
+  rollbackMaintenanceAction: (projectId: string, actionId: string) =>
+    http.post<StoryStateMaintenanceAction>(
+      `/projects/${projectId}/story-states/maintenance-actions/${actionId}/rollback`,
+    ),
   get: (projectId: string, stateId: string) =>
     http.get<StoryStateItem>(`/projects/${projectId}/story-states/${stateId}`),
   history: (projectId: string, stateId: string) =>

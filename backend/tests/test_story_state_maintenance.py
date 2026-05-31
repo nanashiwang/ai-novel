@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 from sqlalchemy import select
 
+from app.core.exceptions import ConflictError
 from app.models import (
     Chapter,
     ChapterStateRequirement,
@@ -415,6 +416,161 @@ async def test_story_state_maintainer_logs_high_risk_without_applying(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_story_state_maintainer_rolls_back_applied_update(monkeypatch, db_session):
+    user_id, project, chapter, scene, draft = _base_scene()
+    state = _state(
+        org_id=project.organization_id,
+        project_id=project.id,
+        chapter_id=chapter.id,
+        scene_id=scene.id,
+    )
+    db_session.add_all([project, chapter, scene, draft, state])
+    await db_session.commit()
+
+    result = await _run_with_response(
+        monkeypatch,
+        db_session,
+        response={
+            "actions": [
+                {
+                    "type": "update_state",
+                    "target_state_id": state.id,
+                    "confidence": 0.91,
+                    "risk_level": "low",
+                    "reason": "正文明确写出旧剧痛被缓解为酸胀",
+                    "patch": {
+                        "summary": "因果灰线视野可看见因果线，使用后左眼只会短暂酸胀。",
+                        "value_json": {"cost": "short_eye_soreness"},
+                    },
+                }
+            ]
+        },
+        user_id=user_id,
+        project=project,
+        chapter=chapter,
+        scene=scene,
+        draft=draft,
+    )
+    await db_session.commit()
+
+    assert result["applied_count"] == 1
+    action = (await db_session.execute(select(StoryStateMaintenanceAction))).scalar_one()
+    rolled_back = await story_state_maintainer_service.rollback_action(
+        db_session,
+        organization_id=project.organization_id,
+        project_id=project.id,
+        action_id=action.id,
+        created_by=user_id,
+    )
+    await db_session.commit()
+
+    assert rolled_back.status == "rolled_back"
+    await db_session.refresh(state)
+    assert state.summary == "林照夜能短暂看见因果灰线，代价是左眼剧痛。"
+    assert state.value_json["cost"] == "left_eye_pain"
+    history = (await db_session.execute(select(StoryStateHistory))).scalars().all()
+    assert len(history) == 2
+    assert any(item.reason.startswith("rollback_ai_story_state_maintenance") for item in history)
+
+
+@pytest.mark.asyncio
+async def test_story_state_maintainer_rejects_non_applied_rollback(db_session):
+    user_id, project, chapter, scene, draft = _base_scene()
+    state = _state(
+        org_id=project.organization_id,
+        project_id=project.id,
+        chapter_id=chapter.id,
+        scene_id=scene.id,
+    )
+    action = StoryStateMaintenanceAction(
+        id=new_id("state_action"),
+        organization_id=project.organization_id,
+        project_id=project.id,
+        chapter_id=chapter.id,
+        scene_id=scene.id,
+        draft_id=draft.id,
+        action_type="update_state",
+        target_state_id=state.id,
+        source_state_ids=[],
+        target_requirement_id=None,
+        risk_level="medium",
+        confidence=0.8,
+        status="needs_review",
+        reason="风险较高，等待确认",
+        before_json={"target": {"id": state.id, "summary": "旧设定"}},
+        after_json={"target": {"id": state.id, "summary": "旧设定"}},
+        created_by=user_id,
+        applied_at=None,
+    )
+    db_session.add_all([project, chapter, scene, draft, state, action])
+    await db_session.commit()
+
+    with pytest.raises(ConflictError, match="story_state_maintenance_action_not_applied"):
+        await story_state_maintainer_service.rollback_action(
+            db_session,
+            organization_id=project.organization_id,
+            project_id=project.id,
+            action_id=action.id,
+            created_by=user_id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_story_state_maintainer_rejects_merge_rollback(db_session):
+    user_id, project, chapter, scene, draft = _base_scene()
+    target = _state(
+        org_id=project.organization_id,
+        project_id=project.id,
+        chapter_id=chapter.id,
+        scene_id=scene.id,
+    )
+    source = _state(
+        org_id=project.organization_id,
+        project_id=project.id,
+        chapter_id=chapter.id,
+        scene_id=scene.id,
+        name="因果灰线",
+    )
+    action = StoryStateMaintenanceAction(
+        id=new_id("state_action"),
+        organization_id=project.organization_id,
+        project_id=project.id,
+        chapter_id=chapter.id,
+        scene_id=scene.id,
+        draft_id=draft.id,
+        action_type="merge_states",
+        target_state_id=target.id,
+        source_state_ids=[source.id],
+        target_requirement_id=None,
+        risk_level="low",
+        confidence=0.95,
+        status="applied",
+        reason="合并重复设定",
+        before_json={
+            "target": {"id": target.id, "summary": target.summary},
+            "sources": [{"id": source.id, "summary": source.summary}],
+        },
+        after_json={"updated_requirement_count": 1, "updated_issue_count": 1},
+        created_by=user_id,
+        applied_at=None,
+    )
+    db_session.add_all([project, chapter, scene, draft, target, source, action])
+    await db_session.commit()
+
+    with pytest.raises(
+        ConflictError,
+        match="story_state_maintenance_action_rollback_unsupported",
+    ):
+        await story_state_maintainer_service.rollback_action(
+            db_session,
+            organization_id=project.organization_id,
+            project_id=project.id,
+            action_id=action.id,
+            created_by=user_id,
+        )
+
+
+@pytest.mark.asyncio
 async def test_story_state_maintenance_actions_api_filters_by_scene(client, db_session):
     token, org_id, user_id = await _register(client, "state-maintenance-api@example.com")
     headers = {"Authorization": f"Bearer {token}"}
@@ -503,3 +659,107 @@ async def test_story_state_maintenance_actions_api_filters_by_scene(client, db_s
     assert data["items"][0]["action_type"] == "update_state"
     assert data["items"][0]["target_state_id"] == state.id
     assert data["items"][0]["before_json"]["target"]["summary"] == "旧设定"
+
+
+@pytest.mark.asyncio
+async def test_story_state_maintenance_action_api_rolls_back_update(client, db_session):
+    token, org_id, user_id = await _register(client, "state-maintenance-rollback@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    project_res = await client.post(
+        "/api/v1/projects",
+        headers=headers,
+        json={"title": "维护撤销 API 测试", "target_word_count": 100_000},
+    )
+    assert project_res.status_code == 201, project_res.text
+    project_id = project_res.json()["id"]
+
+    chapter = Chapter(
+        id=new_id("chapter"),
+        organization_id=org_id,
+        project_id=project_id,
+        volume_id=None,
+        chapter_index=8,
+        title="旧痛复核",
+        summary="",
+        goal="",
+        conflict="",
+        ending_hook="",
+        status="planned",
+    )
+    scene = Scene(
+        id=new_id("scene"),
+        organization_id=org_id,
+        project_id=project_id,
+        chapter_id=chapter.id,
+        scene_index=1,
+        title="撤销维护",
+        time_marker="夜",
+        location="丹房",
+        characters=["林照夜"],
+        scene_purpose="测试维护撤销",
+        entry_state="",
+        exit_state="",
+        goal="",
+        conflict="",
+        must_include=[],
+        must_avoid=[],
+        emotion_start="",
+        emotion_end="",
+        reveal="",
+        hook="",
+        status="planned",
+    )
+    state = _state(
+        org_id=org_id,
+        project_id=project_id,
+        chapter_id=chapter.id,
+        scene_id=scene.id,
+        summary="因果灰线视野使用后只会短暂酸胀。",
+    )
+    state.value_json = {"cost": "short_eye_soreness"}
+    action = StoryStateMaintenanceAction(
+        id=new_id("state_action"),
+        organization_id=org_id,
+        project_id=project_id,
+        chapter_id=chapter.id,
+        scene_id=scene.id,
+        draft_id=None,
+        action_type="update_state",
+        target_state_id=state.id,
+        source_state_ids=[],
+        target_requirement_id=None,
+        risk_level="low",
+        confidence=0.91,
+        status="applied",
+        reason="正文明确更新了关键设定",
+        before_json={
+            "target": {
+                "id": state.id,
+                "summary": "林照夜能短暂看见因果灰线，代价是左眼剧痛。",
+                "value_json": {"cost": "left_eye_pain"},
+            }
+        },
+        after_json={
+            "target": {
+                "id": state.id,
+                "summary": "因果灰线视野使用后只会短暂酸胀。",
+                "value_json": {"cost": "short_eye_soreness"},
+            }
+        },
+        created_by=user_id,
+        applied_at=None,
+    )
+    db_session.add_all([chapter, scene, state, action])
+    await db_session.commit()
+
+    res = await client.post(
+        f"/api/v1/projects/{project_id}/story-states/maintenance-actions/{action.id}/rollback",
+        headers=headers,
+    )
+
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["status"] == "rolled_back"
+    await db_session.refresh(state)
+    assert state.summary == "林照夜能短暂看见因果灰线，代价是左眼剧痛。"
+    assert state.value_json["cost"] == "left_eye_pain"

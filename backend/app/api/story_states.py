@@ -31,10 +31,12 @@ from app.schemas.story_state import (
     StoryStateItemResponse,
     StoryStateListResponse,
     StoryStateMaintenanceActionListResponse,
+    StoryStateMaintenanceActionResponse,
     StoryStateMergeRequest,
     StoryStateMergeResponse,
     StoryStatePatchRequest,
 )
+from app.services.story_state.maintainer import story_state_maintainer_service
 
 router = APIRouter(prefix="/projects/{project_id}/story-states", tags=["story-states"])
 chapter_router = APIRouter(prefix="/projects/{project_id}/chapters", tags=["story-states"])
@@ -405,6 +407,30 @@ async def list_story_state_maintenance_actions(
     stmt = stmt.order_by(StoryStateMaintenanceAction.created_at.desc()).limit(limit)
     result = await db.execute(stmt)
     return StoryStateMaintenanceActionListResponse(items=list(result.scalars().all()))
+
+
+@router.post(
+    "/maintenance-actions/{action_id}/rollback",
+    response_model=StoryStateMaintenanceActionResponse,
+)
+async def rollback_story_state_maintenance_action(
+    project_id: str,
+    action_id: str,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    require_permission(user, "project:update", tenant)
+    await _get_project_or_404(project_id, tenant, db)
+    action = await story_state_maintainer_service.rollback_action(
+        db,
+        organization_id=tenant.organization_id,
+        project_id=project_id,
+        action_id=action_id,
+        created_by=user.id,
+    )
+    await db.commit()
+    return action
 
 
 @router.get("/{state_id}", response_model=StoryStateItemResponse)

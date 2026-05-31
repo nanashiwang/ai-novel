@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, GitMerge, ShieldAlert, WandSparkles } from "lucide-react";
+import { Bot, GitMerge, ShieldAlert, Undo2, WandSparkles } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,7 +23,7 @@ const statusLabel: Record<StoryStateMaintenanceStatus, string> = {
   needs_review: "待确认",
   suggested: "仅建议",
   skipped: "已跳过",
-  rolled_back: "已回滚",
+  rolled_back: "已撤销",
 };
 
 const statusTone: Record<StoryStateMaintenanceStatus, "slate" | "blue" | "green" | "amber" | "rose"> = {
@@ -43,20 +43,25 @@ const riskTone: Record<StoryStateMaintenanceRiskLevel, "green" | "amber" | "rose
 type AIMaintenanceCardProps = {
   actions: StoryStateMaintenanceAction[];
   isPending?: boolean;
+  rollingBackActionId?: string | null;
   storyStateById: Record<string, StoryStateItem>;
   onSelectState: (state: StoryStateItem) => void;
+  onRollbackAction?: (actionId: string) => void;
 };
 
 export function AIMaintenanceCard({
   actions,
   isPending,
+  rollingBackActionId,
   storyStateById,
   onSelectState,
+  onRollbackAction,
 }: AIMaintenanceCardProps) {
   const applied = actions.filter((item) => item.status === "applied").length;
   const needsReview = actions.filter((item) => item.status === "needs_review").length;
   const suggested = actions.filter((item) => item.status === "suggested").length;
   const skipped = actions.filter((item) => item.status === "skipped").length;
+  const rolledBack = actions.filter((item) => item.status === "rolled_back").length;
 
   return (
     <div className="rounded-2xl border border-cyan-100 bg-gradient-to-br from-cyan-50 via-white to-slate-50 p-3">
@@ -83,6 +88,7 @@ export function AIMaintenanceCard({
           {needsReview ? <Badge tone="amber">待确认 {needsReview}</Badge> : null}
           {suggested ? <Badge tone="blue">建议 {suggested}</Badge> : null}
           {skipped ? <Badge tone="slate">跳过 {skipped}</Badge> : null}
+          {rolledBack ? <Badge tone="rose">已撤销 {rolledBack}</Badge> : null}
         </div>
       ) : null}
 
@@ -98,8 +104,10 @@ export function AIMaintenanceCard({
             <AIMaintenanceActionItem
               key={action.id}
               action={action}
+              rollingBackActionId={rollingBackActionId}
               storyStateById={storyStateById}
               onSelectState={onSelectState}
+              onRollbackAction={onRollbackAction}
             />
           ))}
         </ul>
@@ -116,12 +124,16 @@ export function AIMaintenanceCard({
 
 function AIMaintenanceActionItem({
   action,
+  rollingBackActionId,
   storyStateById,
   onSelectState,
+  onRollbackAction,
 }: {
   action: StoryStateMaintenanceAction;
+  rollingBackActionId?: string | null;
   storyStateById: Record<string, StoryStateItem>;
   onSelectState: (state: StoryStateItem) => void;
+  onRollbackAction?: (actionId: string) => void;
 }) {
   const targetState = action.target_state_id
     ? storyStateById[action.target_state_id]
@@ -129,6 +141,8 @@ function AIMaintenanceActionItem({
   const beforeSummary = findSummary(action.before_json);
   const afterSummary = findSummary(action.after_json);
   const impactText = buildImpactText(action);
+  const canRollback = action.status === "applied" && action.action_type !== "merge_states";
+  const isRollingBack = rollingBackActionId === action.id;
 
   return (
     <li className="rounded-xl border border-white/80 bg-white/85 p-3 text-xs shadow-sm">
@@ -153,15 +167,42 @@ function AIMaintenanceActionItem({
           {impactText ? (
             <p className="mt-1 text-[11px] text-slate-500">{impactText}</p>
           ) : null}
-          {targetState ? (
-            <Button
-              size="sm"
-              variant="ghost"
-              className="mt-2 h-7 px-2 text-[11px]"
-              onClick={() => onSelectState(targetState)}
-            >
-              查看关键设定：{targetState.name}
-            </Button>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {targetState ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2 text-[11px]"
+                onClick={() => onSelectState(targetState)}
+              >
+                查看关键设定：{targetState.name}
+              </Button>
+            ) : null}
+            {canRollback && onRollbackAction ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2 text-[11px] text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                disabled={isRollingBack}
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "确定撤销这次 AI 维护动作吗？会把对应关键设定/承接要求恢复到改前状态。",
+                    )
+                  ) {
+                    onRollbackAction(action.id);
+                  }
+                }}
+              >
+                <Undo2 className="size-3.5" />
+                {isRollingBack ? "撤销中" : "撤销"}
+              </Button>
+            ) : null}
+          </div>
+          {action.status === "applied" && action.action_type === "merge_states" ? (
+            <p className="mt-1 text-[11px] text-slate-400">
+              合并设定涉及承接要求/审稿问题回连，暂不支持一键撤销。
+            </p>
           ) : null}
         </div>
       </div>

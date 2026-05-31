@@ -14,12 +14,14 @@ from typing import Any
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import ConflictError, NotFoundError
 from app.models.chapter import Chapter
 from app.models.chapter_state_requirement import ChapterStateRequirement
 from app.models.continuity_issue import ContinuityIssue
 from app.models.draft_version import DraftVersion
 from app.models.scene import Scene
 from app.models.story_state_item import StoryStateItem
+from app.models.story_state_maintenance_action import StoryStateMaintenanceAction
 from app.repositories import (
     ChapterStateRequirementRepository,
     StoryStateHistoryRepository,
@@ -46,6 +48,39 @@ _AUTO_APPLY_CONFIDENCE = 0.85
 _SUGGEST_ONLY_CONFIDENCE = 0.75
 _MAX_ACTIONS_PER_RUN = 20
 _ALLOWED_STATE_STATUSES = {"active", "hidden", "damaged", "resolved", "consumed"}
+_ROLLBACK_UNSUPPORTED_ACTIONS = {"merge_states"}
+_STATE_RESTORE_FIELDS = {
+    "entity_type",
+    "entity_id",
+    "state_type",
+    "name",
+    "status",
+    "superseded_by_state_id",
+    "status_reason",
+    "summary",
+    "value_json",
+    "source_chapter_id",
+    "source_scene_id",
+    "source_excerpt",
+    "updated_in_chapter_id",
+    "priority",
+    "is_hard_constraint",
+}
+_REQUIREMENT_RESTORE_FIELDS = {
+    "chapter_id",
+    "source_chapter_id",
+    "source_scene_id",
+    "target_chapter_id",
+    "origin_type",
+    "status",
+    "superseded_by_requirement_id",
+    "source_issue_id",
+    "status_reason",
+    "state_item_id",
+    "requirement_type",
+    "summary",
+    "priority",
+}
 
 
 @dataclass(slots=True)
@@ -143,6 +178,39 @@ def _issue_payload(row: ContinuityIssue) -> dict[str, Any]:
     }
 
 
+def _normalize_snapshot_value(field: str, value: Any) -> Any:
+    if field == "value_json":
+        return dict(value or {}) if isinstance(value, dict) else {}
+    if field == "priority":
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+    if field == "is_hard_constraint":
+        return bool(value)
+    if field in {"status_reason", "summary", "source_excerpt"}:
+        return _clean_text(value)
+    return value
+
+
+def _snapshot_matches_model(row: Any, snapshot: dict[str, Any], fields: set[str]) -> bool:
+    for field in fields:
+        if field not in snapshot:
+            continue
+        expected = _normalize_snapshot_value(field, snapshot.get(field))
+        current = _normalize_snapshot_value(field, getattr(row, field, None))
+        if current != expected:
+            return False
+    return True
+
+
+def _restore_model_snapshot(row: Any, snapshot: dict[str, Any], fields: set[str]) -> None:
+    for field in fields:
+        if field not in snapshot:
+            continue
+        setattr(row, field, _normalize_snapshot_value(field, snapshot.get(field)))
+
+
 def _action_schema() -> dict[str, Any]:
     return {
         "type": "object",
@@ -233,6 +301,50 @@ def _merge_value_json(
 
 
 class StoryStateMaintainerService:
+    async def rollback_action(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        action_id: str,
+        created_by: str | None,
+    ) -> StoryStateMaintenanceAction:
+        """撤销一条已自动应用的维护动作。"""
+        action = await StoryStateMaintenanceActionRepository(session).get(
+            action_id,
+            organization_id=organization_id,
+        )
+        if not action or action.project_id != project_id:
+            raise NotFoundError("story_state_maintenance_action_not_found")
+        if action.status != "applied":
+            raise ConflictError("story_state_maintenance_action_not_applied")
+        if action.action_type in _ROLLBACK_UNSUPPORTED_ACTIONS:
+            raise ConflictError("story_state_maintenance_action_rollback_unsupported")
+
+        if action.action_type == "update_state":
+            await self._rollback_update_state_action(
+                session,
+                organization_id=organization_id,
+                project_id=project_id,
+                action=action,
+                created_by=created_by,
+            )
+        elif action.action_type in {"resolve_requirement", "supersede_requirement"}:
+            await self._rollback_requirement_action(
+                session,
+                organization_id=organization_id,
+                project_id=project_id,
+                action=action,
+                created_by=created_by,
+            )
+        else:
+            raise ConflictError("story_state_maintenance_action_rollback_unsupported")
+
+        action.status = "rolled_back"
+        await session.flush()
+        return action
+
     async def maintain_after_draft(
         self,
         session: AsyncSession,
@@ -940,6 +1052,102 @@ class StoryStateMaintainerService:
             created_by=created_by,
         )
         return {"requirement": after}
+
+    async def _rollback_update_state_action(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        action: StoryStateMaintenanceAction,
+        created_by: str | None,
+    ) -> None:
+        before_snapshot = _json_dict(_json_dict(action.before_json).get("target"))
+        after_snapshot = _json_dict(_json_dict(action.after_json).get("target"))
+        state_id = _clean_id(before_snapshot.get("id")) or action.target_state_id
+        if not state_id or not before_snapshot:
+            raise ConflictError("story_state_maintenance_action_snapshot_missing")
+        try:
+            state = await self._get_state_or_error(
+                session,
+                organization_id=organization_id,
+                project_id=project_id,
+                state_id=state_id,
+            )
+        except ValueError as exc:
+            raise ConflictError(str(exc)) from exc
+        if after_snapshot and not _snapshot_matches_model(
+            state,
+            after_snapshot,
+            _STATE_RESTORE_FIELDS,
+        ):
+            raise ConflictError("story_state_maintenance_action_target_changed")
+
+        current_snapshot = story_state_service.snapshot(state)
+        _restore_model_snapshot(state, before_snapshot, _STATE_RESTORE_FIELDS)
+        await session.flush()
+        restored_snapshot = story_state_service.snapshot(state)
+        await StoryStateHistoryRepository(session).create(
+            organization_id=organization_id,
+            project_id=project_id,
+            state_item_id=state.id,
+            chapter_id=action.chapter_id or state.updated_in_chapter_id,
+            scene_id=action.scene_id or state.source_scene_id,
+            change_type="update",
+            before_json=current_snapshot,
+            after_json=restored_snapshot,
+            reason=f"rollback_ai_story_state_maintenance:{action.id}",
+            source_excerpt=state.source_excerpt,
+            created_by=created_by,
+        )
+
+    async def _rollback_requirement_action(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: str,
+        project_id: str,
+        action: StoryStateMaintenanceAction,
+        created_by: str | None,
+    ) -> None:
+        before_snapshot = _json_dict(_json_dict(action.before_json).get("requirement"))
+        after_snapshot = _json_dict(_json_dict(action.after_json).get("requirement"))
+        requirement_id = _clean_id(before_snapshot.get("id")) or action.target_requirement_id
+        if not requirement_id or not before_snapshot:
+            raise ConflictError("story_state_maintenance_action_snapshot_missing")
+        try:
+            requirement = await self._get_requirement_or_error(
+                session,
+                organization_id=organization_id,
+                project_id=project_id,
+                requirement_id=requirement_id,
+            )
+        except ValueError as exc:
+            raise ConflictError(str(exc)) from exc
+        if after_snapshot and not _snapshot_matches_model(
+            requirement,
+            after_snapshot,
+            _REQUIREMENT_RESTORE_FIELDS,
+        ):
+            raise ConflictError("story_state_maintenance_action_target_changed")
+
+        current_snapshot = _requirement_snapshot(requirement)
+        _restore_model_snapshot(requirement, before_snapshot, _REQUIREMENT_RESTORE_FIELDS)
+        await session.flush()
+        restored_snapshot = _requirement_snapshot(requirement)
+        await StoryStateHistoryRepository(session).create(
+            organization_id=organization_id,
+            project_id=project_id,
+            state_item_id=requirement.state_item_id,
+            chapter_id=action.chapter_id or requirement.chapter_id,
+            scene_id=action.scene_id,
+            change_type="update",
+            before_json={"requirement": current_snapshot},
+            after_json={"requirement": restored_snapshot},
+            reason=f"rollback_ai_story_state_maintenance:{action.id}",
+            source_excerpt="",
+            created_by=created_by,
+        )
 
 
 story_state_maintainer_service = StoryStateMaintainerService()
