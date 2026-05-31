@@ -520,6 +520,8 @@ _POSTGRES_SCHEMA_FIXES = [
       state_type VARCHAR(32) NOT NULL,
       name VARCHAR(200) NOT NULL,
       status VARCHAR(32) NOT NULL DEFAULT 'active',
+      superseded_by_state_id VARCHAR(64) REFERENCES story_state_items(id),
+      status_reason TEXT NOT NULL DEFAULT '',
       summary TEXT NOT NULL DEFAULT '',
       value_json JSONB NOT NULL DEFAULT '{}'::jsonb,
       source_chapter_id VARCHAR(64),
@@ -544,6 +546,26 @@ _POSTGRES_SCHEMA_FIXES = [
         "CREATE INDEX IF NOT EXISTS ix_story_state_items_project_status "
         "ON story_state_items(project_id, status)"
     ),
+    (
+        "ALTER TABLE story_state_items "
+        "ADD COLUMN IF NOT EXISTS superseded_by_state_id VARCHAR(64)"
+    ),
+    (
+        "ALTER TABLE story_state_items "
+        "ADD COLUMN IF NOT EXISTS status_reason TEXT NOT NULL DEFAULT ''"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_story_state_items_superseded_by "
+        "ON story_state_items(superseded_by_state_id)"
+    ),
+    """
+    DO $$ BEGIN
+      ALTER TABLE story_state_items
+      ADD CONSTRAINT fk_story_state_items_superseded_by
+      FOREIGN KEY (superseded_by_state_id) REFERENCES story_state_items(id);
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$;
+    """,
     (
         "CREATE INDEX IF NOT EXISTS ix_story_state_items_project_priority "
         "ON story_state_items(project_id, priority, updated_at)"

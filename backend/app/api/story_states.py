@@ -4,10 +4,10 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Query, status
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.api.deps import CurrentUserDep, DbDep, TenantDep
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import ConflictError, NotFoundError
 from app.core.permissions import require_permission
 from app.models.chapter import Chapter
 from app.models.chapter_state_requirement import ChapterStateRequirement
@@ -25,9 +25,12 @@ from app.schemas.story_state import (
     ChapterStateRequirementListResponse,
     ChapterStateRequirementPatchRequest,
     ChapterStateRequirementResponse,
+    StoryStateDuplicateListResponse,
     StoryStateHistoryListResponse,
     StoryStateItemResponse,
     StoryStateListResponse,
+    StoryStateMergeRequest,
+    StoryStateMergeResponse,
     StoryStatePatchRequest,
 )
 
@@ -201,6 +204,8 @@ def _state_snapshot(state: StoryStateItem) -> dict[str, Any]:
         "state_type": state.state_type,
         "name": state.name,
         "status": state.status,
+        "superseded_by_state_id": state.superseded_by_state_id,
+        "status_reason": state.status_reason or "",
         "summary": state.summary,
         "value_json": dict(state.value_json or {}),
         "source_chapter_id": state.source_chapter_id,
@@ -210,6 +215,84 @@ def _state_snapshot(state: StoryStateItem) -> dict[str, Any]:
         "priority": state.priority,
         "is_hard_constraint": state.is_hard_constraint,
     }
+
+
+def _state_response_payload(state: StoryStateItem) -> dict[str, Any]:
+    return {
+        "id": state.id,
+        "entity_type": state.entity_type,
+        "entity_id": state.entity_id,
+        "state_type": state.state_type,
+        "name": state.name,
+        "status": state.status,
+        "superseded_by_state_id": state.superseded_by_state_id,
+        "status_reason": state.status_reason or "",
+        "summary": state.summary,
+        "value_json": dict(state.value_json or {}),
+        "source_chapter_id": state.source_chapter_id,
+        "source_scene_id": state.source_scene_id,
+        "source_excerpt": state.source_excerpt,
+        "updated_in_chapter_id": state.updated_in_chapter_id,
+        "priority": state.priority,
+        "is_hard_constraint": state.is_hard_constraint,
+    }
+
+
+def _compact_state_text(value: str) -> str:
+    return "".join(ch.lower() for ch in value if ch.isalnum() or "\u4e00" <= ch <= "\u9fff")
+
+
+def _char_overlap_score(left: str, right: str) -> int:
+    left_set = set(_compact_state_text(left))
+    right_set = set(_compact_state_text(right))
+    if not left_set or not right_set:
+        return 0
+    return int(100 * len(left_set & right_set) / len(left_set | right_set))
+
+
+def _duplicate_score(left: StoryStateItem, right: StoryStateItem) -> tuple[int, list[str]]:
+    score = 0
+    reasons: list[str] = []
+    if left.entity_type == right.entity_type:
+        score += 15
+        reasons.append("实体类型一致")
+    if left.state_type == right.state_type:
+        score += 25
+        reasons.append("状态类型一致")
+    if left.entity_id and right.entity_id and left.entity_id == right.entity_id:
+        score += 15
+        reasons.append("实体 ID 一致")
+
+    left_name = _compact_state_text(left.name or "")
+    right_name = _compact_state_text(right.name or "")
+    if left_name and right_name:
+        if left_name == right_name:
+            score += 35
+            reasons.append("名称完全一致")
+        elif left_name in right_name or right_name in left_name:
+            score += 28
+            reasons.append("名称互相包含")
+        else:
+            name_overlap = _char_overlap_score(left.name or "", right.name or "")
+            if name_overlap >= 55:
+                score += min(24, int(name_overlap * 0.35))
+                reasons.append("名称高度相似")
+
+    summary_overlap = _char_overlap_score(left.summary or "", right.summary or "")
+    if summary_overlap >= 35:
+        score += min(20, int(summary_overlap * 0.25))
+        reasons.append("说明内容相似")
+
+    return min(score, 100), reasons
+
+
+def _merge_value_json(target: dict[str, Any], sources: list[StoryStateItem]) -> dict[str, Any]:
+    merged = dict(target or {})
+    for source in sources:
+        source_value = dict(source.value_json or {})
+        for key, value in source_value.items():
+            merged.setdefault(key, value)
+    return merged
 
 
 @router.get("", response_model=StoryStateListResponse)
@@ -236,6 +319,53 @@ async def list_story_states(
         limit=limit,
     )
     return StoryStateListResponse(items=list(items))
+
+
+@router.get("/duplicate-candidates", response_model=StoryStateDuplicateListResponse)
+async def list_story_state_duplicate_candidates(
+    project_id: str,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+    limit: int = Query(default=20, ge=1, le=100),
+    threshold: int = Query(default=70, ge=40, le=100),
+):
+    require_permission(user, "project:read", tenant)
+    await _get_project_or_404(project_id, tenant, db)
+    rows = list(
+        await StoryStateRepository(db).list_filtered(
+            organization_id=tenant.organization_id,
+            project_id=project_id,
+            limit=200,
+        )
+    )
+    rows = [row for row in rows if (row.status or "active") != "inactive"]
+    groups: list[dict[str, Any]] = []
+    grouped_ids: set[str] = set()
+    for index, anchor in enumerate(rows):
+        if anchor.id in grouped_ids:
+            continue
+        candidates = []
+        for candidate in rows[index + 1 :]:
+            if candidate.id in grouped_ids:
+                continue
+            score, reasons = _duplicate_score(anchor, candidate)
+            if score >= threshold:
+                candidates.append(
+                    {
+                        "state": candidate,
+                        "score": score,
+                        "reasons": reasons,
+                    }
+                )
+        if candidates:
+            candidates.sort(key=lambda item: int(item["score"]), reverse=True)
+            groups.append({"anchor": anchor, "candidates": candidates})
+            grouped_ids.add(anchor.id)
+            grouped_ids.update(item["state"].id for item in candidates)
+        if len(groups) >= limit:
+            break
+    return StoryStateDuplicateListResponse(groups=groups)
 
 
 @router.get("/{state_id}", response_model=StoryStateItemResponse)
@@ -270,6 +400,124 @@ async def get_story_state_history(
     return StoryStateHistoryListResponse(items=list(items))
 
 
+@router.post("/{state_id}/merge", response_model=StoryStateMergeResponse)
+async def merge_story_states(
+    project_id: str,
+    state_id: str,
+    payload: StoryStateMergeRequest,
+    tenant: TenantDep,
+    user: CurrentUserDep,
+    db: DbDep,
+):
+    require_permission(user, "project:update", tenant)
+    await _get_project_or_404(project_id, tenant, db)
+    target = await _get_story_state_or_404(project_id, state_id, tenant, db)
+    source_ids = list(dict.fromkeys(payload.source_state_ids))
+    if target.id in source_ids:
+        raise ConflictError("cannot_merge_state_into_self")
+
+    source_rows = []
+    for source_id in source_ids:
+        source_rows.append(await _get_story_state_or_404(project_id, source_id, tenant, db))
+    if not source_rows:
+        raise ConflictError("merge_source_required")
+
+    reason = (payload.reason or "").strip() or "manual_merge_story_state"
+    history_repo = StoryStateHistoryRepository(db)
+    before_target = _state_snapshot(target)
+    source_snapshots = {source.id: _state_snapshot(source) for source in source_rows}
+
+    if payload.summary is not None:
+        clean_summary = payload.summary.strip()
+        if clean_summary:
+            target.summary = clean_summary
+    elif not (target.summary or "").strip():
+        target.summary = next((source.summary for source in source_rows if source.summary), "")
+
+    if payload.value_json is not None:
+        target.value_json = dict(payload.value_json or {})
+    else:
+        target.value_json = _merge_value_json(dict(target.value_json or {}), source_rows)
+
+    if payload.priority is not None:
+        target.priority = max(0, int(payload.priority or 0))
+    else:
+        target.priority = max(
+            [int(target.priority or 0)]
+            + [int(row.priority or 0) for row in source_rows]
+        )
+
+    if payload.is_hard_constraint is not None:
+        target.is_hard_constraint = bool(payload.is_hard_constraint)
+    else:
+        target.is_hard_constraint = bool(target.is_hard_constraint) or any(
+            bool(row.is_hard_constraint) for row in source_rows
+        )
+    target.status = "active"
+    target.superseded_by_state_id = None
+    target.status_reason = ""
+
+    for source in source_rows:
+        source.status = "inactive"
+        source.superseded_by_state_id = target.id
+        source.status_reason = reason
+
+    requirement_result = await db.execute(
+        update(ChapterStateRequirement)
+        .where(
+            ChapterStateRequirement.organization_id == tenant.organization_id,
+            ChapterStateRequirement.project_id == project_id,
+            ChapterStateRequirement.state_item_id.in_(source_ids),
+        )
+        .values(state_item_id=target.id)
+    )
+    issue_result = await db.execute(
+        update(ContinuityIssue)
+        .where(
+            ContinuityIssue.organization_id == tenant.organization_id,
+            ContinuityIssue.project_id == project_id,
+            ContinuityIssue.story_state_item_id.in_(source_ids),
+        )
+        .values(story_state_item_id=target.id)
+    )
+    await db.flush()
+    await history_repo.create(
+        organization_id=tenant.organization_id,
+        project_id=project_id,
+        state_item_id=target.id,
+        chapter_id=target.updated_in_chapter_id,
+        scene_id=target.source_scene_id,
+        change_type="update",
+        before_json=before_target,
+        after_json=_state_snapshot(target),
+        reason=reason,
+        source_excerpt=target.source_excerpt,
+        created_by=user.id,
+    )
+    for source in source_rows:
+        await history_repo.create(
+            organization_id=tenant.organization_id,
+            project_id=project_id,
+            state_item_id=source.id,
+            chapter_id=source.updated_in_chapter_id,
+            scene_id=source.source_scene_id,
+            change_type="resolve",
+            before_json=source_snapshots[source.id],
+            after_json=_state_snapshot(source),
+            reason=reason,
+            source_excerpt=source.source_excerpt,
+            created_by=user.id,
+        )
+    target_payload = _state_response_payload(target)
+    await db.commit()
+    return StoryStateMergeResponse(
+        target=target_payload,
+        merged_ids=source_ids,
+        updated_requirement_count=int(requirement_result.rowcount or 0),
+        updated_issue_count=int(issue_result.rowcount or 0),
+    )
+
+
 @router.patch("/{state_id}", response_model=StoryStateItemResponse)
 async def patch_story_state(
     project_id: str,
@@ -284,6 +532,19 @@ async def patch_story_state(
     state = await _get_story_state_or_404(project_id, state_id, tenant, db)
     before = _state_snapshot(state)
     updates = payload.model_dump(exclude_none=True, exclude={"reason"})
+    if "summary" in updates:
+        updates["summary"] = str(updates["summary"]).strip()
+    if "status_reason" in updates:
+        updates["status_reason"] = str(updates["status_reason"]).strip()
+    if "superseded_by_state_id" in updates:
+        superseded_by = str(updates["superseded_by_state_id"] or "").strip()
+        if not superseded_by:
+            updates["superseded_by_state_id"] = None
+        else:
+            if superseded_by == state_id:
+                raise ConflictError("cannot_supersede_state_by_self")
+            await _get_story_state_or_404(project_id, superseded_by, tenant, db)
+            updates["superseded_by_state_id"] = superseded_by
     updated = await StoryStateRepository(db).update(
         state_id,
         updates,

@@ -43,6 +43,8 @@ class StoryStateItemResponse(APIModel):
     state_type: StateType
     name: str
     status: StateStatus
+    superseded_by_state_id: str | None = None
+    status_reason: str = ""
     summary: str
     value_json: dict[str, Any] = Field(default_factory=dict)
     source_chapter_id: str | None = None
@@ -57,6 +59,21 @@ class StoryStateItemResponse(APIModel):
 
 class StoryStateListResponse(APIModel):
     items: list[StoryStateItemResponse] = Field(default_factory=list)
+
+
+class StoryStateDuplicateCandidate(APIModel):
+    state: StoryStateItemResponse
+    score: int
+    reasons: list[str] = Field(default_factory=list)
+
+
+class StoryStateDuplicateGroup(APIModel):
+    anchor: StoryStateItemResponse
+    candidates: list[StoryStateDuplicateCandidate] = Field(default_factory=list)
+
+
+class StoryStateDuplicateListResponse(APIModel):
+    groups: list[StoryStateDuplicateGroup] = Field(default_factory=list)
 
 
 class StoryStateHistoryResponse(APIModel):
@@ -146,6 +163,8 @@ class ChapterStateRequirementPatchRequest(APIModel):
 
 class StoryStatePatchRequest(APIModel):
     status: StateStatus | None = None
+    superseded_by_state_id: str | None = None
+    status_reason: str | None = None
     summary: str | None = None
     value_json: dict[str, Any] | None = None
     priority: int | None = None
@@ -158,6 +177,8 @@ class StoryStatePatchRequest(APIModel):
             value is None
             for value in (
                 self.status,
+                self.superseded_by_state_id,
+                self.status_reason,
                 self.summary,
                 self.value_json,
                 self.priority,
@@ -166,3 +187,19 @@ class StoryStatePatchRequest(APIModel):
         ):
             raise ValueError("At least one updatable field is required")
         return self
+
+
+class StoryStateMergeRequest(APIModel):
+    source_state_ids: list[str] = Field(min_length=1, max_length=20)
+    summary: str | None = None
+    value_json: dict[str, Any] | None = None
+    priority: int | None = Field(default=None, ge=0)
+    is_hard_constraint: bool | None = None
+    reason: str | None = None
+
+
+class StoryStateMergeResponse(APIModel):
+    target: StoryStateItemResponse
+    merged_ids: list[str] = Field(default_factory=list)
+    updated_requirement_count: int = 0
+    updated_issue_count: int = 0

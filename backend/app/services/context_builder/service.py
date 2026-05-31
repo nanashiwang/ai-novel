@@ -1734,6 +1734,8 @@ class ContextBuilder:
         for item in ranked_all:
             if len(ranked) >= limit:
                 break
+            if str(getattr(item, "status", "") or "") == "inactive":
+                continue
             item_id = getattr(item, "id", "")
             if not item_id or item_id in picked_ids:
                 continue

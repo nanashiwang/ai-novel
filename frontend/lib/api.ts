@@ -359,6 +359,8 @@ export type StoryStateItem = {
   state_type: StoryStateType;
   name: string;
   status: StoryStateStatus;
+  superseded_by_state_id: string | null;
+  status_reason: string;
   summary: string;
   value_json: Record<string, unknown>;
   source_chapter_id: string | null;
@@ -423,11 +425,44 @@ export type ChapterStateRequirementPatch = {
 
 export type StoryStatePatch = {
   status?: StoryStateStatus | null;
+  superseded_by_state_id?: string | null;
+  status_reason?: string | null;
   summary?: string | null;
   value_json?: Record<string, unknown> | null;
   priority?: number | null;
   is_hard_constraint?: boolean | null;
   reason?: string | null;
+};
+
+export type StoryStateDuplicateCandidate = {
+  state: StoryStateItem;
+  score: number;
+  reasons: string[];
+};
+
+export type StoryStateDuplicateGroup = {
+  anchor: StoryStateItem;
+  candidates: StoryStateDuplicateCandidate[];
+};
+
+export type StoryStateDuplicateListResponse = {
+  groups: StoryStateDuplicateGroup[];
+};
+
+export type StoryStateMergePayload = {
+  source_state_ids: string[];
+  summary?: string | null;
+  value_json?: Record<string, unknown> | null;
+  priority?: number | null;
+  is_hard_constraint?: boolean | null;
+  reason?: string | null;
+};
+
+export type StoryStateMergeResponse = {
+  target: StoryStateItem;
+  merged_ids: string[];
+  updated_requirement_count: number;
+  updated_issue_count: number;
 };
 
 export type StoryStateListResponse = {
@@ -493,6 +528,14 @@ export const storyStatesApi = {
     },
   ) =>
     http.get<StoryStateListResponse>(`/projects/${projectId}/story-states`, params),
+  duplicateCandidates: (
+    projectId: string,
+    params?: { limit?: number; threshold?: number },
+  ) =>
+    http.get<StoryStateDuplicateListResponse>(
+      `/projects/${projectId}/story-states/duplicate-candidates`,
+      params,
+    ),
   get: (projectId: string, stateId: string) =>
     http.get<StoryStateItem>(`/projects/${projectId}/story-states/${stateId}`),
   history: (projectId: string, stateId: string) =>
@@ -502,6 +545,11 @@ export const storyStatesApi = {
   update: (projectId: string, stateId: string, payload: StoryStatePatch) =>
     http.patch<StoryStateItem>(
       `/projects/${projectId}/story-states/${stateId}`,
+      payload,
+    ),
+  merge: (projectId: string, stateId: string, payload: StoryStateMergePayload) =>
+    http.post<StoryStateMergeResponse>(
+      `/projects/${projectId}/story-states/${stateId}/merge`,
       payload,
     ),
   listChapterRequirements: (projectId: string, chapterId: string) =>

@@ -21,6 +21,13 @@ class StoryStateItem(Base, TenantMixin, TimestampMixin):
     state_type: Mapped[str] = mapped_column(String(32), index=True)
     name: Mapped[str] = mapped_column(String(200))
     status: Mapped[str] = mapped_column(String(32), default="active", index=True)
+    superseded_by_state_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("story_state_items.id"),
+        nullable=True,
+        index=True,
+    )
+    status_reason: Mapped[str] = mapped_column(Text, default="", server_default="")
     summary: Mapped[str] = mapped_column(Text, default="")
     value_json: Mapped[dict[str, Any]] = mapped_column(
         JSONB().with_variant(JSON(), "sqlite"),

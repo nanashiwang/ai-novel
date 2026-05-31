@@ -380,6 +380,8 @@ class StoryStateService:
             "state_type": state.state_type,
             "name": state.name,
             "status": state.status,
+            "superseded_by_state_id": state.superseded_by_state_id,
+            "status_reason": state.status_reason or "",
             "summary": state.summary,
             "value_json": dict(state.value_json or {}),
             "source_chapter_id": state.source_chapter_id,
