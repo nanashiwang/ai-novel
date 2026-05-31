@@ -12,7 +12,7 @@
 
 ## 绝对规则
 
-1. 只能引用输入里真实存在的 `id`，不要创造新的 `story_state_item_id` 或 `requirement_id`。
+1. 除 `create_state` 外，只能引用输入里真实存在的 `id`；不要创造假的 `story_state_item_id` 或 `requirement_id`。
 2. 只有正文明确证明事实变化时，才能提出更新、合并、解决、替代动作。
 3. 优先更新已有关键设定，不要因为近义名称制造重复设定。
 4. 高风险动作必须标记 `risk_level="high"`，不要伪装成低风险。
@@ -20,7 +20,43 @@
 
 ## 可输出动作
 
-### 1. update_state
+### 1. create_state
+
+用于“正文明确出现新的长期关键设定，且现有 `story_states` 中没有同义/近义设定”。
+
+要求：
+
+- 不要填写 `target_state_id`。
+- 必须在 `patch` 中填写 `entity_type`、`state_type`、`name`、`summary`。
+- `entity_type` 只能是：`character`、`artifact`、`plot_thread`、`relationship`、`world_rule`。
+- `state_type` 只能是：`skill`、`artifact`、`identity`、`grudge`、`foreshadow`、`oath`。
+- 如果已有近义关键设定，优先使用 `update_state` 或 `merge_states`，不要创建重复设定。
+- 只记录会影响后续章节的一贯事实；一次性动作、氛围描写、普通战斗过程不要创建。
+
+```json
+{
+  "type": "create_state",
+  "target_state_id": null,
+  "confidence": 0.9,
+  "risk_level": "low",
+  "reason": "正文首次明确写出林照夜获得青冥洗瞳露且会长期影响因果灰线代价",
+  "patch": {
+    "entity_type": "artifact",
+    "entity_id": null,
+    "state_type": "artifact",
+    "name": "青冥洗瞳露",
+    "summary": "青冥洗瞳露可缓解因果灰线视野的左眼剧痛，使代价变为短暂酸胀。",
+    "value_json": {
+      "effect": "缓解因果灰线眼部代价"
+    },
+    "source_excerpt": "青冥洗瞳露化作凉意入眼，旧日针扎般的剧痛只剩短暂酸胀。",
+    "priority": 90,
+    "is_hard_constraint": true
+  }
+}
+```
+
+### 2. update_state
 
 用于“已有关键设定在正文中被明确更新”。
 
@@ -43,7 +79,7 @@
 }
 ```
 
-### 2. merge_states
+### 3. merge_states
 
 用于“两个或多个关键设定明显是同一个事实的重复表达”。
 
@@ -61,7 +97,7 @@
 }
 ```
 
-### 3. supersede_state
+### 4. supersede_state
 
 用于“旧关键设定已被另一个新关键设定替代，后续不应再按旧设定执行”。
 
@@ -87,7 +123,7 @@
 }
 ```
 
-### 4. resolve_requirement
+### 5. resolve_requirement
 
 用于“承接要求已被当前正文明确兑现”。
 
@@ -104,7 +140,7 @@
 }
 ```
 
-### 5. create_requirement
+### 6. create_requirement
 
 用于“审稿问题暴露出后续必须持续记住/避免冲突的点，但当前还没有对应承接要求”。
 
@@ -130,7 +166,7 @@
 }
 ```
 
-### 6. supersede_requirement
+### 7. supersede_requirement
 
 用于“旧承接要求已被正文中的新事实替代，后续不应再按旧要求执行”。
 

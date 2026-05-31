@@ -16,6 +16,7 @@ import {
 } from "./ai-maintenance-policy";
 
 const actionLabel: Record<StoryStateMaintenanceAction["action_type"], string> = {
+  create_state: "新增设定",
   update_state: "更新设定",
   merge_states: "合并设定",
   supersede_state: "替代设定",

@@ -16,6 +16,7 @@ import {
 } from "./ai-maintenance-policy";
 
 const actionLabel: Record<StoryStateMaintenanceAction["action_type"], string> = {
+  create_state: "新增设定",
   update_state: "更新设定",
   merge_states: "合并设定",
   supersede_state: "替代设定",
@@ -286,6 +287,8 @@ function findSummary(value: Record<string, unknown>) {
   }
   const proposedSummary = readPath(value, ["proposed_requirement", "summary"]);
   if (proposedSummary) return proposedSummary;
+  const proposedStateSummary = readPath(value, ["proposed_state", "summary"]);
+  if (proposedStateSummary) return proposedStateSummary;
   const firstSource = readPath(value, ["sources", "0", "summary"]);
   if (firstSource) return firstSource;
   return "";

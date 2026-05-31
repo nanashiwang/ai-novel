@@ -284,6 +284,135 @@ async def test_story_state_maintainer_auto_applies_medium_update_with_rollback(
 
 
 @pytest.mark.asyncio
+async def test_story_state_maintainer_creates_new_state_and_rolls_back(
+    monkeypatch,
+    db_session,
+):
+    user_id, project, chapter, scene, draft = _base_scene()
+    db_session.add_all([project, chapter, scene, draft])
+    await db_session.commit()
+
+    result = await _run_with_response(
+        monkeypatch,
+        db_session,
+        response={
+            "actions": [
+                {
+                    "type": "create_state",
+                    "confidence": 0.9,
+                    "risk_level": "low",
+                    "reason": "正文首次明确写出青冥洗瞳露会长期缓解眼部代价",
+                    "patch": {
+                        "entity_type": "artifact",
+                        "entity_id": None,
+                        "state_type": "artifact",
+                        "name": "青冥洗瞳露",
+                        "summary": "青冥洗瞳露可缓解因果灰线视野的左眼剧痛。",
+                        "value_json": {"effect": "relieve_eye_pain"},
+                        "source_excerpt": "青冥洗瞳露化作凉意入眼。",
+                        "priority": 91,
+                        "is_hard_constraint": True,
+                    },
+                }
+            ]
+        },
+        user_id=user_id,
+        project=project,
+        chapter=chapter,
+        scene=scene,
+        draft=draft,
+    )
+    await db_session.commit()
+
+    assert result["applied_count"] == 1
+    state = (await db_session.execute(select(StoryStateItem))).scalar_one()
+    assert state.name == "青冥洗瞳露"
+    assert state.state_type == "artifact"
+    assert state.source_scene_id == scene.id
+    assert state.is_hard_constraint is True
+
+    action = (await db_session.execute(select(StoryStateMaintenanceAction))).scalar_one()
+    assert action.action_type == "create_state"
+    assert action.status == "applied"
+    assert action.target_state_id == state.id
+    assert action.after_json["target"]["name"] == "青冥洗瞳露"
+    assert action.patch_json["auto_decision"]["policy"] == "low_confident_auto_apply"
+
+    history = (await db_session.execute(select(StoryStateHistory))).scalars().all()
+    assert len(history) == 1
+    assert history[0].change_type == "create"
+
+    rolled_back = await story_state_maintainer_service.rollback_action(
+        db_session,
+        organization_id=project.organization_id,
+        project_id=project.id,
+        action_id=action.id,
+        created_by=user_id,
+    )
+    await db_session.commit()
+
+    assert rolled_back.status == "rolled_back"
+    await db_session.refresh(state)
+    assert state.status == "inactive"
+    assert state.status_reason.startswith("rollback_ai_story_state_maintenance:")
+
+
+@pytest.mark.asyncio
+async def test_story_state_maintainer_skips_duplicate_create_state(monkeypatch, db_session):
+    user_id, project, chapter, scene, draft = _base_scene()
+    existing = _state(
+        org_id=project.organization_id,
+        project_id=project.id,
+        chapter_id=chapter.id,
+        scene_id=scene.id,
+        name="青冥洗瞳露",
+        summary="青冥洗瞳露可缓解因果灰线视野的左眼剧痛。",
+    )
+    existing.entity_type = "artifact"
+    existing.entity_id = None
+    existing.state_type = "artifact"
+    db_session.add_all([project, chapter, scene, draft, existing])
+    await db_session.commit()
+
+    result = await _run_with_response(
+        monkeypatch,
+        db_session,
+        response={
+            "actions": [
+                {
+                    "type": "create_state",
+                    "confidence": 0.93,
+                    "risk_level": "low",
+                    "reason": "重复创建青冥洗瞳露",
+                    "patch": {
+                        "entity_type": "artifact",
+                        "entity_id": None,
+                        "state_type": "artifact",
+                        "name": "青冥洗瞳露",
+                        "summary": "青冥洗瞳露可缓解因果灰线视野的左眼剧痛。",
+                    },
+                }
+            ]
+        },
+        user_id=user_id,
+        project=project,
+        chapter=chapter,
+        scene=scene,
+        draft=draft,
+    )
+    await db_session.commit()
+
+    assert result["skipped_count"] == 1
+    states = (await db_session.execute(select(StoryStateItem))).scalars().all()
+    assert len(states) == 1
+    action = (await db_session.execute(select(StoryStateMaintenanceAction))).scalar_one()
+    assert action.status == "skipped"
+    assert action.target_state_id == existing.id
+    assert "similar_state_exists" in action.reason
+    assert action.after_json["proposed_state"]["name"] == "青冥洗瞳露"
+
+
+@pytest.mark.asyncio
 async def test_story_state_maintainer_merges_states_and_rewires_links(monkeypatch, db_session):
     user_id, project, chapter, scene, draft = _base_scene()
     target = _state(

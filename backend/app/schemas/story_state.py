@@ -35,6 +35,7 @@ RequirementOriginType = Literal[
 ]
 RequirementStatus = Literal["active", "superseded", "resolved", "disabled"]
 StoryStateMaintenanceActionType = Literal[
+    "create_state",
     "update_state",
     "merge_states",
     "supersede_state",

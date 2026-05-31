@@ -352,6 +352,7 @@ export type ChapterStateRequirementStatus =
   | "resolved"
   | "disabled";
 export type StoryStateMaintenanceActionType =
+  | "create_state"
   | "update_state"
   | "merge_states"
   | "supersede_state"
