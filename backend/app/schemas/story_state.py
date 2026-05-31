@@ -34,6 +34,20 @@ RequirementOriginType = Literal[
     "backfill",
 ]
 RequirementStatus = Literal["active", "superseded", "resolved", "disabled"]
+StoryStateMaintenanceActionType = Literal[
+    "update_state",
+    "merge_states",
+    "resolve_requirement",
+    "supersede_requirement",
+]
+StoryStateMaintenanceRiskLevel = Literal["low", "medium", "high"]
+StoryStateMaintenanceStatus = Literal[
+    "suggested",
+    "applied",
+    "skipped",
+    "needs_review",
+    "rolled_back",
+]
 
 
 class StoryStateItemResponse(APIModel):
@@ -92,6 +106,31 @@ class StoryStateHistoryResponse(APIModel):
 
 class StoryStateHistoryListResponse(APIModel):
     items: list[StoryStateHistoryResponse] = Field(default_factory=list)
+
+
+class StoryStateMaintenanceActionResponse(APIModel):
+    id: str
+    chapter_id: str | None = None
+    scene_id: str | None = None
+    draft_id: str | None = None
+    action_type: StoryStateMaintenanceActionType
+    target_state_id: str | None = None
+    source_state_ids: list[str] = Field(default_factory=list)
+    target_requirement_id: str | None = None
+    risk_level: StoryStateMaintenanceRiskLevel = "low"
+    confidence: float = 0.0
+    status: StoryStateMaintenanceStatus = "suggested"
+    reason: str = ""
+    before_json: dict[str, Any] = Field(default_factory=dict)
+    after_json: dict[str, Any] = Field(default_factory=dict)
+    created_by: str | None = None
+    applied_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class StoryStateMaintenanceActionListResponse(APIModel):
+    items: list[StoryStateMaintenanceActionResponse] = Field(default_factory=list)
 
 
 class ChapterStateRequirementResponse(APIModel):

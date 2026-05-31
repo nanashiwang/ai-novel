@@ -22,6 +22,7 @@ from .revision import RevisionAppliedChange, RevisionMessage, RevisionProposal, 
 from .scene import Scene
 from .story_state_history import StoryStateHistory
 from .story_state_item import StoryStateItem
+from .story_state_maintenance_action import StoryStateMaintenanceAction
 from .style_sample import StyleSample
 from .system_setting import SystemSetting
 from .usage import UsageEvent
@@ -62,6 +63,7 @@ __all__ = [
     "StyleSample",
     "StoryStateHistory",
     "StoryStateItem",
+    "StoryStateMaintenanceAction",
     "SystemSetting",
     "UsageEvent",
     "User",

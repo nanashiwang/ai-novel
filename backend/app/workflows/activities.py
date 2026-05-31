@@ -466,6 +466,57 @@ async def _run_story_state_extract(
         return {"upserted_count": 0, "requirement_count": 0, "error": "failed"}
 
 
+async def _run_story_state_maintenance(
+    session: AsyncSession,
+    *,
+    organization_id: str,
+    project_id: str,
+    job_id: str | None,
+    chapter: Chapter,
+    scene: Scene,
+    draft: DraftVersion,
+    created_by: str | None,
+    source: str,
+) -> dict[str, Any]:
+    """写作/重写后让 AI 自动维护关键设定；失败不影响正文任务。"""
+    if not draft or not draft.content:
+        return {
+            "suggested_count": 0,
+            "applied_count": 0,
+            "needs_review_count": 0,
+            "skipped_count": 0,
+            "skipped": "no_draft",
+        }
+    try:
+        from app.services.story_state.maintainer import (  # noqa: PLC0415
+            story_state_maintainer_service,
+        )
+
+        return await story_state_maintainer_service.maintain_after_draft(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            job_id=job_id,
+            chapter=chapter,
+            scene=scene,
+            draft=draft,
+            created_by=created_by,
+        )
+    except Exception:  # noqa: BLE001
+        _logger.warning(
+            "story_state_maintenance_failed",
+            exc_info=True,
+            extra={"scene_id": scene.id, "chapter_id": chapter.id, "source": source},
+        )
+        return {
+            "suggested_count": 0,
+            "applied_count": 0,
+            "needs_review_count": 0,
+            "skipped_count": 1,
+            "error": "failed",
+        }
+
+
 async def _postprocess_scene_draft_contract(
     session: AsyncSession,
     *,
@@ -2108,6 +2159,8 @@ async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
         reused = 0
         story_state_upserted = 0
         story_state_requirements = 0
+        story_state_maintenance_applied = 0
+        story_state_maintenance_needs_review = 0
         total_words = sum(draft.word_count for draft in draft_by_scene.values())
         # Sprint 16-E2：按 chapter 分组算 target_words / scene，让每场都贴合
         # chapter.target_words 预算；旧 chapter（target_words=0）回落到旧的
@@ -2217,6 +2270,23 @@ async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
             story_state_requirements += int(
                 story_state_result.get("requirement_count") or 0
             )
+            story_state_maintenance = await _run_story_state_maintenance(
+                session,
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                job_id=job_row.id,
+                chapter=chapter,
+                scene=scene,
+                draft=saved,
+                created_by=job_row.user_id,
+                source="write_scene_drafts",
+            )
+            story_state_maintenance_applied += int(
+                story_state_maintenance.get("applied_count") or 0
+            )
+            story_state_maintenance_needs_review += int(
+                story_state_maintenance.get("needs_review_count") or 0
+            )
             # Sprint 16-E4：章内同步等待三链推演（与 single scene workflow 行为对齐）
             if get_settings().inchapter_extract_enabled:
                 await _run_chapter_in_extracts(
@@ -2315,6 +2385,8 @@ async def write_scene_drafts(job: dict[str, Any]) -> dict[str, Any]:
             "word_count": total_words,
             "story_state_upserted": story_state_upserted,
             "story_state_requirements": story_state_requirements,
+            "story_state_maintenance_applied": story_state_maintenance_applied,
+            "story_state_maintenance_needs_review": story_state_maintenance_needs_review,
         }
 
 
@@ -2439,6 +2511,17 @@ async def run_scene_writing(job: dict[str, Any]) -> dict[str, Any]:
             created_by=job_row.user_id,
             source="run_scene_writing",
         )
+        story_state_maintenance = await _run_story_state_maintenance(
+            session,
+            organization_id=job_row.organization_id,
+            project_id=job_row.project_id,
+            job_id=job_row.id,
+            chapter=chapter,
+            scene=scene,
+            draft=saved,
+            created_by=job_row.user_id,
+            source="run_scene_writing",
+        )
 
         # 与 generate_chapter_scene_cards 对称：单 scene 写作自身结算 quota
         await _settle_job_usage(session, job_row, amount=job_row.reserved_quota)
@@ -2477,6 +2560,7 @@ async def run_scene_writing(job: dict[str, Any]) -> dict[str, Any]:
             "context_total_tokens": ctx_inspector.total_tokens,
             "memory": memory_result,
             "story_state": story_state_result,
+            "story_state_maintenance": story_state_maintenance,
         }
         job_row.output_payload = result
         return result
@@ -2855,6 +2939,17 @@ async def write_chapter_scenes_for_full_novel(
                 created_by=job_row.user_id,
                 source="write_chapter_scenes_for_full_novel",
             )
+            story_state_maintenance = await _run_story_state_maintenance(
+                session,
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                job_id=job_row.id,
+                chapter=chapter,
+                scene=scene,
+                draft=saved,
+                created_by=job_row.user_id,
+                source="write_chapter_scenes_for_full_novel",
+            )
             # Sprint 16-E4：章内同步等待三链推演（与 single scene workflow 对齐）
             if get_settings().inchapter_extract_enabled:
                 await _run_chapter_in_extracts(
@@ -2876,6 +2971,7 @@ async def write_chapter_scenes_for_full_novel(
                 "words": word_count,
                 "draft_id": saved.id,
                 "story_state": story_state_result,
+                "story_state_maintenance": story_state_maintenance,
             })
 
         # 更新 chapter 状态：若本章所有 scenes 都已 drafted/reused → 标 drafted
@@ -3784,6 +3880,17 @@ async def rewrite_scene(job: dict[str, Any]) -> dict[str, Any]:
             created_by=job_row.user_id,
             source="rewrite_scene",
         )
+        story_state_maintenance = await _run_story_state_maintenance(
+            session,
+            organization_id=job_row.organization_id,
+            project_id=job_row.project_id,
+            job_id=job_row.id,
+            chapter=chapter,
+            scene=scene,
+            draft=saved,
+            created_by=job_row.user_id,
+            source="rewrite_scene",
+        )
 
         review_error = ""
         review_items: list[Any] = []
@@ -3871,6 +3978,7 @@ async def rewrite_scene(job: dict[str, Any]) -> dict[str, Any]:
             "review_error": review_error or None,
             "review_issues": created_review_issues,
             "story_state": story_state_result,
+            "story_state_maintenance": story_state_maintenance,
         }
 
 

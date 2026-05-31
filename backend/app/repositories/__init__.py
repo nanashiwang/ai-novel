@@ -36,6 +36,7 @@ from app.models.revision import (
 from app.models.scene import Scene
 from app.models.story_state_history import StoryStateHistory
 from app.models.story_state_item import StoryStateItem
+from app.models.story_state_maintenance_action import StoryStateMaintenanceAction
 from app.models.style_sample import StyleSample
 from app.models.system_setting import SystemSetting
 from app.models.usage import UsageEvent
@@ -229,6 +230,29 @@ class StoryStateHistoryRepository(BaseRepository[StoryStateHistory]):
         return result.scalars().all()
 
 
+class StoryStateMaintenanceActionRepository(BaseRepository[StoryStateMaintenanceAction]):
+    model = StoryStateMaintenanceAction
+    id_prefix = "state_action"
+
+    async def list_for_project(
+        self,
+        *,
+        organization_id: str,
+        project_id: str,
+        status: str | None = None,
+        limit: int = 100,
+    ):
+        stmt = select(StoryStateMaintenanceAction).where(
+            StoryStateMaintenanceAction.organization_id == organization_id,
+            StoryStateMaintenanceAction.project_id == project_id,
+        )
+        if status:
+            stmt = stmt.where(StoryStateMaintenanceAction.status == status)
+        stmt = stmt.order_by(StoryStateMaintenanceAction.created_at.desc()).limit(limit)
+        result = await self.session.execute(stmt)
+        return result.scalars().all()
+
+
 class ChapterStateRequirementRepository(BaseRepository[ChapterStateRequirement]):
     model = ChapterStateRequirement
     id_prefix = "state_req"
@@ -400,6 +424,7 @@ __all__ = [
     "SceneRepository",
     "StyleSampleRepository",
     "StoryStateHistoryRepository",
+    "StoryStateMaintenanceActionRepository",
     "StoryStateRepository",
     "SystemSettingRepository",
     "UsageEventRepository",

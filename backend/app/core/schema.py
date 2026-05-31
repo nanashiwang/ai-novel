@@ -713,6 +713,56 @@ _POSTGRES_SCHEMA_FIXES = [
     EXCEPTION WHEN duplicate_object THEN NULL;
     END $$;
     """,
+    # Sprint 18-C1：AI 关键设定维护器动作日志；维护器失败不阻断写作，
+    # 但每个 AI 建议/自动应用都要可追溯。
+    """
+    CREATE TABLE IF NOT EXISTS story_state_maintenance_actions (
+      id VARCHAR(64) PRIMARY KEY,
+      organization_id VARCHAR(64) NOT NULL,
+      project_id VARCHAR(64) NOT NULL REFERENCES projects(id),
+      chapter_id VARCHAR(64) REFERENCES chapters(id),
+      scene_id VARCHAR(64) REFERENCES scenes(id),
+      draft_id VARCHAR(64) REFERENCES draft_versions(id),
+      action_type VARCHAR(32) NOT NULL,
+      target_state_id VARCHAR(64) REFERENCES story_state_items(id),
+      source_state_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+      target_requirement_id VARCHAR(64) REFERENCES chapter_state_requirements(id),
+      risk_level VARCHAR(16) NOT NULL DEFAULT 'low',
+      confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
+      status VARCHAR(32) NOT NULL DEFAULT 'suggested',
+      reason TEXT NOT NULL DEFAULT '',
+      before_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      after_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_by VARCHAR(64),
+      applied_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    (
+        "CREATE INDEX IF NOT EXISTS ix_story_state_maintenance_actions_org_project "
+        "ON story_state_maintenance_actions(organization_id, project_id)"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_story_state_maintenance_actions_project_created "
+        "ON story_state_maintenance_actions(project_id, created_at)"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_story_state_maintenance_actions_project_status "
+        "ON story_state_maintenance_actions(project_id, status)"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_story_state_maintenance_actions_draft "
+        "ON story_state_maintenance_actions(draft_id)"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_story_state_maintenance_actions_target_state "
+        "ON story_state_maintenance_actions(target_state_id)"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS ix_story_state_maintenance_actions_target_requirement "
+        "ON story_state_maintenance_actions(target_requirement_id)"
+    ),
 ]
 
 
