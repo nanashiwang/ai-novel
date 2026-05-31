@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Pencil, Plus, Save, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -205,7 +205,6 @@ export function StoryStateDetailDialog({
   onClose,
   onSaved,
 }: StoryStateDetailDialogProps) {
-  const queryClient = useQueryClient();
   const [tab, setTab] = useState<DetailTab>("detail");
   const detailKey = useScopedKey("project", projectId, "story-state", state.id);
   const historyKey = useScopedKey("project", projectId, "story-state", state.id, "history");
@@ -223,64 +222,6 @@ export function StoryStateDetailDialog({
     () => historyResponse?.items ?? [],
     [historyResponse],
   );
-
-  const [summary, setSummary] = useState(detail.summary);
-  const [status, setStatus] = useState<StoryStateStatus>(detail.status);
-  const [priority, setPriority] = useState(String(detail.priority));
-  const [isHardConstraint, setIsHardConstraint] = useState(detail.is_hard_constraint);
-  const [valueJson, setValueJson] = useState(formatJson(detail.value_json));
-  const [reason, setReason] = useState("人工修正关键设定");
-
-  useEffect(() => {
-    setSummary(detail.summary);
-    setStatus(detail.status);
-    setPriority(String(detail.priority));
-    setIsHardConstraint(detail.is_hard_constraint);
-    setValueJson(formatJson(detail.value_json));
-  }, [detail]);
-
-  const save = useMutation({
-    mutationFn: () => {
-      let parsedValue: Record<string, unknown>;
-      try {
-        const parsed = JSON.parse(valueJson || "{}");
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-          throw new Error("value_json_must_be_object");
-        }
-        parsedValue = parsed as Record<string, unknown>;
-      } catch {
-        toast.error("扩展字段必须是合法 JSON 对象");
-        return Promise.reject(new Error("invalid_value_json"));
-      }
-
-      const parsedPriority = Number(priority);
-      if (!Number.isInteger(parsedPriority) || parsedPriority < 0) {
-        toast.error("优先级必须是非负整数");
-        return Promise.reject(new Error("invalid_priority"));
-      }
-
-      const payload: StoryStatePatch = {
-        status,
-        summary,
-        priority: parsedPriority,
-        is_hard_constraint: isHardConstraint,
-        value_json: parsedValue,
-        reason: reason.trim() || "人工修正关键设定",
-      };
-      return storyStatesApi.update(projectId, detail.id, payload);
-    },
-    onSuccess: () => {
-      toast.success("关键设定已更新");
-      queryClient.invalidateQueries({ queryKey: detailKey });
-      queryClient.invalidateQueries({ queryKey: historyKey });
-      onSaved();
-      setTab("detail");
-    },
-    onError: (error: unknown) => {
-      if (error instanceof Error && error.message.startsWith("invalid_")) return;
-      toast.error(error instanceof ApiError ? error.message : "保存失败");
-    },
-  });
 
   return (
     <Modal title={detail.name || "关键设定详情"} onClose={onClose}>
@@ -402,83 +343,158 @@ export function StoryStateDetailDialog({
         ) : null}
 
         {tab === "edit" ? (
-          <div className="space-y-3">
-            <label className="block text-sm font-semibold text-slate-700">
-              摘要
-              <textarea
-                rows={4}
-                value={summary}
-                onChange={(event) => setSummary(event.target.value)}
-                className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-indigo-500"
-              />
-            </label>
-            <div className="grid gap-3 md:grid-cols-2">
-              <label className="block text-sm font-semibold text-slate-700">
-                状态
-                <select
-                  value={status}
-                  onChange={(event) => setStatus(event.target.value as StoryStateStatus)}
-                  className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-indigo-500"
-                >
-                  {statusOptions.map((item) => (
-                    <option key={item} value={item}>
-                      {item}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="block text-sm font-semibold text-slate-700">
-                优先级
-                <input
-                  type="number"
-                  min={0}
-                  value={priority}
-                  onChange={(event) => setPriority(event.target.value)}
-                  className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-indigo-500"
-                />
-              </label>
-            </div>
-            <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-              <input
-                type="checkbox"
-                checked={isHardConstraint}
-                onChange={(event) => setIsHardConstraint(event.target.checked)}
-              />
-              硬约束
-            </label>
-            <label className="block text-sm font-semibold text-slate-700">
-              扩展字段 JSON
-              <textarea
-                rows={6}
-                value={valueJson}
-                onChange={(event) => setValueJson(event.target.value)}
-                className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-950 px-3 py-2 font-mono text-xs leading-5 text-slate-100 outline-none focus:border-indigo-500"
-              />
-            </label>
-            <label className="block text-sm font-semibold text-slate-700">
-              修正原因
-              <input
-                value={reason}
-                onChange={(event) => setReason(event.target.value)}
-                className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-indigo-500"
-              />
-            </label>
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="ghost" onClick={() => setTab("detail")}>
-                取消
-              </Button>
-              <Button
-                onClick={() => save.mutate()}
-                disabled={save.isPending || !summary.trim()}
-              >
-                <Save className="size-4" />
-                {save.isPending ? "保存中…" : "保存修正"}
-              </Button>
-            </div>
-          </div>
+          <StoryStateEditForm
+            key={`${detail.id}:${detail.updated_at ?? ""}`}
+            projectId={projectId}
+            detail={detail}
+            onSaved={onSaved}
+            onDone={() => setTab("detail")}
+          />
         ) : null}
       </div>
     </Modal>
+  );
+}
+
+function StoryStateEditForm({
+  projectId,
+  detail,
+  onSaved,
+  onDone,
+}: {
+  projectId: string;
+  detail: StoryStateItem;
+  onSaved: () => void;
+  onDone: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const detailKey = useScopedKey("project", projectId, "story-state", detail.id);
+  const historyKey = useScopedKey("project", projectId, "story-state", detail.id, "history");
+  const [summary, setSummary] = useState(detail.summary);
+  const [status, setStatus] = useState<StoryStateStatus>(detail.status);
+  const [priority, setPriority] = useState(String(detail.priority));
+  const [isHardConstraint, setIsHardConstraint] = useState(detail.is_hard_constraint);
+  const [valueJson, setValueJson] = useState(formatJson(detail.value_json));
+  const [reason, setReason] = useState("人工修正关键设定");
+
+  const save = useMutation({
+    mutationFn: () => {
+      let parsedValue: Record<string, unknown>;
+      try {
+        const parsed = JSON.parse(valueJson || "{}");
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          throw new Error("value_json_must_be_object");
+        }
+        parsedValue = parsed as Record<string, unknown>;
+      } catch {
+        toast.error("扩展字段必须是合法 JSON 对象");
+        return Promise.reject(new Error("invalid_value_json"));
+      }
+
+      const parsedPriority = Number(priority);
+      if (!Number.isInteger(parsedPriority) || parsedPriority < 0) {
+        toast.error("优先级必须是非负整数");
+        return Promise.reject(new Error("invalid_priority"));
+      }
+
+      const payload: StoryStatePatch = {
+        status,
+        summary,
+        priority: parsedPriority,
+        is_hard_constraint: isHardConstraint,
+        value_json: parsedValue,
+        reason: reason.trim() || "人工修正关键设定",
+      };
+      return storyStatesApi.update(projectId, detail.id, payload);
+    },
+    onSuccess: () => {
+      toast.success("关键设定已更新");
+      queryClient.invalidateQueries({ queryKey: detailKey });
+      queryClient.invalidateQueries({ queryKey: historyKey });
+      onSaved();
+      onDone();
+    },
+    onError: (error: unknown) => {
+      if (error instanceof Error && error.message.startsWith("invalid_")) return;
+      toast.error(error instanceof ApiError ? error.message : "保存失败");
+    },
+  });
+
+  return (
+    <div className="space-y-3">
+      <label className="block text-sm font-semibold text-slate-700">
+        摘要
+        <textarea
+          rows={4}
+          value={summary}
+          onChange={(event) => setSummary(event.target.value)}
+          className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-indigo-500"
+        />
+      </label>
+      <div className="grid gap-3 md:grid-cols-2">
+        <label className="block text-sm font-semibold text-slate-700">
+          状态
+          <select
+            value={status}
+            onChange={(event) => setStatus(event.target.value as StoryStateStatus)}
+            className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-indigo-500"
+          >
+            {statusOptions.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block text-sm font-semibold text-slate-700">
+          优先级
+          <input
+            type="number"
+            min={0}
+            value={priority}
+            onChange={(event) => setPriority(event.target.value)}
+            className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-indigo-500"
+          />
+        </label>
+      </div>
+      <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+        <input
+          type="checkbox"
+          checked={isHardConstraint}
+          onChange={(event) => setIsHardConstraint(event.target.checked)}
+        />
+        硬约束
+      </label>
+      <label className="block text-sm font-semibold text-slate-700">
+        扩展字段 JSON
+        <textarea
+          rows={6}
+          value={valueJson}
+          onChange={(event) => setValueJson(event.target.value)}
+          className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-950 px-3 py-2 font-mono text-xs leading-5 text-slate-100 outline-none focus:border-indigo-500"
+        />
+      </label>
+      <label className="block text-sm font-semibold text-slate-700">
+        修正原因
+        <input
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+          className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-indigo-500"
+        />
+      </label>
+      <div className="flex justify-end gap-2 pt-2">
+        <Button variant="ghost" onClick={onDone}>
+          取消
+        </Button>
+        <Button
+          onClick={() => save.mutate()}
+          disabled={save.isPending || !summary.trim()}
+        >
+          <Save className="size-4" />
+          {save.isPending ? "保存中…" : "保存修正"}
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -567,17 +583,14 @@ export function ChapterRequirementListDialog({
     ({ requirement }) => (requirement.status ?? "active") === "active",
   ).length;
 
-  useEffect(() => {
-    if (!newStateId && stateOptions[0]?.id) {
-      setNewStateId(stateOptions[0].id);
-    }
-  }, [newStateId, stateOptions]);
-
   const stateOptionById = useMemo(
     () => new Map(stateOptions.map((item) => [item.id, item])),
     [stateOptions],
   );
-  const selectedNewState = newStateId ? stateOptionById.get(newStateId) : null;
+  const effectiveNewStateId = newStateId || stateOptions[0]?.id || "";
+  const selectedNewState = effectiveNewStateId
+    ? stateOptionById.get(effectiveNewStateId)
+    : null;
 
   const parsePriority = (value: string) => {
     const parsed = Number(value);
@@ -589,6 +602,7 @@ export function ChapterRequirementListDialog({
   };
 
   const resetAddForm = () => {
+    setNewStateId("");
     setNewType("must_remember");
     setNewSummary("");
     setNewPriority("80");
@@ -597,7 +611,7 @@ export function ChapterRequirementListDialog({
 
   const createRequirement = useMutation({
     mutationFn: () => {
-      if (!newStateId) {
+      if (!effectiveNewStateId) {
         toast.error("请选择关键设定");
         return Promise.reject(new Error("invalid_state"));
       }
@@ -605,7 +619,7 @@ export function ChapterRequirementListDialog({
       if (priority === null) return Promise.reject(new Error("invalid_priority"));
       const summary = newSummary.trim() || selectedNewState?.summary?.trim() || "人工添加承接要求";
       return storyStatesApi.createChapterRequirement(projectId, chapterId, {
-        state_item_id: newStateId,
+        state_item_id: effectiveNewStateId,
         requirement_type: newType,
         summary,
         priority,
@@ -707,7 +721,7 @@ export function ChapterRequirementListDialog({
               <label className="block text-sm font-semibold text-slate-700">
                 关键设定
                 <select
-                  value={newStateId}
+                  value={effectiveNewStateId}
                   onChange={(event) => handleNewStateChange(event.target.value)}
                   className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-amber-500"
                 >
