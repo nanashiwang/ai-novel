@@ -244,6 +244,7 @@ class StoryStateMaintainerService:
         scene: Scene,
         draft: DraftVersion,
         created_by: str | None,
+        source: str = "draft",
     ) -> dict[str, Any]:
         """正文落库后维护关键设定；失败返回 error，不抛出给写作主流程。"""
         if not draft or not (draft.content or "").strip():
@@ -302,6 +303,7 @@ class StoryStateMaintainerService:
                         states=states,
                         requirements=requirements,
                         issues=issues,
+                        source=source,
                     ),
                     ensure_ascii=False,
                 ),
@@ -309,7 +311,12 @@ class StoryStateMaintainerService:
                 prompt_key=_PROMPT_KEY,
                 prompt_version=_PROMPT_VERSION,
                 temperature=0.1,
-                metadata={"scene_id": scene.id, "chapter_id": chapter.id},
+                metadata={
+                    "scene_id": scene.id,
+                    "chapter_id": chapter.id,
+                    "maintenance_source": source,
+                    "continuity_issue_count": len(issues),
+                },
             )
         except Exception:  # noqa: BLE001
             _logger.warning(
@@ -427,8 +434,18 @@ class StoryStateMaintainerService:
         states: list[StoryStateItem],
         requirements: list[ChapterStateRequirement],
         issues: list[ContinuityIssue],
+        source: str,
     ) -> dict[str, Any]:
         return {
+            "trigger": {
+                "source": source,
+                "hint": (
+                    "audit_scene 表示本次由审稿问题触发，请重点判断审稿问题是正文错误、"
+                    "关键设定需更新，还是承接要求已过期。"
+                    if source == "audit_scene"
+                    else "draft 表示本次由正文生成/重写后触发，请重点判断正文是否改变长期设定。"
+                ),
+            },
             "chapter": {
                 "id": chapter.id,
                 "chapter_index": chapter.chapter_index,

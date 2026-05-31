@@ -277,6 +277,91 @@ async def test_audit_scene_persists_story_state_link(
 
 
 @pytest.mark.asyncio
+async def test_audit_scene_triggers_story_state_maintenance_after_issues(
+    client, db_engine, db_session, monkeypatch
+):
+    """审稿写入问题后，应继续触发 AI 关键设定维护器。"""
+    Session = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+    monkeypatch.setattr(activities, "AsyncSessionLocal", Session)
+
+    org_id, project_id, chapter_id, scene_id, draft_id, headers = await _setup_with_draft(
+        client, db_session, email="audit-maintenance@example.com"
+    )
+    assert draft_id is not None
+    state_id = new_id("state")
+    db_session.add(
+        StoryStateItem(
+            id=state_id,
+            organization_id=org_id,
+            project_id=project_id,
+            entity_type="artifact",
+            entity_id=None,
+            state_type="artifact",
+            name="因果印",
+            status="damaged",
+            summary="因果印已有裂痕。",
+            value_json={},
+            source_chapter_id=chapter_id,
+            source_scene_id=scene_id,
+            source_excerpt="因果印出现裂痕。",
+            updated_in_chapter_id=chapter_id,
+            priority=90,
+            is_hard_constraint=True,
+        )
+    )
+    await db_session.commit()
+
+    async def _review_with_state_issue(*args, **kwargs):
+        return AuditResultContract(
+            issues=[
+                AuditIssueItem(
+                    issue_type="state_conflict",
+                    severity="medium",
+                    description="正文遗漏因果印裂痕承接。",
+                    suggested_fix="补充因果印裂痕仍在。",
+                    story_state_item_id=state_id,
+                )
+            ]
+        )
+
+    captured: dict[str, str] = {}
+
+    async def _fake_maintenance(*args, **kwargs):
+        captured["source"] = kwargs["source"]
+        captured["draft_id"] = kwargs["draft"].id
+        captured["scene_id"] = kwargs["scene"].id
+        return {
+            "suggested_count": 0,
+            "applied_count": 1,
+            "needs_review_count": 0,
+            "skipped_count": 0,
+            "action_count": 1,
+            "action_ids": ["state_action_test"],
+        }
+
+    monkeypatch.setattr(activities.auditor_service, "audit_scene_draft", _review_with_state_issue)
+    monkeypatch.setattr(activities, "_run_story_state_maintenance", _fake_maintenance)
+
+    res = await client.post(
+        f"/api/v1/projects/{project_id}/scenes/{scene_id}/audit",
+        headers=headers,
+        json={"estimate_words": 500},
+    )
+    assert res.status_code == 202, res.text
+    job = await _await_job_terminal(db_session, res.json()["id"])
+    assert job.status == "succeeded"
+    assert captured == {
+        "source": "audit_scene",
+        "draft_id": draft_id,
+        "scene_id": scene_id,
+    }
+    assert job.output_payload["story_state_maintenance"]["applied_count"] == 1
+    assert job.output_payload["story_state_maintenance"]["action_ids"] == [
+        "state_action_test"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_audit_scene_rejects_without_draft(client, db_engine, db_session, monkeypatch):
     """没有 draft 时审稿任务在 activity 内失败（draft_not_found）。"""
     Session = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)

@@ -501,6 +501,7 @@ async def _run_story_state_maintenance(
             scene=scene,
             draft=draft,
             created_by=created_by,
+            source=source,
         )
     except Exception:  # noqa: BLE001
         _logger.warning(
@@ -3178,6 +3179,27 @@ async def audit_scene(job: dict[str, Any]) -> dict[str, Any]:
                 }
             )
 
+        if created_issues:
+            story_state_maintenance = await _run_story_state_maintenance(
+                session,
+                organization_id=job_row.organization_id,
+                project_id=job_row.project_id,
+                job_id=job_row.id,
+                chapter=chapter,
+                scene=scene,
+                draft=latest_draft,
+                created_by=job_row.user_id,
+                source="audit_scene",
+            )
+        else:
+            story_state_maintenance = {
+                "suggested_count": 0,
+                "applied_count": 0,
+                "needs_review_count": 0,
+                "skipped_count": 0,
+                "skipped": "no_audit_issues",
+            }
+
         # 不动 scene.status —— 审稿是"附加分析"，scene 仍处于 drafted 状态
         # 等用户决定 rewrite 时才推到 "writing" 再到 "drafted"。
         await _settle_job_usage(session, job_row, amount=job_row.reserved_quota)
@@ -3187,6 +3209,7 @@ async def audit_scene(job: dict[str, Any]) -> dict[str, Any]:
             "draft_id": latest_draft.id,
             "issue_count": len(created_issues),
             "issues": created_issues,
+            "story_state_maintenance": story_state_maintenance,
         }
 
 
