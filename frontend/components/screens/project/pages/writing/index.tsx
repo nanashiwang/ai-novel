@@ -42,6 +42,7 @@ import { useScopedKey } from "@/lib/use-scoped-key";
 import { ContextInspector, type ContextSummaryEntry } from "./context-inspector";
 import { StoryStateDetailDialog } from "../outline/story-state-detail-dialog";
 import { AIMaintenanceCard } from "./ai-maintenance-card";
+import { AIMaintenanceReviewQueue } from "./ai-maintenance-review-queue";
 import { AntiForgettingPreviewCard } from "./anti-forgetting-preview-card";
 import { SceneEditorCard } from "./scene-editor-card";
 import { useAuditRewrite } from "./use-audit-rewrite";
@@ -190,6 +191,18 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
     activeScene?.id,
     "story-state-maintenance-actions",
   );
+  const maintenanceReviewNeedsKey = useScopedKey(
+    "project",
+    projectId,
+    "story-state-maintenance-review",
+    "needs_review",
+  );
+  const maintenanceReviewSuggestedKey = useScopedKey(
+    "project",
+    projectId,
+    "story-state-maintenance-review",
+    "suggested",
+  );
 
   // === 三个组合 hook ===
   const {
@@ -233,6 +246,42 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
     refetchInterval: isWriting || isRewriting ? 3000 : false,
   });
   const maintenanceActions = maintenanceActionsResponse?.items ?? [];
+  const {
+    data: maintenanceReviewNeedsResponse,
+    isPending: isMaintenanceReviewNeedsPending,
+  } = useQuery({
+    queryKey: maintenanceReviewNeedsKey,
+    queryFn: () =>
+      storyStatesApi.maintenanceActions(projectId, {
+        status: "needs_review",
+        limit: 50,
+      }),
+    refetchInterval: isWriting || isRewriting ? 3000 : false,
+  });
+  const {
+    data: maintenanceReviewSuggestedResponse,
+    isPending: isMaintenanceReviewSuggestedPending,
+  } = useQuery({
+    queryKey: maintenanceReviewSuggestedKey,
+    queryFn: () =>
+      storyStatesApi.maintenanceActions(projectId, {
+        status: "suggested",
+        limit: 50,
+      }),
+    refetchInterval: isWriting || isRewriting ? 3000 : false,
+  });
+  const maintenanceReviewActions = useMemo(() => {
+    const rows = [
+      ...(maintenanceReviewNeedsResponse?.items ?? []),
+      ...(maintenanceReviewSuggestedResponse?.items ?? []),
+    ];
+    const unique = new Map(rows.map((item) => [item.id, item]));
+    return [...unique.values()].sort((a, b) =>
+      (b.created_at ?? "").localeCompare(a.created_at ?? ""),
+    );
+  }, [maintenanceReviewNeedsResponse?.items, maintenanceReviewSuggestedResponse?.items]);
+  const isMaintenanceReviewPending =
+    isMaintenanceReviewNeedsPending || isMaintenanceReviewSuggestedPending;
 
   const syncMaintenanceActionInCache = (
     action: StoryStateMaintenanceAction,
@@ -255,6 +304,14 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
   const showMaintenanceActionStateChanged = () => {
     toast.error("这条 AI 维护建议状态已变化，已刷新列表，请按最新状态操作");
     queryClient.invalidateQueries({ queryKey: maintenanceActionsKey });
+    queryClient.invalidateQueries({ queryKey: maintenanceReviewNeedsKey });
+    queryClient.invalidateQueries({ queryKey: maintenanceReviewSuggestedKey });
+  };
+
+  const invalidateMaintenanceActionQueries = () => {
+    queryClient.invalidateQueries({ queryKey: maintenanceActionsKey });
+    queryClient.invalidateQueries({ queryKey: maintenanceReviewNeedsKey });
+    queryClient.invalidateQueries({ queryKey: maintenanceReviewSuggestedKey });
   };
 
   const {
@@ -310,7 +367,7 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
     onSuccess: (action) => {
       syncMaintenanceActionInCache(action);
       toast.success("已撤销 AI 维护动作");
-      queryClient.invalidateQueries({ queryKey: maintenanceActionsKey });
+      invalidateMaintenanceActionQueries();
       queryClient.invalidateQueries({ queryKey: storyStatesKey });
       queryClient.invalidateQueries({ queryKey: antiForgettingPreviewKey });
     },
@@ -331,7 +388,7 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
     onSuccess: (action) => {
       syncMaintenanceActionInCache(action);
       toast.success("已应用 AI 维护建议");
-      queryClient.invalidateQueries({ queryKey: maintenanceActionsKey });
+      invalidateMaintenanceActionQueries();
       queryClient.invalidateQueries({ queryKey: storyStatesKey });
       queryClient.invalidateQueries({ queryKey: antiForgettingPreviewKey });
     },
@@ -857,12 +914,34 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
             ) : null}
           </CardContent>
         </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle>版本历史</CardTitle>
-            <Badge tone="slate">{versions.length}</Badge>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm">
+        <div className="space-y-4">
+          <AIMaintenanceReviewQueue
+            actions={maintenanceReviewActions}
+            chapters={chapters}
+            isPending={isMaintenanceReviewPending}
+            applyingActionId={
+              applyMaintenanceAction.isPending
+                ? (applyMaintenanceAction.variables ?? null)
+                : null
+            }
+            storyStateById={storyStateById}
+            onSelectState={setSelectedStoryState}
+            onApplyAction={(actionId) => applyMaintenanceAction.mutate(actionId)}
+            onFocusAction={(action) => {
+              if (action.chapter_id) {
+                setActiveChapterId(action.chapter_id);
+              }
+              setActiveSceneId(action.scene_id ?? null);
+              setDisplayedVersionId(null);
+              setCompareWithId(null);
+            }}
+          />
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle>版本历史</CardTitle>
+              <Badge tone="slate">{versions.length}</Badge>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
             {versions.length === 0 ? (
               <p className="text-xs text-slate-500">尚无版本。</p>
             ) : (
@@ -978,8 +1057,9 @@ export function WritingWorkspacePage({ projectId }: { projectId: string }) {
               onApplyAction={(actionId) => applyMaintenanceAction.mutate(actionId)}
               onRollbackAction={(actionId) => rollbackMaintenanceAction.mutate(actionId)}
             />
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        </div>
       </div>
       {batchWriteJobId ? (
         <BatchJobProgressDialog
