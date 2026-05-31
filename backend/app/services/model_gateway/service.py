@@ -35,6 +35,14 @@ def _estimate_tokens(text: str) -> int:
     return max(1, cjk + other // 4)
 
 
+def _format_exception_for_record(exc: Exception) -> str:
+    """保留异常类型，避免 ConnectError 这类空字符串错误落库后不可排查。"""
+    message = str(exc).strip()
+    if not message and exc.__cause__ is not None:
+        message = str(exc.__cause__).strip()
+    return f"{exc.__class__.__name__}: {message}" if message else exc.__class__.__name__
+
+
 class ModelProvider(Protocol):
     async def complete_json(
         self,
@@ -215,7 +223,7 @@ class ModelGateway:
                 response_text=None,
                 started=started,
                 status="failed",
-                error_message=str(exc),
+                error_message=_format_exception_for_record(exc),
             )
             raise
         await self._record_call(
@@ -286,7 +294,7 @@ class ModelGateway:
                 response_text=None,
                 started=started,
                 status="failed",
-                error_message=str(exc),
+                error_message=_format_exception_for_record(exc),
             )
             raise
         await self._record_call(

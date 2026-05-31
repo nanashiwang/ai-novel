@@ -17,6 +17,13 @@ from typing import Any
 import httpx
 
 _TRANSIENT_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+_TRANSIENT_TRANSPORT_ERRORS = (
+    httpx.ConnectError,
+    httpx.ReadError,
+    httpx.WriteError,
+    httpx.RemoteProtocolError,
+)
+_TRANSIENT_STREAM_ERRORS = _TRANSIENT_TRANSPORT_ERRORS
 
 
 class ModelJsonParseError(ValueError):
@@ -57,6 +64,9 @@ async def _post_json(
             last_timeout = exc
             if attempt >= attempts - 1:
                 break
+        except _TRANSIENT_TRANSPORT_ERRORS:
+            if attempt >= attempts - 1:
+                raise
         else:
             if (
                 response.status_code not in _TRANSIENT_STATUS_CODES
@@ -98,6 +108,10 @@ async def _stream_chat_completion(
         except httpx.HTTPStatusError as exc:
             status_code = exc.response.status_code
             if status_code not in _TRANSIENT_STATUS_CODES or attempt >= max_attempts - 1:
+                raise
+            await asyncio.sleep(min(2**attempt, 5))
+        except _TRANSIENT_STREAM_ERRORS:
+            if attempt >= max_attempts - 1:
                 raise
             await asyncio.sleep(min(2**attempt, 5))
     raise RuntimeError("unreachable_stream_retry_state")

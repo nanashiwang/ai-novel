@@ -24,6 +24,11 @@ from app.core.config import get_settings
 _logger = logging.getLogger(__name__)
 
 
+def _format_exception_for_job(exc: Exception) -> str:
+    message = str(exc).strip()
+    return f"{exc.__class__.__name__}: {message}" if message else exc.__class__.__name__
+
+
 class WorkflowStarter:
     def __init__(self) -> None:
         self.settings = get_settings()
@@ -219,8 +224,7 @@ class WorkflowStarter:
             await mark_job_status(job_id, "succeeded", None, result)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("local_workflow_failed", extra={"job_id": job_id})
-            message = str(exc) or exc.__class__.__name__
-            await mark_job_status(job_id, "failed", message)
+            await mark_job_status(job_id, "failed", _format_exception_for_job(exc))
 
 
 workflow_starter = WorkflowStarter()

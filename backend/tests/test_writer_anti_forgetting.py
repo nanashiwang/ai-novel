@@ -262,10 +262,15 @@ async def test_rewriter_injects_linked_state_for_issue_repair(
     prompt = captured["user_prompt"]
     assert draft.content
     assert "## 写作防遗忘承接清单" in prompt
+    assert "## 高危问题硬约束" in prompt
+    assert "【硬约束/必须修复】" in prompt
+    assert "high 严重度问题是硬约束" in prompt
+    assert "新稿不得再次触发同类 high 问题" in prompt
     assert f"story_state_item_id={state_id}" in prompt
     assert "关联关键状态" in prompt
     assert "status=damaged" in prompt
     assert "严格遵守“写作防遗忘承接清单”" in prompt
     assert "不要在正文中输出 story_state_item_id" in prompt
     assert captured["metadata"]["linked_story_state_issue_count"] == 1
+    assert captured["metadata"]["high_issue_count"] == 1
     assert captured["metadata"]["anti_forgetting_requirement_count"] == 1

@@ -145,6 +145,41 @@ async def test_stream_retries_transient_503(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_stream_retries_remote_protocol_error(monkeypatch):
+    """上游断开 SSE 连接时，应按瞬时网关异常自动重试。"""
+
+    calls = 0
+
+    async def fake_sleep(_: float) -> None:
+        return None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise httpx.RemoteProtocolError("server disconnected", request=request)
+        return httpx.Response(
+            200,
+            content=_sse_body(['{"ok": true}']),
+            headers={"Content-Type": "text/event-stream"},
+            request=request,
+        )
+
+    monkeypatch.setattr("app.services.model_gateway.providers.asyncio.sleep", fake_sleep)
+    provider = _make_provider(handler)
+    result = await provider.complete_json(
+        model="gpt-4o-mini",
+        system_prompt="sys",
+        user_prompt="user",
+        schema={"properties": {"ok": {"type": "boolean"}}},
+        temperature=0.0,
+    )
+
+    assert result == {"ok": True}
+    assert calls == 2
+
+
+@pytest.mark.asyncio
 async def test_stream_ignores_non_data_lines_and_keepalives():
     """SSE 中的 keep-alive 注释行和非 data 行应被忽略。"""
 

@@ -77,6 +77,10 @@ class RewriterService:
             self._format_issue_line(issue, linked_states)
             for issue in issues
         ) or "（审稿系统未给出问题，仅做风格打磨。）"
+        high_issue_count = sum(
+            1 for issue in issues if (issue.severity or "").lower() == "high"
+        )
+        high_issue_block = self._format_high_issue_block(issues, linked_states)
 
         user_prompt = (
             ctx.to_prompt()
@@ -85,10 +89,13 @@ class RewriterService:
             + current_content
             + "\n\n## 待修复问题\n"
             + issues_block
+            + high_issue_block
             + "\n\n## 任务指令\n"
             + f"请基于以上上下文重新生成 scene #{scene.scene_index} 正文，"
             + f"目标字数约 {target_words} 字。要求：\n"
-            + "- 修复每条问题的描述/建议，保持原情节走向\n"
+            + "- 修复每条问题的描述/建议，保持原情节走向；但当原正文与问题修复冲突时，优先修复问题\n"
+            + "- high 严重度问题是硬约束，必须逐条实质改写，不能只换词或弱化表述\n"
+            + "- 新稿不得再次触发同类 high 问题；涉及提前出场、提前知情、设定冲突时，必须删除或改成当前场景允许的信息\n"
             + "- 严格遵守“写作防遗忘承接清单”，尤其是待修复问题关联的关键状态项\n"
             + "- 保留场景目标、冲突、揭示与钩子\n"
             + "- 不要在正文中输出 issue 编号或自我点评\n"
@@ -111,6 +118,7 @@ class RewriterService:
                 "chapter_id": chapter.id,
                 "context_total_tokens": ctx.total_tokens,
                 "issue_count": len(issues),
+                "high_issue_count": high_issue_count,
                 "linked_story_state_issue_count": len(linked_state_ids),
                 **anti_forgetting_meta,
             },
@@ -135,7 +143,13 @@ class RewriterService:
         issue: ContinuityIssue,
         linked_states: dict[str, object],
     ) -> str:
-        line = f"- [{issue.severity}/{issue.issue_type}] {issue.description}"
+        severity = (issue.severity or "unknown").lower()
+        label = {
+            "high": "硬约束/必须修复",
+            "medium": "重点修复",
+            "low": "修正优化",
+        }.get(severity, "待修复")
+        line = f"- [{severity}/{issue.issue_type}]【{label}】{issue.description}"
         if issue.story_state_item_id:
             line += f"；story_state_item_id={issue.story_state_item_id}"
             linked = linked_states.get(issue.story_state_item_id)
@@ -143,7 +157,29 @@ class RewriterService:
                 line += f"；关联关键状态：{format_story_state_brief(linked)}"
         if issue.suggested_fix:
             line += f"  修复建议：{issue.suggested_fix}"
+        if severity == "high":
+            line += "  硬性处理：若当前正文与本条冲突，必须改写冲突段落；新稿不能再次出现同类问题。"
         return line
+
+    def _format_high_issue_block(
+        self,
+        issues: list[ContinuityIssue],
+        linked_states: dict[str, object],
+    ) -> str:
+        high_issues = [
+            issue for issue in issues if (issue.severity or "").lower() == "high"
+        ]
+        if not high_issues:
+            return ""
+        lines = [
+            "\n\n## 高危问题硬约束",
+            "以下 high 严重度问题必须优先修复。若与原正文、局部气氛描写或支线戏份冲突，以本节为准：",
+        ]
+        lines.extend(self._format_issue_line(issue, linked_states) for issue in high_issues)
+        lines.append(
+            "修复自检：生成前确认这些问题在新稿中已被明确删除、改写或用当前场景允许的信息闭合。"
+        )
+        return "\n".join(lines)
 
 
 rewriter_service = RewriterService()
